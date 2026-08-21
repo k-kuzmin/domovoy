@@ -26,7 +26,9 @@ jobs:
       - name: Установка .NET
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          # Версия берётся из global.json: один источник истины для CI,
+          # машины разработчика и образа (запись 0012).
+          global-json-file: global.json
 
       - name: Восстановление пакетов
         run: dotnet restore

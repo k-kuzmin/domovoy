@@ -29,8 +29,8 @@ public sealed class ConfigurationExampleTests
     [Fact(DisplayName = "Каждая переменная из docker-compose.yml описана в .env.example")]
     public void ComposeVariablesAreDocumentedInEnvExample()
     {
-        string compose = File.ReadAllText(RepositoryFile("docker-compose.yml"));
-        string envExample = File.ReadAllText(RepositoryFile(".env.example"));
+        string compose = File.ReadAllText(RepositoryLayout.Path("docker-compose.yml"));
+        string envExample = File.ReadAllText(RepositoryLayout.Path(".env.example"));
 
         HashSet<string> declared = ParseEnvKeys(envExample);
 
@@ -52,8 +52,8 @@ public sealed class ConfigurationExampleTests
     [Fact(DisplayName = "Пример переопределений ссылается только на описанные переменные")]
     public void OverrideExampleUsesDocumentedVariables()
     {
-        string over = File.ReadAllText(RepositoryFile("docker-compose.override.example.yml"));
-        HashSet<string> declared = ParseEnvKeys(File.ReadAllText(RepositoryFile(".env.example")));
+        string over = File.ReadAllText(RepositoryLayout.Path("docker-compose.override.example.yml"));
+        HashSet<string> declared = ParseEnvKeys(File.ReadAllText(RepositoryLayout.Path(".env.example")));
 
         List<string> missing = VariableReference.Matches(over)
             .Select(match => match.Groups["name"].Value)
@@ -68,7 +68,7 @@ public sealed class ConfigurationExampleTests
     public void AppSettingsCarryNoSecrets()
     {
         using FileStream stream = File.OpenRead(
-            RepositoryFile(Path.Combine("src", "Domovoy.Api", "appsettings.json")));
+            RepositoryLayout.Path("src", "Domovoy.Api", "appsettings.json"));
         using JsonDocument document = JsonDocument.Parse(stream);
 
         foreach (string path in SecretSettingPaths)
@@ -83,8 +83,8 @@ public sealed class ConfigurationExampleTests
     [Fact(DisplayName = "У каждого примера конфигурации есть закрытый .gitignore двойник")]
     public void EveryExampleHasIgnoredCounterpart()
     {
-        string gitignore = File.ReadAllText(RepositoryFile(".gitignore"));
-        string configDirectory = RepositoryFile("config");
+        string gitignore = File.ReadAllText(RepositoryLayout.Path(".gitignore"));
+        string configDirectory = RepositoryLayout.Path("config");
 
         List<string> examples = Directory
             .EnumerateFiles(configDirectory, "*.example.*", SearchOption.TopDirectoryOnly)
@@ -147,24 +147,5 @@ public sealed class ConfigurationExampleTests
         }
 
         return current.ValueKind == JsonValueKind.String ? current.GetString() : null;
-    }
-
-    /// <summary>
-    /// Путь к файлу репозитория. Тесты запускаются из каталога сборки,
-    /// поэтому корень ищется по маркеру, а не задаётся относительным
-    /// путём с фиксированным числом переходов вверх.
-    /// </summary>
-    private static string RepositoryFile(string relativePath)
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Domovoy.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        directory.Should().NotBeNull("корень репозитория определяется по Domovoy.sln");
-
-        return Path.Combine(directory!.FullName, relativePath);
     }
 }

@@ -1,0 +1,61 @@
+# Домовой — владельцы кода
+#
+# Файл решает одну задачу: автоматически звать человека на ревью там, где
+# ошибка дорогая, — конфигурация качества, пайплайн, миграции, контракт,
+# подписи.
+#
+# Обязательное ревью от CODEOWNERS в настройках репозитория намеренно НЕ
+# включено. Причина: GitHub не засчитывает апрув автора PR. В репозитории
+# одного человека владелец — единственный code owner, и требование
+# «апрув от CODEOWNERS» заблокировало бы каждый его собственный PR
+# навсегда. Обойти это можно только правом администратора, то есть гейт
+# превратился бы в ритуал, который всегда обходят, — худший вид гейта.
+#
+# Роль «человек обязан посмотреть» выполняет гейт целостности
+# scripts/guard.sh — он появляется следующим шагом внедрения пайплайна.
+# Правило такое: PR, меняющий перечисленное ниже, красный до тех пор,
+# пока на нём нет метки agent/allow-protected. Метку ставит человек.
+# Проверка при этом механическая, а не основанная на добросовестности.
+#
+# Список синхронизирован с разделом «Файлы, которые агент не трогает» в
+# .claude/CLAUDE.md и с PROTECTED в scripts/guard.sh. Расхождение между
+# ними — дефект: три места должны описывать одно и то же множество.
+
+# Всё остальное ревьюит кто угодно, включая агента.
+
+# --- Конфигурация качества и сборки ---
+/Directory.Build.props        @k-kuzmin
+/Directory.Packages.props     @k-kuzmin
+/.editorconfig                @k-kuzmin
+/global.json                  @k-kuzmin
+*.ruleset                     @k-kuzmin
+
+# --- Сам пайплайн ---
+/.github/                     @k-kuzmin
+/.githooks/                   @k-kuzmin
+/scripts/                     @k-kuzmin
+
+# --- Правила проекта и принятые решения ---
+/.claude/CLAUDE.md            @k-kuzmin
+/docs/decisions/              @k-kuzmin
+
+# --- Поиск секретов ---
+/.gitleaks.toml               @k-kuzmin
+
+# --- Данные ---
+/src/Domovoy.Data/Migrations/ @k-kuzmin
+
+# --- Контракт API и генерация клиента (появится на этапе 1) ---
+/contracts/                            @k-kuzmin
+/src/Domovoy.Mobile.Core/Generated/    @k-kuzmin
+
+# --- Платформенное и подписи (появится на этапе 5) ---
+/src/Domovoy.Mobile.App/Platforms/     @k-kuzmin
+/src/Domovoy.Mobile.App/Resources/     @k-kuzmin
+*.keystore                             @k-kuzmin
+*.mobileprovision                      @k-kuzmin
+*.p12                                  @k-kuzmin
+google-services.json                   @k-kuzmin
+GoogleService-Info.plist               @k-kuzmin
+AndroidManifest.xml                    @k-kuzmin
+Info.plist                             @k-kuzmin

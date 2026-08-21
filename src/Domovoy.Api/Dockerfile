@@ -13,7 +13,7 @@ WORKDIR /src
 
 # Сначала только файлы проектов: слой с восстановленными пакетами
 # переиспользуется, пока не изменились зависимости.
-COPY Directory.Build.props Directory.Packages.props Domovoy.sln ./
+COPY global.json Directory.Build.props Directory.Packages.props Domovoy.sln ./
 COPY src/Domovoy.Api/Domovoy.Api.csproj                     src/Domovoy.Api/
 COPY src/Domovoy.Core/Domovoy.Core.csproj                   src/Domovoy.Core/
 COPY src/Domovoy.Ha/Domovoy.Ha.csproj                       src/Domovoy.Ha/
