@@ -34,7 +34,7 @@ case "$SUBJECT" in
     получено: $SUBJECT
 
   Ожидается: <тип>[(область)]: описание
-  Типы: feat, fix, chore, docs, refactor, test, perf, build, ci, revert
+  Типы: feat, fix, chore, docs, refactor, test, perf, build, ci, revert, style
 
     feat(ha): подписка на state_changed
     fix: реконнект к HA после разрыва
