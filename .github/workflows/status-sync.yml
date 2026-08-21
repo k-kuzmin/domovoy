@@ -1,0 +1,244 @@
+name: status-sync
+
+# Статус карточки на доске двигают события, а не добрая воля агента.
+# Агент вешает метку и открывает PR — остальное происходит здесь, поэтому
+# доска не расходится с фактическим состоянием задачи.
+
+on:
+  issues:
+    types: [labeled, unlabeled, closed, reopened]
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Номер issue, карточку которой нужно поправить
+        required: true
+      status:
+        description: Имя статуса на доске, например «In review»
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  # Очередь на объект события: две метки, снятые подряд с одной issue, не
+  # обгонят друг друга. Полной сериализации записи в карточку это не даёт —
+  # событие issue и событие её PR попадают в разные группы, потому что номер
+  # у них разный, — но именно повторные события по одному объекту и приходят
+  # пачкой. Отмену предыдущего запуска не включаем: пропущенное событие
+  # оставило бы карточку в устаревшем статусе.
+  group: >-
+    status-sync-${{ github.event.issue.number
+    || github.event.pull_request.number
+    || inputs.issue }}
+  cancel-in-progress: false
+
+env:
+  # Имена статусов на доске. Их набор задаёт человек, а не workflow: если на
+  # доске такого статуса нет, scripts/set-project-status.sh скажет об этом и
+  # перечислит те, что заведены. Менять имена — здесь, в одном месте.
+  STATUS_TODO: Todo
+  STATUS_IN_PROGRESS: In progress
+  STATUS_BLOCKED: Blocked
+  STATUS_IN_REVIEW: In review
+  STATUS_DONE: Done
+  # Необязательный: если такого статуса на доске нет, задача, закрытая как
+  # «not planned», просто останется там, где стояла, с предупреждением.
+  STATUS_CANCELLED: Cancelled
+
+jobs:
+  sync:
+    name: Статус карточки на доске
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Проверка настроек доски
+        id: cfg
+        # Секреты недоступны в `if` на уровне job, поэтому проверка — шагом.
+        # Молча пропустить нельзя: пропущенный job выглядит как «всё хорошо»,
+        # а на деле доска просто перестаёт обновляться.
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          PROJECTS_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=''
+          [ -n "$PROJECT_NUMBER" ] || missing="$missing vars.PROJECT_NUMBER"
+          [ -n "$PROJECTS_TOKEN" ] || missing="$missing secrets.PROJECTS_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::warning::Синхронизация доски выключена: не задано —$missing." \
+              'Заведите их по docs/pipeline.md; до тех пор карточки двигаются руками.' \
+              'Для PR из форка это нормально: секреты туда не передаются.'
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'configured=true' >> "$GITHUB_OUTPUT"
+
+      - name: Целевой статус
+        id: target
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
+          STATE_REASON: ${{ github.event.issue.state_reason }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          INPUT_STATUS: ${{ inputs.status }}
+        run: |
+          set -euo pipefail
+
+          # Проверяем весь текущий набор меток, а не ту одну, что пришла в
+          # событии: иначе снятие agent/in-progress оставило бы карточку
+          # в «В работе» навсегда.
+          has_label() {
+            printf '%s' "$LABELS" | jq -e --arg name "$1" 'index($name) != null' >/dev/null
+          }
+
+          status=''
+          case "$EVENT" in
+            workflow_dispatch)
+              status="$INPUT_STATUS"
+              ;;
+            issues)
+              case "$ACTION" in
+                closed)
+                  # Закрытая «not planned» задача не сделана, а отменена:
+                  # писать ей Done — врать доске.
+                  if [ "$STATE_REASON" = 'not_planned' ]; then
+                    status="$STATUS_CANCELLED"
+                  else
+                    status="$STATUS_DONE"
+                  fi
+                  ;;
+                reopened) status="$STATUS_TODO" ;;
+                labeled | unlabeled)
+                  if has_label 'agent/needs-human' || has_label 'agent/needs-clarification'; then
+                    status="$STATUS_BLOCKED"
+                  elif has_label 'agent/in-progress'; then
+                    status="$STATUS_IN_PROGRESS"
+                  elif has_label 'agent/ready'; then
+                    status="$STATUS_TODO"
+                  fi
+                  ;;
+                *) ;;
+              esac
+              ;;
+            pull_request)
+              if [ "$ACTION" = 'closed' ]; then
+                # Смерженный PR — работа сделана, даже если issue осталась
+                # открытой: связь «PR закрывает issue» здесь ненадёжна.
+                if [ "$MERGED" = 'true' ]; then
+                  status="$STATUS_DONE"
+                else
+                  status="$STATUS_IN_PROGRESS"
+                fi
+              elif [ "$DRAFT" = 'true' ]; then
+                status="$STATUS_IN_PROGRESS"
+              else
+                status="$STATUS_IN_REVIEW"
+              fi
+              ;;
+            *) ;;
+          esac
+
+          if [ -z "$status" ]; then
+            echo "Событие $EVENT/$ACTION статус карточки не меняет."
+          else
+            echo "Целевой статус: $status"
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Карточки, которые двигаем
+        id: cards
+        if: steps.cfg.outputs.configured == 'true' && steps.target.outputs.status != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          ISSUE_NODE_ID: ${{ github.event.issue.node_id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          INPUT_ISSUE: ${{ inputs.issue }}
+        run: |
+          set -euo pipefail
+          ids=''
+
+          case "$EVENT" in
+            issues)
+              ids="$ISSUE_NODE_ID"
+              ;;
+            workflow_dispatch)
+              ids="$(gh api "repos/$REPO/issues/$INPUT_ISSUE" --jq '.node_id')"
+              ;;
+            pull_request)
+              # У события pull_request нет github.event.issue.node_id: PR и
+              # issue — разные объекты, и карточка на доске заведена на issue.
+              # Поэтому спрашиваем у GitHub, какие задачи закрывает этот PR.
+              # shellcheck disable=SC2016  # $owner и прочее — переменные GraphQL.
+              query='query($owner: String!, $name: String!, $number: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 10) { nodes { id number } }
+                  }
+                }
+              }'
+              ids="$(gh api graphql \
+                -f query="$query" \
+                -f owner="${REPO%%/*}" \
+                -f name="${REPO#*/}" \
+                -F number="$PR_NUMBER" \
+                --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[].id')"
+
+              if [ -z "$ids" ]; then
+                # Связь пуста, если в теле PR нет английского ключевого слова:
+                # closes, fixes, resolves. Шаблон PR в этом репозитории пишет
+                # «Закрывает #N», и связью GitHub это не считает. Запасной
+                # путь — номер issue из имени ветки feat/<номер>-описание,
+                # которое требует .claude/CLAUDE.md.
+                number="$(printf '%s' "$PR_HEAD_REF" | sed -nE 's#^[a-z]+/([0-9]+)-.*$#\1#p')"
+                if [ -n "$number" ]; then
+                  ids="$(gh api "repos/$REPO/issues/$number" --jq '.node_id' 2>/dev/null || true)"
+                fi
+              fi
+
+              if [ -z "$ids" ]; then
+                echo "::warning::PR #$PR_NUMBER ни с одной задачей не связан:" \
+                  'в теле нет closes/fixes/resolves, а имя ветки' \
+                  "«$PR_HEAD_REF» номера issue не даёт." \
+                  'Карточку придётся двинуть руками — см. docs/pipeline.md.'
+              fi
+              ;;
+            *) ;;
+          esac
+
+          {
+            echo 'ids<<IDS_EOF'
+            printf '%s\n' "$ids"
+            echo 'IDS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Перевод карточек
+        if: >-
+          steps.cfg.outputs.configured == 'true'
+          && steps.target.outputs.status != ''
+          && steps.cards.outputs.ids != ''
+        env:
+          # Projects v2 доступен только персональному токену: GITHUB_TOKEN
+          # писать в него не умеет ни при каких permissions.
+          GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+          PROJECT_OWNER: ${{ github.repository_owner }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          STATUS: ${{ steps.target.outputs.status }}
+          IDS: ${{ steps.cards.outputs.ids }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r node_id; do
+            [ -n "$node_id" ] || continue
+            ISSUE_NODE_ID="$node_id" bash scripts/set-project-status.sh
+          done <<< "$IDS"
