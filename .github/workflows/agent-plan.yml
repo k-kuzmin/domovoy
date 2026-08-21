@@ -1,0 +1,152 @@
+name: agent-plan
+
+# Второй шаг цикла: план публикуется комментарием и ждёт апрува человека.
+# Разделение «сначала план, потом код» существует ради одной вещи —
+# несогласие с подходом стоит одного комментария, а не выброшенного PR.
+on:
+  issues:
+    types: [labeled]
+
+# Планирование только читает код и пишет комментарий с меткой.
+# id-token — для обмена OIDC на токен GitHub App.
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+concurrency:
+  group: agent-plan-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: План реализации
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ.
+    #
+    # Репозиторий публичный, и `issues` — событие, доступное постороннему.
+    # Гейт стоит на авторе задачи (`github.event.issue.author_association`),
+    # а не на `github.actor`: метку `agent/ready` ставит agent-triage от
+    # имени GitHub App, и проверка актора закрыла бы штатный путь цепочки,
+    # оставив открытым ровно то, от чего защищаемся, — чужую задачу.
+    # Поставить метку вручную может только тот, у кого есть write-доступ.
+    #
+    # Проверка `github.event.label.name` обязательна: без неё план
+    # переигрывался бы на каждой добавленной метке, включая собственную
+    # `plan/proposed` — бесконечный платный цикл.
+    if: >-
+      github.event.label.name == 'agent/ready' &&
+      github.event.issue.author_association == 'OWNER' &&
+      !contains(github.event.issue.labels.*.name, 'agent/needs-human')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Составление плана
+        id: plan
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Метку `agent/ready` ставит GitHub App предыдущего шага, поэтому
+          # актором события оказывается бот. Без этого списка действие
+          # отказывается работать: оно защищается от запуска ботами.
+          allowed_bots: 'claude[bot]'
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            Задача: #${{ github.event.issue.number }}
+
+            Составь план реализации. Код не пиши: на этом шаге доступны
+            только чтение и поиск, и это не ограничение инструмента, а суть
+            шага — план обсуждается до того, как написана первая строка.
+
+            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория.
+            Обязательно: «Архитектура», «Границы работы агента», «Правила
+            синхронизации», «Definition of Done».
+
+            План — комментарий в markdown из шести разделов:
+
+            1. **Как устроено сейчас.** Что уже есть в коде по этой теме, с
+               путями к файлам и именами типов. Без этого раздела план — это
+               догадка: покажи, что ты прочитал существующее.
+            2. **Подход.** Одно решение, а не перечень вариантов. Если
+               вариантов было несколько — назови отвергнутые одной строкой и
+               почему.
+            3. **Файлы.** Что создаётся, что меняется, по каждому — зачем.
+               Отдельно отметь файлы из раздела «Границы работы агента»: их
+               правка требует метки `agent/allow-protected`, а изменение
+               контракта API — `agent/allow-contract`. Гейт целостности
+               `scripts/guard.sh` завернёт PR без нужной метки.
+            4. **Тесты.** Какие тесты появятся и какое поведение каждый
+               проверяет. Тест, проходящий при сломанной реализации, хуже
+               отсутствующего — формулируй проверяемое поведение, а не
+               «покрытие класса».
+            5. **Риски.** Что может пойти не так: ломающее изменение
+               контракта, миграция БД, направление зависимостей между
+               проектами, расхождение системного промпта и набора
+               инструментов.
+            6. **Что не входит.** Границы задачи. Замеченное попутно — новая
+               issue, а не незапланированная правка.
+
+            Если задача по-прежнему не поддаётся планированию (противоречие
+            в требованиях, отсутствует нужное решение в `docs/decisions/`),
+            верни blocked=true и объясни, чего не хватает. Остановка с
+            объяснением — нормальный результат, догадка в плане — нет.
+
+            Отвечай по-русски.
+          claude_args: |
+            # Планирование только читает: ни Edit, ни Write, ни Bash.
+            --allowedTools 'Read,Glob,Grep'
+            --max-turns 25
+            --json-schema '{"type":"object","properties":{"plan_markdown":{"type":"string","description":"Полный текст плана в markdown, шесть разделов"},"blocked":{"type":"boolean","description":"План составить нельзя, нужен ответ человека"},"blocked_reason":{"type":"string","description":"Чего не хватает; пустая строка при blocked=false"}},"required":["plan_markdown","blocked","blocked_reason"]}'
+
+      - name: Публикация плана
+        env:
+          GH_TOKEN: ${{ steps.plan.outputs.github_token || secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          # Текст написан моделью и в скрипт попадает только через
+          # окружение: подстановка ${{ }} в тело `run:` дала бы содержимому
+          # задачи возможность выполнить команду.
+          PLAN: ${{ steps.plan.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$PLAN" ]; then
+            echo '::error::Шаг планирования не вернул структурированный результат.'
+            exit 1
+          fi
+
+          blocked=$(printf '%s' "$PLAN" | jq -r '.blocked')
+
+          if [ "$blocked" = 'true' ]; then
+            {
+              echo '## План не составлен'
+              echo
+              printf '%s' "$PLAN" | jq -r '.blocked_reason'
+            } > body.md
+            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file body.md
+            gh issue edit "$ISSUE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --add-label 'agent/needs-clarification' \
+              --remove-label 'agent/ready'
+            exit 0
+          fi
+
+          {
+            echo '## План реализации'
+            echo
+            printf '%s' "$PLAN" | jq -r '.plan_markdown'
+            echo
+            echo '---'
+            echo
+            # Кавычки у разделителя обязательны: внутри обратные кавычки
+            # markdown, и без них shell попытается их выполнить.
+            cat <<'FOOTER'
+          Согласны — поставьте метку `plan/approved`, реализация начнётся сама.
+          Не согласны — напишите в комментарии, что менять, и снимите
+          `plan/proposed`: план будет составлен заново.
+          FOOTER
+          } > body.md
+
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label 'plan/proposed'
