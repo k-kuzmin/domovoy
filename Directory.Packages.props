@@ -1,0 +1,55 @@
+<Project>
+
+  <!--
+    Централизованное управление версиями пакетов.
+
+    Версии живут в одном файле, .csproj содержат только имена пакетов.
+    Иначе один проект тянет EF Core 8.0.11, другой 8.0.30, и расхождение
+    обнаруживается на продакшене.
+
+    Набор зависимостей закрытый. Любая новая зависимость требует
+    обоснования в комментарии к issue до установки — см. .claude/CLAUDE.md.
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Абстракции расширений .NET">
+    <!-- Только то, что нужно ядру для регистрации и валидации настроек.
+         Клиентов, драйверов и сериализаторов в Core нет. -->
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.0.19" />
+  </ItemGroup>
+
+  <ItemGroup Label="Логирование">
+    <PackageVersion Include="Serilog.AspNetCore" Version="8.0.3" />
+  </ItemGroup>
+
+  <ItemGroup Label="База данных">
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
+    <!-- Design нужен только для dotnet ef, в рантайм не попадает -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11" />
+  </ItemGroup>
+
+  <ItemGroup Label="Тесты">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <!-- 7.x под Apache 2.0; начиная с 8.0 лицензия платная для
+         коммерческого использования — обновление требует решения. -->
+    <PackageVersion Include="FluentAssertions" Version="7.2.2" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.30" />
+  </ItemGroup>
+
+  <ItemGroup Label="Архитектурные тесты">
+    <PackageVersion Include="TngTech.ArchUnitNET.xUnit" Version="0.13.4" />
+  </ItemGroup>
+
+</Project>

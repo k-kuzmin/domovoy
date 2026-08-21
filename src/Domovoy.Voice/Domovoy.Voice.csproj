@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- STT и TTS. Одна реализация на все клиенты: обработка на сервере. -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Domovoy.Core\Domovoy.Core.csproj" />
+  </ItemGroup>
+
+</Project>

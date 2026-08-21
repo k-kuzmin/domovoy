@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Модульные, smoke- и архитектурные тесты. Ссылается на все проекты
+    решения: архитектурный тест загружает их сборки целиком.
+  -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="TngTech.ArchUnitNET.xUnit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Domovoy.Core\Domovoy.Core.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Ha\Domovoy.Ha.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Llm\Domovoy.Llm.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Voice\Domovoy.Voice.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Notifications\Domovoy.Notifications.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Data\Domovoy.Data.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Api\Domovoy.Api.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Клиент Home Assistant: REST + WebSocket. Наружу HA не выставлен. -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Domovoy.Core\Domovoy.Core.csproj" />
+  </ItemGroup>
+
+</Project>

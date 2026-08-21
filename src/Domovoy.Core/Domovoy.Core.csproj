@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ядро: порты и модели. Ноль ProjectReference — Core не знает о
+    транспорте, БД и провайдерах. Проверяется архитектурным тестом.
+
+    Пакеты — только абстракции расширений .NET, нужные для регистрации
+    настроек. Ни клиентов, ни драйверов, ни сериализаторов.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" />
+  </ItemGroup>
+
+</Project>

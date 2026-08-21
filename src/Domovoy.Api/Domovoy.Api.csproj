@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    HTTP-слой. Единственный публичный вход в систему: Home Assistant
+    наружу не выставлен (NFR-SEC-2).
+  -->
+
+  <PropertyGroup>
+    <UserSecretsId>domovoy-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Domovoy.Core\Domovoy.Core.csproj" />
+    <ProjectReference Include="..\Domovoy.Ha\Domovoy.Ha.csproj" />
+    <ProjectReference Include="..\Domovoy.Llm\Domovoy.Llm.csproj" />
+    <ProjectReference Include="..\Domovoy.Voice\Domovoy.Voice.csproj" />
+    <ProjectReference Include="..\Domovoy.Notifications\Domovoy.Notifications.csproj" />
+    <ProjectReference Include="..\Domovoy.Data\Domovoy.Data.csproj" />
+  </ItemGroup>
+
+</Project>
