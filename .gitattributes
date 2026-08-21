@@ -9,10 +9,10 @@
 *.props        text
 *.targets      text
 *.json         text
-*.yaml         text
-*.yml          text
+*.yaml         text eol=lf
+*.yml          text eol=lf
 *.md           text
-*.toml         text
+*.toml         text eol=lf
 *.editorconfig text
 .gitattributes text eol=lf
 .gitignore     text eol=lf
@@ -42,3 +42,7 @@ Dockerfile     text eol=lf
 *.opus binary
 *.m4a  binary
 
+
+# Git-хуки и всё, что исполняется под sh, обязано быть с LF:
+# CRLF в shebang даёт «bad interpreter» и в Git Bash, и в CI.
+.githooks/**   text eol=lf
