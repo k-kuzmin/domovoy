@@ -1,0 +1,44 @@
+# Нормализация переводов строк: в репозитории всегда LF,
+# в рабочем каталоге — по платформе.
+* text=auto
+
+# Исходники и конфигурация
+*.cs           text diff=csharp
+*.csproj       text eol=crlf
+*.sln          text eol=crlf
+*.props        text
+*.targets      text
+*.json         text
+*.yaml         text
+*.yml          text
+*.md           text
+*.toml         text
+*.editorconfig text
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+# Скрипты: перевод строки определяет исполняемость
+*.sh           text eol=lf
+*.ps1          text eol=crlf
+*.cmd          text eol=crlf
+*.bat          text eol=crlf
+Dockerfile     text eol=lf
+*.Dockerfile   text eol=lf
+
+# Бинарные файлы
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.dll  binary
+*.exe  binary
+*.snk  binary
+*.onnx binary
+*.wav  binary
+*.opus binary
+*.m4a  binary
+

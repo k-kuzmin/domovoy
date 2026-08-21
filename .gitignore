@@ -1,0 +1,214 @@
+## ============================================================
+## Домовой — .gitignore
+## Первый рубеж защиты: приватные данные и секреты не попадают
+## в дерево ни в одной копии репозитория (ТЗ 5.1.1).
+## ============================================================
+
+## ------------------------------------------------------------
+## Секреты и приватные данные проекта (ТЗ 5.1.2, 5.1.3)
+## ------------------------------------------------------------
+
+# Конфигурация с реальными значениями
+appsettings.Development.json
+appsettings.Production.json
+appsettings.Local.json
+.env
+.env.local
+.env.production
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Реестр сущностей, профиль дома, правила проактивности.
+# Чувствительнее токенов: вместе дают планировку, состав жильцов
+# и расположение датчиков (ТЗ 5.1.3).
+config/*.yaml
+config/*.yml
+config/*.md
+config/*.json
+!config/*.example.*
+
+# Локальные БД, дампы, бэкапы HA
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.dump
+backups/
+
+# Секреты Cloudflare Tunnel
+*.pem
+*.key
+!**/*.key.example
+cloudflared/
+.cloudflared/
+
+## ------------------------------------------------------------
+## .NET
+## ------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Oo]bj[Dd]/
+artifacts/
+publish/
+PublishScripts/
+*.publishsettings
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+*.tlog
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.publishproj
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+BenchmarkDotNet.Artifacts/
+
+# Кэш и локальный конфиг NuGet
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# Результаты тестов и покрытие
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.info
+[Cc]overage[Rr]eport/
+.axoCover/*
+!.axoCover/axoCover.json
+
+# EF Core
+*.mdf
+*.ldf
+*.ndf
+
+## ------------------------------------------------------------
+## Visual Studio
+## ------------------------------------------------------------
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.VisualState.xml
+*.psess
+*.vsp
+*.vspx
+*.sap
+*.e2e
+$tf/
+*.gpState
+_Chutzpah*
+ipch/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+.localhistory/
+.vshistory/
+healthchecksdb
+MigrationBackup/
+ServiceFabricBackup/
+*.rptproj.rsuser
+*- [Bb]ackup.rdl
+*- [Bb]ackup ([0-9]).rdl
+FakesAssemblies/
+*.plg
+*.opt
+node_modules/
+
+## ------------------------------------------------------------
+## JetBrains Rider / ReSharper
+## ------------------------------------------------------------
+.idea/
+*.sln.iml
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+.JustCode
+*.dotCover
+_TeamCity*
+*.ncrunch*
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+## ------------------------------------------------------------
+## Visual Studio Code
+## ------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json.example
+!.vscode/extensions.json
+
+## ------------------------------------------------------------
+## Операционные системы
+## ------------------------------------------------------------
+[Tt]humbs.db
+[Tt]humbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+## ------------------------------------------------------------
+## Claude Code
+## ------------------------------------------------------------
+.claude/settings.local.json
+.claude/*.local.md
