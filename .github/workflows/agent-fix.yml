@@ -178,11 +178,49 @@ jobs:
           if ! gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > raw.log; then
             echo 'Лог упавшего job недоступен: срок хранения истёк или запуск удалён.' > raw.log
           fi
-          # Лог сырой, но ограниченный хвостом: причина падения .NET-сборки
-          # всегда в конце, а целиком он не влезет ни в один разумный
-          # контекст.
-          tail -n 3000 raw.log > ci-failure.log
-          wc -l ci-failure.log
+
+          # Сырой лог модели не отдаётся. Каждая строка `gh` несёт префикс
+          # «работа → шаг → таймштамп», и три тысячи таких строк — это
+          # шестизначное число входных токенов ради ответа «да» или «нет».
+          # Вдобавок инструмент чтения по умолчанию отдал бы первые две
+          # тысячи строк из трёх — то есть ровно не тот конец, ради
+          # которого брался хвост.
+          #
+          # Отбираются строки с признаками отказа вместе с окружением, а
+          # хвост остаётся страховкой на случай формулировки, под шаблон
+          # не попавшей.
+          grep -nE -B1 -A3 \
+            'error [A-Z]+[0-9]*:|Failed!|\[FAIL\]|Assert|Exception|Unhandled|timed out|Timeout|Unable to (load|connect)|Could not resolve|HTTP (429|5[0-9][0-9])' \
+            raw.log > matched.log || true
+
+          {
+            echo '=== Строки с признаками отказа ==='
+            tail -n 200 matched.log
+            echo
+            echo '=== Последние 60 строк лога ==='
+            tail -n 60 raw.log
+          } > ci-failure.log
+
+          wc -l raw.log matched.log ci-failure.log
+
+      - name: Падение опознаётся без модели
+        id: deterministic
+        if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
+        run: |
+          set -euo pipefail
+          # Шаблон повторяет «признаки настоящего» из промпта шага оценки:
+          # диагностика вида `error CS0103:`, `error MSB3021:`,
+          # `error WHITESPACE:` — это компилятор, сборщик, анализатор или
+          # `dotnet format`. Случайными такие падения не бывают, значит
+          # вердикт известен заранее и платить за него вызовом модели
+          # незачем. Модель остаётся там, где сомнение настоящее.
+          if grep -qE 'error [A-Z]+[0-9]*:' raw.log; then
+            echo 'certain=true' >> "$GITHUB_OUTPUT"
+            echo 'Падение опознано по существу: диагностика сборки в логе. Модель не вызывается.'
+          else
+            echo 'certain=false' >> "$GITHUB_OUTPUT"
+            echo 'Явной диагностики в логе нет — нужна оценка модели.'
+          fi
 
       - name: Лог как артефакт
         if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
@@ -195,7 +233,14 @@ jobs:
 
       - name: Похоже ли это на флаки-тест
         id: flaky
-        if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
+        # Шаг пропускается, когда предыдущий уже опознал падение по
+        # диагностике сборки. Пропуск оставляет structured_output пустым, а
+        # шаг вердикта на пустом значении и так даёт flaky=false — то есть
+        # «чинить», что и требуется.
+        if: >-
+          github.event_name == 'workflow_run' &&
+          steps.attempt.outputs.stop == 'false' &&
+          steps.deterministic.outputs.certain == 'false'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -206,8 +251,14 @@ jobs:
             Репозиторий: ${{ github.repository }}
             PR: #${{ steps.attempt.outputs.pr }}
 
-            В файле `ci-failure.log` — сырой лог упавших job быстрого CI.
-            Прочитай его и реши: падение случайное или настоящее.
+            В файле `ci-failure.log` — выжимка из лога упавших job быстрого
+            CI: строки с признаками отказа и хвост лога. Прочитай её и
+            реши: падение случайное или настоящее.
+
+            Диагностику сборки (`error CS…`, `error MSB…`, `error
+            WHITESPACE…`) предыдущий шаг уже отсеял: если ты дошёл до этого
+            шага, её в логе нет. Значит выбор идёт между случайным сбоем и
+            падением теста по существу.
 
             Признаки случайного (флаки):
             - таймаут, отменённый по времени шаг, обрыв сети, 5xx от nuget.org;
@@ -216,10 +267,12 @@ jobs:
             - формулировка, не связанная с изменением в этом PR.
 
             Признаки настоящего:
-            - ошибка компиляции;
-            - `dotnet format --verify-no-changes` нашёл расхождение стиля;
             - падение архитектурного теста;
-            - утверждение теста не выполнилось по существу.
+            - утверждение теста не выполнилось по существу;
+            - диагностика сборки (`error CS…`, `error MSB…`, `error
+              WHITESPACE…`), если она всё же попалась: предыдущий шаг её
+              отсеивает, но шаблон мог не покрыть формулировку. Встретил —
+              is_flaky=false.
 
             Ничего не правь: доступно только чтение. Сомневаешься — ставь
             is_flaky=false: лишняя попытка починки дешевле, чем настоящая
@@ -228,6 +281,12 @@ jobs:
             Отвечай по-русски.
           claude_args: |
             # Только чтение: на этом шаге решается «что это», а не «как чинить».
+            #
+            # Модель названа явно и намеренно младшая: шаг возвращает булев
+            # ответ по схеме, читает один короткий файл и суждения уровня
+            # ревью не требует. Входа `model:` у действия нет — только через
+            # claude_args.
+            --model claude-haiku-4-5
             --allowedTools 'Read,Glob,Grep'
             --max-turns 10
             --json-schema '{"type":"object","properties":{"is_flaky":{"type":"boolean","description":"Падение выглядит случайным"},"confidence":{"type":"number","minimum":0,"maximum":1,"description":"Уверенность в оценке"},"summary":{"type":"string","description":"Одно-два предложения: что именно упало и почему такой вывод"}},"required":["is_flaky","confidence","summary"]}'
@@ -244,7 +303,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # На пути `changes_requested` лога нет и шаг оценки не выполнялся.
+          # Пустой результат означает, что шаг оценки не выполнялся: либо
+          # это путь `changes_requested`, где лога нет вовсе, либо падение
+          # уже опознано по диагностике сборки. Оба случая ведут к «чинить»,
+          # и это ровно то, что нужно.
           if [ "$EVENT" != 'workflow_run' ] || [ -z "$RESULT" ]; then
             echo 'flaky=false' >> "$GITHUB_OUTPUT"
             exit 0
@@ -349,12 +411,17 @@ jobs:
                под текущий результат.
             2. Почини минимальным изменением. Попутный рефакторинг в этом
                же диффе — не починка, а новая порция риска.
-            3. Прогони локально ровно эти четыре команды, все четыре:
+            3. Прогони локально:
 
-                   dotnet restore
                    dotnet build --no-restore -c Release
                    dotnet test --no-build -c Release
                    dotnet format --verify-no-changes --no-restore
+
+               `dotnet restore` добавляй, только если правка задела
+               `*.csproj` или `Directory.Packages.props`: без этого он не
+               может дать другой результат, а лишний прогон — лишний ход.
+
+               Перед пушем все четыре обязательны.
 
             4. Закоммить (`fix: …`, Conventional Commits, без трейлеров
                `Co-Authored-By` и подписей инструментов) и запушь в ту же
