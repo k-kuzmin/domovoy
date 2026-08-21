@@ -40,17 +40,27 @@ jobs:
     # PR черновик (событие `ready_for_review` может породить только человек
     # с write-доступом), а сравнение head-репозитория отсекает PR из форков,
     # которым секреты не положены в принципе.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе: отсутствие секрета его не
+    # останавливает — процесс стартовал бы и упал на шаге вызова модели,
+    # засоряя историю красными прогонами. Включение цикла — установка
+    # `vars.AGENT_LOOP_ENABLED = true` плюс два секрета, и ничего больше.
     if: >-
+      vars.AGENT_LOOP_ENABLED == 'true' &&
       (
-        github.event_name == 'pull_request' &&
-        github.actor == github.repository_owner &&
-        github.event.pull_request.head.repo.full_name == github.repository
-      ) ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request != null &&
-        github.event.comment.author_association == 'OWNER' &&
-        startsWith(github.event.comment.body, '/review')
+        (
+          github.event_name == 'pull_request' &&
+          github.actor == github.repository_owner &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.author_association == 'OWNER' &&
+          startsWith(github.event.comment.body, '/review')
+        )
       )
     steps:
       - name: Checkout ветки PR
@@ -166,17 +176,27 @@ jobs:
     # `correctness`; обоснование — в комментарии там. Условие продублировано,
     # а не вынесено: `if` на уровне job — единственное место, где запуск
     # можно не начать вовсе, а YAML-якоря GitHub Actions не поддерживает.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе: отсутствие секрета его не
+    # останавливает — процесс стартовал бы и упал на шаге вызова модели,
+    # засоряя историю красными прогонами. Включение цикла — установка
+    # `vars.AGENT_LOOP_ENABLED = true` плюс два секрета, и ничего больше.
     if: >-
+      vars.AGENT_LOOP_ENABLED == 'true' &&
       (
-        github.event_name == 'pull_request' &&
-        github.actor == github.repository_owner &&
-        github.event.pull_request.head.repo.full_name == github.repository
-      ) ||
-      (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request != null &&
-        github.event.comment.author_association == 'OWNER' &&
-        startsWith(github.event.comment.body, '/review')
+        (
+          github.event_name == 'pull_request' &&
+          github.actor == github.repository_owner &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.author_association == 'OWNER' &&
+          startsWith(github.event.comment.body, '/review')
+        )
       )
     steps:
       - name: Checkout ветки PR

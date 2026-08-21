@@ -46,10 +46,20 @@ jobs:
     #     проверка актора никакой штатный путь не ломает;
     #   * `github.event.issue.author_association == 'OWNER'` — задача заведена
     #     владельцем, а не посторонним.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе: отсутствие секрета его не
+    # останавливает — процесс стартовал бы и упал на шаге вызова модели,
+    # засоряя историю красными прогонами. Включение цикла — установка
+    # `vars.AGENT_LOOP_ENABLED = true` плюс два секрета, и ничего больше.
     if: >-
-      github.event.label.name == 'plan/approved' &&
-      github.actor == github.repository_owner &&
-      github.event.issue.author_association == 'OWNER'
+      vars.AGENT_LOOP_ENABLED == 'true' &&
+      (
+        github.event.label.name == 'plan/approved' &&
+        github.actor == github.repository_owner &&
+        github.event.issue.author_association == 'OWNER'
+      )
     steps:
       - name: Checkout main
         uses: actions/checkout@v7
