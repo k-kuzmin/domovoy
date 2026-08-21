@@ -194,7 +194,7 @@ Api ──► Core ◄── Ha
 ## Git
 
 **Conventional Commits.** Типы: `feat`, `fix`, `chore`, `docs`, `refactor`,
-`test`, `perf`, `build`, `ci`, `revert`. Проверяется хуком `commit-msg`.
+`test`, `perf`, `build`, `ci`, `revert`, `style`. Проверяется хуком `commit-msg`.
 
 **Соавторство исключено.** В сообщениях коммитов не должно быть трейлеров
 `Co-Authored-By`, упоминаний генерации и любых подписей инструмента.

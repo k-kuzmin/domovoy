@@ -20,7 +20,7 @@ SUBJECT="$(printf '%s\n' "$BODY" | sed -n '/[^[:space:]]/{p;q;}')"
 # ------------------------------------------------------------
 # 1. Conventional Commits
 # ------------------------------------------------------------
-CC_PATTERN='^(feat|fix|chore|docs|refactor|test|perf|build|ci|revert)(\([a-z0-9._/-]+\))?!?: .+'
+CC_PATTERN='^(feat|fix|chore|docs|refactor|test|perf|build|ci|revert|style)(\([a-z0-9._/-]+\))?!?: .+'
 
 # Merge- и revert-коммиты git формирует сам.
 case "$SUBJECT" in
