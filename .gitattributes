@@ -3,7 +3,10 @@
 * text=auto
 
 # Исходники и конфигурация
-*.cs           text diff=csharp
+# LF в рабочем каталоге на всех платформах: end_of_line в
+# .editorconfig один, и dotnet format --verify-no-changes должен
+# давать одинаковый результат на Windows и в CI на Linux.
+*.cs           text eol=lf diff=csharp
 *.csproj       text eol=crlf
 *.sln          text eol=crlf
 *.props        text
