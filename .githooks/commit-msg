@@ -1,0 +1,68 @@
+#!/bin/sh
+#
+# Домовой — commit-msg: формат сообщения коммита.
+#
+# Две проверки:
+#   1. Conventional Commits — тип из фиксированного списка.
+#   2. Отсутствие соавторства и подписей инструментов. Соавторство
+#      в проекте исключено; трейлер Co-Authored-By добавляется
+#      некоторыми инструментами автоматически, поэтому проверка
+#      механическая, а не «не забыть».
+#
+set -eu
+
+MSG_FILE="$1"
+
+# Сообщение без строк-комментариев, которые git вырезает сам.
+BODY="$(grep -v '^#' "$MSG_FILE" || true)"
+SUBJECT="$(printf '%s\n' "$BODY" | sed -n '/[^[:space:]]/{p;q;}')"
+
+# ------------------------------------------------------------
+# 1. Conventional Commits
+# ------------------------------------------------------------
+CC_PATTERN='^(feat|fix|chore|docs|refactor|test|perf|build|ci|revert)(\([a-z0-9._/-]+\))?!?: .+'
+
+# Merge- и revert-коммиты git формирует сам.
+case "$SUBJECT" in
+    Merge\ *|Revert\ *) ;;
+    *)
+        if ! printf '%s\n' "$SUBJECT" | grep -Eq "$CC_PATTERN"; then
+            cat >&2 <<MSG
+
+  Коммит отклонён: заголовок не соответствует Conventional Commits.
+
+    получено: $SUBJECT
+
+  Ожидается: <тип>[(область)]: описание
+  Типы: feat, fix, chore, docs, refactor, test, perf, build, ci, revert
+
+    feat(ha): подписка на state_changed
+    fix: реконнект к HA после разрыва
+    docs: схема архитектуры в README
+
+MSG
+            exit 1
+        fi
+        ;;
+esac
+
+# ------------------------------------------------------------
+# 2. Соавторство и подписи инструментов
+# ------------------------------------------------------------
+FORBIDDEN='^[[:space:]]*Co-[Aa]uthored-[Bb]y:|^[[:space:]]*Signed-off-by:.*(claude|anthropic|copilot)|[Gg]enerated with|noreply@anthropic\.com|Claude Code|🤖'
+
+if printf '%s\n' "$BODY" | grep -Eq "$FORBIDDEN"; then
+    cat >&2 <<'MSG'
+
+  Коммит отклонён: в сообщении есть трейлер соавторства или подпись
+  инструмента.
+
+  Соавторство в проекте исключено. Убрать из сообщения:
+    - трейлеры Co-Authored-By и Signed-off-by с упоминанием инструмента
+    - упоминания генерации и любые подписи инструмента
+
+MSG
+    exit 1
+fi
+
+exit 0

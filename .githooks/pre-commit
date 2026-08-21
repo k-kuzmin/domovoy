@@ -1,0 +1,84 @@
+#!/bin/sh
+#
+# Домовой — pre-commit: основной рубеж защиты от утечек (ТЗ REPO-1).
+#
+# Проверяет только то, что попадает в коммит (индекс). Отсутствие
+# gitleaks — тоже ошибка: хук, который молча пропускает коммит при
+# несобранном инструменте, защиты не даёт.
+#
+# Устанавливается один раз в клоне:
+#   git config core.hooksPath .githooks
+#
+set -eu
+
+# ------------------------------------------------------------
+# Поиск gitleaks
+#
+# На Windows winget кладёт бинарь в Links, который не всегда попадает
+# в PATH оболочки, из которой git запускает хуки (IDE, GUI-клиенты).
+# ------------------------------------------------------------
+find_gitleaks() {
+    if command -v gitleaks >/dev/null 2>&1; then
+        command -v gitleaks
+        return 0
+    fi
+
+    for candidate in \
+        "${LOCALAPPDATA:-}/Microsoft/WinGet/Links/gitleaks.exe" \
+        "${HOME:-}/AppData/Local/Microsoft/WinGet/Links/gitleaks.exe" \
+        "${HOME:-}/.local/bin/gitleaks" \
+        "${HOME:-}/go/bin/gitleaks" \
+        "/usr/local/bin/gitleaks" \
+        "/opt/homebrew/bin/gitleaks"
+    do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+if ! GITLEAKS="$(find_gitleaks)"; then
+    cat >&2 <<'MSG'
+
+  Коммит отклонён: gitleaks не найден.
+
+  Хук не пропускает коммиты без работающей проверки на секреты —
+  это основной рубеж защиты (ТЗ REPO-1).
+
+  Установка:
+    Windows   winget install --id Gitleaks.Gitleaks --exact
+    macOS     brew install gitleaks
+    Linux     см. https://github.com/gitleaks/gitleaks/releases
+
+MSG
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# Проверка индекса
+# ------------------------------------------------------------
+if ! "$GITLEAKS" git --staged --redact --no-banner --log-level warn .; then
+    cat >&2 <<'MSG'
+
+  Коммит отклонён: gitleaks нашёл секрет или приватные данные.
+
+  Значения в выводе выше отредактированы. Что делать:
+
+    1. Убрать значение из файла. Секреты приходят только из
+       IConfiguration: локально dotnet user-secrets, в продакшене
+       переменные окружения (ТЗ 5.1.1).
+    2. Если это ложное срабатывание — добавить правило или
+       исключение в .gitleaks.toml. Не обходить хук флагом
+       --no-verify: в CI проверка повторится и PR не пройдёт.
+    3. Если значение уже попадало в историю — секрет считается
+       скомпрометированным и подлежит отзыву, а не удалению
+       (ТЗ 5.1, REPO-5).
+
+MSG
+    exit 1
+fi
+
+exit 0
