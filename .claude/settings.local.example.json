@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "//": "Пример личных настроек. Скопировать в .claude/settings.local.json —",
+  "//_2": "тот файл в .gitignore, у каждого свой. Здесь только подключение",
+  "//_3": "хука ast-index: инструмент машинный, в зависимости проекта не",
+  "//_4": "входит, и навязывать его тому, у кого его нет, незачем.",
+  "//_5": "Без ast-index хук молча завершается — ставить этот файл",
+  "//_6": "необязательно.",
+
+  "permissions": {
+    "allow": [
+      "Bash(ast-index:*)"
+    ]
+  },
+
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/ast-index-update.sh\"",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/ast-index-update.sh\"",
+            "async": true,
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
