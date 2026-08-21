@@ -20,7 +20,7 @@
 | Компонент | Версия |
 |---|---|
 | Целевая платформа | `net8.0` (LTS) |
-| SDK для сборки | 8.0 или 9.0 (собирает `net8.0` через reference packs) |
+| SDK для сборки | 8.0.x, зафиксирован в `global.json` (запись 0012) |
 | ASP.NET Core | 8, minimal API |
 | PostgreSQL | 16 |
 | EF Core | 8 (`Npgsql.EntityFrameworkCore.PostgreSQL`) |
