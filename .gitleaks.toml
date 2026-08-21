@@ -46,7 +46,11 @@ keywords = ["eyj"]
 [[rules]]
 id = "domovoy-gigachat-credentials"
 description = "Учётные данные GigaChat (authorization key, client id, client secret)"
-regex = '''(?i)\b(?:gigachat|sber)[_.-]?(?:auth(?:orization)?|api|client|access)?[_.-]?(?:key|secret|token|id)\b["']?\s*[:=]\s*["']?([A-Za-z0-9+/=_-]{16,})'''
+#
+# Между именем провайдера и параметром допускается разрыв: в YAML и
+# JSON они лежат на разных строках (gigachat: / client_secret:), и
+# правило, требующее смежности, такую форму пропускает.
+regex = '''(?i)\b(?:gigachat|sber)\b[\s\S]{0,200}?\b(?:auth(?:orization)?[_.-]?key|api[_.-]?key|client[_.-]?(?:id|secret)|access[_.-]?token|secret|token)\b["']?\s*[:=]\s*["']?([A-Za-z0-9+/=_-]{16,})'''
 secretGroup = 1
 keywords = ["gigachat", "sber"]
 
@@ -76,7 +80,10 @@ keywords = ["aqvn", "t1.", "y0_"]
 [[rules]]
 id = "domovoy-ntfy-topic"
 description = "Имя топика ntfy — функционально пароль"
-regex = '''(?i)\bntfy[_.-]?(?:topic|channel)\b["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{6,})'''
+#
+# Две формы: слитная (NTFY_TOPIC=..., ntfy_topic: ...) и вложенная,
+# где ntfy и topic разнесены по строкам YAML или JSON.
+regex = '''(?i)\bntfy\b[\s\S]{0,200}?\b(?:topic|channel)\b["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{6,})'''
 secretGroup = 1
 keywords = ["ntfy"]
 
