@@ -1,0 +1,45 @@
+name: Дефект
+description: Поведение расходится с ожидаемым
+labels: ['type/bug']
+body:
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что происходит
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что должно происходить
+      description: Со ссылкой на пункт ТЗ, если ожидание оттуда.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи и окружение
+      description: >-
+        Перед вставкой уберите токены, реальные entity_id, адреса и имя
+        топика ntfy. Заголовки запросов проверьте отдельно.
+      render: text
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Проверено
+      options:
+        - label: В тексте issue нет секретов, реальных entity_id, адресов и MAC
+          required: true

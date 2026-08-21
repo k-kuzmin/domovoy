@@ -1,0 +1,49 @@
+name: Открытый вопрос
+description: Требование неясно, противоречиво или требует выбора
+labels: ['type/decision']
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: В чём вопрос
+      description: >-
+        Сформулируйте так, чтобы на него можно было ответить решением, а
+        не обсуждением.
+    validations:
+      required: true
+
+  - type: input
+    id: requirement
+    attributes:
+      label: Пункт ТЗ
+      description: Требование, которое неясно или противоречит другому.
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Варианты
+      description: С последствиями каждого. Если есть рекомендация — первой.
+    validations:
+      required: true
+
+  - type: textarea
+    id: depends
+    attributes:
+      label: От чего зависит решение
+      description: Например: наличие GPU, тариф провайдера, число жильцов.
+
+  - type: input
+    id: deadline
+    attributes:
+      label: К какому этапу нужно решить
+      placeholder: до этапа 2
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: >-
+        После принятия решения: записать его в `docs/decisions/`, если оно
+        расходится с ТЗ, и обновить соответствующий раздел ТЗ.

@@ -1,0 +1,33 @@
+name: Обслуживание
+description: Инфраструктура, зависимости, документация, рефакторинг
+labels: ['type/chore']
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Что и зачем
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Критерий готовности
+    validations:
+      required: true
+
+  - type: input
+    id: estimate
+    attributes:
+      label: Оценка, часы
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependency
+    attributes:
+      label: Если добавляется зависимость — обоснование
+      description: >-
+        Набор библиотек закрытый. Новая зависимость требует обоснования
+        до установки: что именно она решает и почему встроенных средств
+        .NET не хватает.

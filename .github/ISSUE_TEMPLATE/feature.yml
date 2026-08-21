@@ -1,0 +1,59 @@
+name: Функциональность
+description: Новая возможность или её часть
+labels: ['type/feature']
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Цель
+      description: Зачем это нужно. Два-три предложения, без деталей реализации.
+    validations:
+      required: true
+
+  - type: input
+    id: requirement
+    attributes:
+      label: Пункт ТЗ
+      description: >-
+        Идентификаторы требований, а не «см. ТЗ». Например FR-CORE-7,
+        NFR-SEC-6, AR-1.3.
+      placeholder: FR-CORE-7, NFR-PERF-2
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Критерий готовности
+      description: >-
+        Проверяемый: то, что можно выполнить командой или увидеть глазами.
+        «Реализовано корректно» критерием не является.
+      placeholder: |
+        Готово, когда:
+        - `curl -N -X POST /api/v1/chat` отдаёт события recognized, action, done;
+        - `dotnet test` проходит, включая тест на порядок событий.
+    validations:
+      required: true
+
+  - type: input
+    id: estimate
+    attributes:
+      label: Оценка, часы
+      description: >-
+        Крупнее 8 часов — задачу нужно разбить. Если разбить пока нельзя,
+        напишите почему.
+      placeholder: '6'
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: sync
+    attributes:
+      label: Что потребуется обновить вместе с кодом
+      description: Из таблицы синхронизации в .claude/CLAUDE.md.
+      options:
+        - label: Системный промпт и тест на соответствие набора инструментов
+        - label: '`.env.example`, `appsettings.json`, README'
+        - label: '`docker-compose.yml` и пример переопределений'
+        - label: Health-check и схема архитектуры
+        - label: Запись в `docs/decisions/`, если решение расходится с ТЗ

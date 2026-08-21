@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Вопрос по требованиям
+    url: https://github.com/k-kuzmin/domovoy/issues/new?template=decision.yml
+    about: >-
+      Требование ТЗ непонятно или противоречиво — это не задача, а решение.
+      Заводите его как «Открытый вопрос», а не реализуйте по своему усмотрению.
