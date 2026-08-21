@@ -1,10 +1,24 @@
-name: build
+name: CI (heavy)
+
+# Дорогие проверки: сборка образа с подъёмом стека и CodeQL. Обе
+# измеряются минутами, поэтому в цикл итераций агента не попадают — он
+# итерируется по логам ci-fast.yml.
+#
+# В постановке эту роль играли сборки MAUI под Android и iOS. Мобильного
+# клиента ещё нет (этап 5, issue #38), а дорогая проверка здесь уже
+# есть — сборка Docker-образа. Когда появится Domovoy.Mobile.App, работы
+# под платформы добавляются в этот файл, а не создают третий.
 
 on:
-  push:
-    branches: ['**']
   pull_request:
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+  push:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ci-heavy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,48 +30,35 @@ env:
   CI: 'true'
 
 jobs:
-  build:
-    name: Сборка и тесты
+  gate:
+    name: Нужен ли тяжёлый прогон
     runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Установка .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          # Версия берётся из global.json: один источник истины для CI,
-          # машины разработчика и образа (запись 0012).
-          global-json-file: global.json
-
-      - name: Восстановление пакетов
-        run: dotnet restore
-
-      - name: Сборка
-        # Предупреждение — это ошибка, которую пока не заметили:
-        # TreatWarningsAsErrors включён в Directory.Build.props.
-        run: dotnet build --configuration Release --no-restore
-
-      - name: Проверка стиля
-        run: dotnet format --verify-no-changes --no-restore
-
-      - name: Тесты
-        run: >-
-          dotnet test --configuration Release --no-build
-          --logger "trx;LogFileName=tests.trx"
-          --results-directory TestResults
-
-      - name: Результаты тестов как артефакт
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-results
-          path: TestResults/
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Решение
+        # Черновик тяжёлых проверок не получает: агент открывает PR
+        # черновиком и правит его несколько раз подряд, и каждая правка
+        # стоила бы сборки образа. Проверки приходят, когда PR выведен
+        # из черновика, — то есть когда автор считает работу готовой.
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != 'pull_request' ] || [ "$DRAFT" = 'false' ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+            echo 'Тяжёлые проверки запускаются.'
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+            echo 'PR — черновик, тяжёлые проверки пропускаются до ready_for_review.'
+          fi
 
   compose:
     name: Стек поднимается на примерах конфигурации
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -148,3 +149,64 @@ jobs:
       - name: Останов стека
         if: always()
         run: docker compose down --volumes
+
+  codeql:
+    name: Статический анализ CodeQL
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Инициализация CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: manual
+
+      - name: Сборка для анализа
+        # --no-incremental: CodeQL наблюдает за компиляцией и пропустит
+        # проекты, которые сборщик счёл неизменившимися.
+        run: dotnet build --configuration Release --no-incremental
+
+      - name: Анализ
+        uses: github/codeql-action/analyze@v4
+
+  heavy-ok:
+    # Единственная работа этого файла с постоянным именем и постоянным
+    # запуском. Её и надо ставить в required status checks: работы выше
+    # условные, а пропущенная required-проверка держит PR незакрытым
+    # навсегда.
+    name: Тяжёлые проверки пройдены
+    needs: [gate, compose, codeql]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Итог
+        env:
+          COMPOSE: ${{ needs.compose.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          GATE: ${{ needs.gate.result }}
+        run: |
+          set -euo pipefail
+          echo "gate=$GATE compose=$COMPOSE codeql=$CODEQL"
+          if [ "$GATE" != 'success' ]; then
+            echo '::error::Работа gate не выполнена — состояние тяжёлых проверок неизвестно.'
+            exit 1
+          fi
+          for result in "$COMPOSE" "$CODEQL"; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo '::error::Тяжёлая проверка не пройдена.'; exit 1 ;;
+            esac
+          done
+          echo 'Тяжёлые проверки пройдены или пропущены по условию.'

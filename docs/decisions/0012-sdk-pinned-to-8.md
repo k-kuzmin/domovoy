@@ -62,7 +62,7 @@ CI, — то есть в момент, когда работа уже сдела
   сообщением о несовместимости `global.json`. Установка:
   `winget install --id Microsoft.DotNet.SDK.8` (Windows),
   `brew install --cask dotnet-sdk@8` (macOS), пакеты дистрибутива (Linux).
-- Рабочий процесс `build.yml` получает версию из `global.json`
+- Рабочие процессы CI получают версию из `global.json`
   (`global-json-file`), а не из отдельного `dotnet-version`: источник
   истины один, разъехаться нечему.
 - `Dockerfile` копирует `global.json` в слой восстановления пакетов —
