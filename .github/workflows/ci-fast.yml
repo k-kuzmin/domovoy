@@ -95,9 +95,16 @@ jobs:
           import re
           import sys
 
-          reports = glob.glob('TestResults/**/coverage.cobertura.xml', recursive=True)
+          # Ровно один уровень вложенности, без recursive: сборщик кладёт
+          # отчёт дважды — как вложение в TestResults/<guid>/ и как
+          # промежуточную копию в TestResults/<прогон>/In/<машина>/.
+          # Рекурсивный обход находит обе, и оба числа удваиваются.
+          reports = glob.glob('TestResults/*/coverage.cobertura.xml')
           if not reports:
-              sys.exit('::error::Отчёты о покрытии не найдены — тесты запускались без --collect.')
+              sys.exit(
+                  '::error::Отчёты о покрытии не найдены в TestResults/*/. '
+                  'Либо тесты запускались без --collect, либо сборщик сменил раскладку — '
+                  'разобраться, а не расширять шаблон поиска.')
 
           # Читается только корневой элемент <coverage ...>: нужны два его
           # числовых атрибута. Полноценный разбор XML здесь не нужен, а
