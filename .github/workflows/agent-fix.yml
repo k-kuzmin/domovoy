@@ -16,12 +16,14 @@ on:
 # contents: write — агент пушит починку в ветку задачи.
 # pull-requests: write — метки счётчика попыток и комментарии на PR.
 # actions: read — скачать лог упавшего job.
-# id-token: write — обмен OIDC на токен GitHub App.
+#
+# Права ниже относятся к штатному GITHUB_TOKEN. Пуш починки идёт через
+# AGENT_TOKEN: иначе CI на ветке не перезапустится и результат починки
+# останется непроверенным.
 permissions:
   contents: write
   pull-requests: write
   actions: read
-  id-token: write
 
 concurrency:
   group: agent-fix-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
@@ -49,12 +51,9 @@ jobs:
     #   * `head_repository.full_name == github.repository` — ветка лежит в
     #     этом репозитории, а запушить сюда ветку может только тот, у кого
     #     есть write-доступ. Это и есть основной барьер против постороннего;
-    #   * список логинов инициатора — второй рубеж. В нём есть `claude[bot]`,
-    #     потому что ветку задачи пушит GitHub App шага agent-implement, и
-    #     проверка только на владельца закрыла бы штатный путь целиком.
-    #     Если приложение в репозитории называется иначе, логин здесь надо
-    #     поправить вместе со списком `allowed_bots` ниже — они меняются
-    #     парой.
+    #   * логин инициатора — второй рубеж. Ветку задачи пушит agent-implement
+    #     через AGENT_TOKEN, то есть от имени владельца токена: отдельного
+    #     логина бота в списке не нужно, и сверять его не с чем.
     # Префикс `feat/` ограничивает починку ветками агентского цикла: main и
     # ветки документации чинятся человеком.
     #
@@ -67,10 +66,7 @@ jobs:
         github.event.workflow_run.conclusion == 'failure' &&
         github.event.workflow_run.head_repository.full_name == github.repository &&
         startsWith(github.event.workflow_run.head_branch, 'feat/') &&
-        (
-          github.event.workflow_run.triggering_actor.login == github.repository_owner ||
-          github.event.workflow_run.triggering_actor.login == 'claude[bot]'
-        )
+        github.event.workflow_run.triggering_actor.login == github.repository_owner
       ) ||
       (
         github.event_name == 'pull_request_review' &&
@@ -193,11 +189,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Ветку задачи пушит GitHub App шага agent-implement, поэтому
-          # инициатором запуска CI оказывается бот. Без этого списка
-          # действие откажется работать: оно защищается от запуска ботами.
-          # Логин обязан совпадать с тем, что в гейте job выше.
-          allowed_bots: 'claude[bot]'
+          # Шаг только читает лог и возвращает вердикт: писать в
+          # репозиторий ему нечем и незачем.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Репозиторий: ${{ github.repository }}
             PR: #${{ steps.attempt.outputs.pr }}
@@ -315,12 +309,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # См. комментарий у шага оценки флаки: инициатором запуска по
-          # событию workflow_run оказывается бот, запушивший ветку.
-          allowed_bots: 'claude[bot]'
-          # github_token не передаётся: нужен токен GitHub App, иначе пуш
-          # починки не перезапустит CI и результат правки останется
-          # непроверенным.
+          # AGENT_TOKEN, а не GITHUB_TOKEN: пуш штатным токеном не
+          # перезапустит CI, и результат починки останется непроверенным —
+          # цикл «упало → починил → проверил» разомкнётся.
+          github_token: ${{ secrets.AGENT_TOKEN }}
           prompt: |
             Репозиторий: ${{ github.repository }}
             PR: #${{ steps.attempt.outputs.pr }}

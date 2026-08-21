@@ -9,13 +9,14 @@ on:
 
 # Единственный агентский workflow, которому действительно нужен
 # contents: write — он создаёт ветку и пушит в неё.
-# pull-requests: write — черновой PR; issues: write — метки прогресса;
-# id-token: write — обмен OIDC на токен GitHub App.
+# pull-requests: write — черновой PR; issues: write — метки прогресса.
+#
+# Права ниже относятся к штатному GITHUB_TOKEN. Пуш и создание PR идут
+# через AGENT_TOKEN: событие от штатного токена не запускает CI.
 permissions:
   contents: write
   issues: write
   pull-requests: write
-  id-token: write
 
 concurrency:
   group: agent-implement-${{ github.event.issue.number }}
@@ -83,10 +84,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # github_token не передаётся: действие получит токен GitHub App
-          # через OIDC. Пуш, сделанный штатным GITHUB_TOKEN, не порождает
-          # событий — CI на ветке не запустится, и agent-fix, который следит
-          # за её падениями, окажется недостижим.
+          # AGENT_TOKEN обязателен именно здесь: пуш и создание PR,
+          # сделанные штатным GITHUB_TOKEN, не порождают событий — CI на
+          # ветке не запустится, а agent-fix, который следит за её
+          # падениями, окажется недостижим.
+          github_token: ${{ secrets.AGENT_TOKEN }}
           prompt: |
             Репозиторий: ${{ github.repository }}
             Задача: #${{ github.event.issue.number }}

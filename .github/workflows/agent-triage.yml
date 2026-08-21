@@ -8,11 +8,9 @@ on:
     types: [opened, edited, labeled]
 
 # Минимум: читать код для проверки путей и писать метки с комментарием.
-# id-token нужен для обмена OIDC на токен GitHub App (см. шаг с Claude).
 permissions:
   contents: read
-  issues: write
-  id-token: write
+  issues: read
 
 concurrency:
   group: agent-triage-${{ github.event.issue.number }}
@@ -54,11 +52,9 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # github_token намеренно не передаётся: без него действие меняет
-          # OIDC-токен на токен GitHub App. Метка, поставленная этим токеном,
-          # порождает событие `labeled` — на нём срабатывает agent-plan.
-          # Метка, поставленная штатным GITHUB_TOKEN, событий не порождает,
-          # и цепочка «триаж → план» молча обрывается.
+          # Модель здесь только читает и возвращает вердикт: писать в
+          # репозиторий ей нечем и незачем.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Репозиторий: ${{ github.repository }}
             Задача: #${{ github.event.issue.number }}
@@ -112,9 +108,11 @@ jobs:
 
       - name: Применение вердикта
         env:
-          # Токен GitHub App, которым работало действие: метки, поставленные
-          # им, порождают события и двигают цепочку дальше.
-          GH_TOKEN: ${{ steps.verdict.outputs.github_token || secrets.GITHUB_TOKEN }}
+          # AGENT_TOKEN, а не GITHUB_TOKEN. Метка, поставленная штатным
+          # токеном рабочего процесса, не порождает событий: agent-plan не
+          # проснулся бы на `agent/ready`, и цепочка оборвалась бы молча.
+          # Это единственная причина, по которой здесь нужен PAT.
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
           # Вердикт написан моделью. В `run:` он попадает только через
           # переменную окружения: подстановка ${{ }} прямо в текст скрипта
