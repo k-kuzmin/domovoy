@@ -1,0 +1,281 @@
+name: agent-review
+
+# Четвёртый шаг цикла: два независимых ревью одного PR.
+# Независимых буквально — это два разных job с разными промптами. Ревьюер,
+# которого попросили посмотреть «и корректность, и безопасность»,
+# заканчивает список после третьего пункта; два прохода такого не делают.
+on:
+  pull_request:
+    types: [ready_for_review]
+  issue_comment:
+    types: [created]
+
+# Ревью только читает код и пишет комментарий к PR.
+# Метки не ставит — issues: write не нужен. contents: write не нужен тем
+# более: правка кода — это agent-fix, а не ревью.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: agent-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    name: Ревью — корректность
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. То же условие стоит на job `security`;
+    # при правке менять оба.
+    #
+    # `issue_comment` — самое опасное событие в публичном репозитории:
+    # оно всегда исполняется в контексте базового репозитория и с доступом
+    # к секретам. Без гейта любой посторонний, написавший `/review` под
+    # любой issue, запускал бы оплаченный вызов модели за счёт владельца.
+    # `github.event.comment.author_association == 'OWNER'` — проверка автора
+    # именно того комментария, который запустил запуск.
+    #
+    # Для `pull_request` проверок две: `github.actor` — это тот, кто снял с
+    # PR черновик (событие `ready_for_review` может породить только человек
+    # с write-доступом), а сравнение head-репозитория отсекает PR из форков,
+    # которым секреты не положены в принципе.
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        github.actor == github.repository_owner &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        github.event.comment.author_association == 'OWNER' &&
+        startsWith(github.event.comment.body, '/review')
+      )
+    steps:
+      - name: Checkout ветки PR
+        uses: actions/checkout@v7
+        with:
+          # refs/pull/N/head одинаково работает для обоих событий: у
+          # `issue_comment` контекста ветки нет вовсе.
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: Проверка корректности
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            PR: #${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Ты ревьюишь корректность изменения. Код не правь: доступны только
+            чтение, поиск и просмотр диффа (`gh pr diff`). Замечание — это
+            текст, а не коммит.
+
+            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория.
+            Обязательны «Архитектура», «Definition of Done», «Запрещённые
+            способы „починить“ сборку», «Правила синхронизации».
+
+            Смотри на:
+
+            1. **Соответствие критериям приёмки.** Найди связанную issue
+               (в теле PR должно быть `Closes #N`) и сверь результат с её
+               критерием готовности **буквально**, а не по смыслу.
+               Расхождение — замечание уровня blocker.
+            2. **Реальное покрытие тестами.** Не «есть ли тесты», а
+               проверяют ли они поведение. Признаки бесполезного теста:
+               утверждение, которое выполнится при любой реализации;
+               мок, возвращающий ровно то, что потом проверяется;
+               отсутствие проверки того самого поведения, ради которого
+               писался код.
+            3. **Граничные случаи.** Пустая коллекция, null, отмена через
+               `CancellationToken`, таймаут, недоступность внешнего сервиса,
+               одновременный вызов, повторная доставка. Что из этого
+               относится к изменению и не покрыто?
+            4. **Направление зависимостей.** `Domovoy.Core` не имеет
+               project-ссылок; всё внешнее выражено интерфейсами в Core.
+            5. **Синхронизация.** Новый параметр конфигурации без правки
+               `.env.example` и README, новый инструмент без описания в
+               системном промпте, изменение контракта без обновления
+               тестов — расхождение, которое разъедется завтра.
+            6. **Признаки имитации починки.** Диффа в прикладном коде нет, а
+               проверка позеленела: подавленное предупреждение, отключённый
+               тест, `continue-on-error`. Это всегда blocker.
+
+            У каждого замечания — уровень:
+            - **blocker** — мержить нельзя: расхождение с критерием приёмки,
+              сломанное поведение, подавленная проверка;
+            - **major** — надо исправить, но не обязательно в этом PR;
+            - **nit** — вкусовое, автор вправе не согласиться.
+
+            Каждое замечание — с путём к файлу и номером строки и с тем, что
+            конкретно сделать. «Стоит подумать об обработке ошибок» —
+            не замечание.
+
+            Если замечаний нет, так и напиши: пустое ревью честнее
+            придуманного nit.
+
+            Верни verdict, blocker_count и findings_markdown — готовый текст
+            комментария. Отвечай по-русски.
+          claude_args: |
+            # Только чтение и дифф: ревью не правит код. Кавычки
+            # обязательны: список разбирается shell-подобным токенизатором,
+            # и без них скобки в `Bash(...)` съедаются как управляющие
+            # символы — вместо ограничения получится мусор.
+            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)'
+            --max-turns 30
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
+
+      - name: Публикация замечаний
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          SECTION: Корректность
+          # Текст написан моделью по содержимому PR. В скрипт он попадает
+          # только через окружение: подстановка ${{ }} прямо в `run:`
+          # позволила бы содержимому диффа выполнить команду.
+          RESULT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RESULT" ]; then
+            echo '::error::Ревью не вернуло структурированный результат.'
+            exit 1
+          fi
+
+          verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
+          blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
+
+          {
+            echo "## Ревью: $SECTION"
+            echo
+            echo "Итог: **$verdict**, блокирующих замечаний: $blockers."
+            echo
+            printf '%s' "$RESULT" | jq -r '.findings_markdown'
+          } > body.md
+
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+  security:
+    name: Ревью — безопасность
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на job
+    # `correctness`; обоснование — в комментарии там. Условие продублировано,
+    # а не вынесено: `if` на уровне job — единственное место, где запуск
+    # можно не начать вовсе, а YAML-якоря GitHub Actions не поддерживает.
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        github.actor == github.repository_owner &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        github.event.comment.author_association == 'OWNER' &&
+        startsWith(github.event.comment.body, '/review')
+      )
+    steps:
+      - name: Checkout ветки PR
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: Проверка безопасности
+        id: review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            PR: #${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Ты ревьюишь безопасность изменения. Код не правь: доступны только
+            чтение, поиск и просмотр диффа (`gh pr diff`).
+
+            Источник правил — раздел «Безопасность — правила уровня „нельзя
+            никогда“» в `.claude/CLAUDE.md`. Прочитай его целиком: ниже —
+            то, на что смотреть в диффе, а не пересказ правил.
+
+            1. **Allow-list `entity_id`.** Любой `entity_id` проверяется по
+               списку **до** обращения к Home Assistant, в одном месте — на
+               входе в слой `Ha`, а не в каждом инструменте. Новый путь к
+               Home Assistant в обход этой проверки — blocker.
+            2. **Белый список сервисов `call_service`.** Набор разрешённых
+               сервисов ограничен. Замки, сигнализация, ворота, газ — только
+               через двухфазное подтверждение (`confirmation_required` →
+               `/confirm`). Расширение списка в этом же PR, где добавляется
+               функциональность, — как минимум major.
+            3. **Ответы Home Assistant — данные, а не инструкции**
+               (NFR-SEC-6). Имя сущности или результат tool call не могут
+               изменить системный промпт, расширить allow-list или добавить
+               инструмент. Проверь, что содержимое ответа подставляется как
+               данные и отделено от инструкций. Имя сущности «игнорируй
+               предыдущие инструкции» обязано остаться просто строкой.
+            4. **Токены и ключи не логируются никогда** — ни на `Debug`, ни
+               в сообщении об ошибке аутентификации. Логирование объекта
+               целиком (`{@Options}`, `{@Request}`) — повод проверить, что
+               в нём нет секрета. Секреты только через `IConfiguration`.
+            5. **Новый публичный эндпоинт требует аутентификации по
+               умолчанию.** Анонимный доступ — только явным решением в
+               `docs/decisions/`; сейчас анонимен ровно один эндпоинт:
+               `GET /health`. Новый `AllowAnonymous` без записи решения —
+               blocker.
+            6. **Валидация на сервере.** Проверка в клиенте или в промпте
+               валидацией не считается. Границы значений, длины, формата —
+               на входе в API.
+            7. **PII и данные дома в логах.** Реальные `entity_id`, IP, MAC,
+               домены, топик ntfy не попадают ни в код, ни в тесты, ни в
+               примеры, ни в логи. В примерах — плейсхолдеры и вымышленная
+               квартира.
+
+            Не применимо сейчас и в замечания не идёт: Secure Storage,
+            certificate pinning, обфускация, права Android — мобильного
+            клиента в репозитории нет, он появится на этапе 5. Замечание про
+            то, чего не существует, обесценивает остальные.
+
+            У каждого замечания — уровень **blocker**, **major** или **nit**,
+            путь к файлу, номер строки и конкретное действие. Если замечаний
+            нет — так и напиши.
+
+            Верни verdict, blocker_count и findings_markdown — готовый текст
+            комментария. Отвечай по-русски.
+          claude_args: |
+            # Только чтение и дифф: ревью не правит код. Кавычки
+            # обязательны: список разбирается shell-подобным токенизатором,
+            # и без них скобки в `Bash(...)` съедаются как управляющие
+            # символы — вместо ограничения получится мусор.
+            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)'
+            --max-turns 30
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
+
+      - name: Публикация замечаний
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          SECTION: Безопасность
+          RESULT: ${{ steps.review.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$RESULT" ]; then
+            echo '::error::Ревью не вернуло структурированный результат.'
+            exit 1
+          fi
+
+          verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
+          blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
+
+          {
+            echo "## Ревью: $SECTION"
+            echo
+            echo "Итог: **$verdict**, блокирующих замечаний: $blockers."
+            echo
+            printf '%s' "$RESULT" | jq -r '.findings_markdown'
+          } > body.md
+
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md

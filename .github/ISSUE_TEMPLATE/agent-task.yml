@@ -1,0 +1,107 @@
+name: Задача для агента
+description: Работа, которую агент выполняет сам под присмотром владельца
+labels: ['agent']
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Зона
+      description: Куда попадает изменение. Одна зона на задачу.
+      options:
+        - 'api — HTTP-контракт и хост: src/Domovoy.Api'
+        - 'ha — интеграция с Home Assistant: src/Domovoy.Ha'
+        - 'llm — провайдер и промпты: src/Domovoy.Llm'
+        - 'voice — распознавание и синтез: src/Domovoy.Voice'
+        - 'mobile — мобильный клиент, этап 5'
+        - 'infra — сборка, compose, CI, конфигурация'
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Цель
+      description: >-
+        Зачем это нужно. Два-три предложения, без деталей реализации: как
+        сделать — решает агент, что должно получиться — задача.
+    validations:
+      required: true
+
+  - type: input
+    id: requirement
+    attributes:
+      label: Пункт ТЗ
+      description: >-
+        Идентификаторы требований, если задача из ТЗ. Например FR-HA-4,
+        NFR-SEC-6.
+      placeholder: FR-HA-4
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Критерии приёмки
+      description: >-
+        Проверяемые: то, что выполняется командой или видно глазами.
+        «Работает корректно» критерием не является. Агент считает задачу
+        закрытой ровно по этому списку и ничего к нему не добавляет.
+      placeholder: |
+        Готово, когда:
+        - `dotnet test --filter "FullyQualifiedName~EntityAllowList"` зелёный;
+        - сущность вне allow-list не попадает в блок состояний промпта;
+        - `dotnet build` без предупреждений.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Границы
+      description: >-
+        Конкретные пути, которые задача разрешает менять. Всё остальное —
+        вне границ, даже если по дороге бросилось в глаза. Список путей, а
+        не «слой Ha»: границу должно быть видно в диффе.
+      placeholder: |
+        - src/Domovoy.Ha/**
+        - src/Domovoy.Core/Ports/IHomeAssistantClient.cs
+        - tests/Domovoy.Tests/**
+        - config/entities.example.yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Вне объёма
+      description: >-
+        Что смежное сюда не входит и почему. Замеченная попутно проблема —
+        новая issue, а не незапланированная правка в текущем диффе.
+      placeholder: |
+        - Реконнект и экспоненциальная задержка — отдельная задача.
+        - Кеш состояний — этап 3, здесь не начинаем.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: risk
+    attributes:
+      label: Флаги риска
+      description: >-
+        Отметьте всё применимое. Отмеченное меняет режим ревью и требует
+        отдельного разрешения владельца, а не только зелёного CI.
+      options:
+        - label: >-
+            Меняет контракт API — коды ответов, схему запроса, набор событий
+            стрима. Нужна метка `agent/allow-contract`
+        - label: Требует миграции БД
+        - label: >-
+            Затрагивает аутентификацию или allow-list сущностей
+            (FR-HA-4, NFR-SEC-6)
+        - label: Флаги выше проверены, отмечено всё применимое
+          required: true
+
+  - type: markdown
+    attributes:
+      value: >-
+        Задача не берётся в работу, пока владелец не поставит `agent/ready`:
+        сама метка `agent` означает только пригодность, а не разрешение.
+        Порядок и остальные метки — в `docs/pipeline.md`.

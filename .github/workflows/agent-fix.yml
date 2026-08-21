@@ -1,0 +1,395 @@
+name: agent-fix
+
+# Пятый шаг цикла: починка того, что не сошлось. Два входа —
+# упавший быстрый CI на ветке задачи и запрошенные изменения в ревью.
+#
+# Имя отслеживаемого workflow должно совпадать с реальным буква в букву:
+# `workflow_run` с несуществующим именем не ошибка, он просто никогда не
+# срабатывает. Здесь указан `CI (fast)` — имя из `.github/workflows/ci-fast.yml`.
+on:
+  workflow_run:
+    workflows: ['CI (fast)']
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+
+# contents: write — агент пушит починку в ветку задачи.
+# pull-requests: write — метки счётчика попыток и комментарии на PR.
+# actions: read — скачать лог упавшего job.
+#
+# Права ниже относятся к штатному GITHUB_TOKEN. Пуш починки идёт через
+# AGENT_TOKEN: иначе CI на ветке не перезапустится и результат починки
+# останется непроверенным.
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: agent-fix-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+  # Отмена на середине оставляет ветку в полузаписанном состоянии.
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  CI: 'true'
+
+jobs:
+  fix:
+    name: Починка ветки задачи
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ.
+    #
+    # `workflow_run` — второе по опасности событие после `issue_comment`:
+    # оно всегда исполняется в контексте базового репозитория, с секретами
+    # и здесь ещё и с contents: write. Срабатывает оно в том числе на CI,
+    # запущенном PR из форка, — то есть на код, который автор форка
+    # контролирует полностью. Отсюда две проверки:
+    #   * `head_repository.full_name == github.repository` — ветка лежит в
+    #     этом репозитории, а запушить сюда ветку может только тот, у кого
+    #     есть write-доступ. Это и есть основной барьер против постороннего;
+    #   * логин инициатора — второй рубеж. Ветку задачи пушит agent-implement
+    #     через AGENT_TOKEN, то есть от имени владельца токена: отдельного
+    #     логина бота в списке не нужно, и сверять его не с чем.
+    # Префикс `feat/` ограничивает починку ветками агентского цикла: main и
+    # ветки документации чинятся человеком.
+    #
+    # Для `pull_request_review` проверка стоит на авторе самого отзыва:
+    # комментировать PR может кто угодно, а `changes_requested` от
+    # постороннего не должно ничего запускать.
+    if: >-
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        startsWith(github.event.workflow_run.head_branch, 'feat/') &&
+        github.event.workflow_run.triggering_actor.login == github.repository_owner
+      ) ||
+      (
+        github.event_name == 'pull_request_review' &&
+        github.event.review.state == 'changes_requested' &&
+        github.event.review.author_association == 'OWNER' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'feat/')
+      )
+    steps:
+      - name: Checkout ветки задачи
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: PR и номер попытки
+        id: attempt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          PR_HINT: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          pr="$PR_HINT"
+          if [ -z "$pr" ]; then
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+              --state open --json number --jq '.[0].number // empty')
+          fi
+
+          if [ -z "$pr" ]; then
+            echo "::notice::Для ветки $BRANCH нет открытого PR — чинить нечего."
+            {
+              echo 'stop=true'
+              echo 'reason=no-pr'
+              echo 'pr='
+              echo 'attempt=0'
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          labels=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+
+          # Счётчик попыток живёт в метках, а не в состоянии запуска:
+          # запуск одноразовый, метка переживает перезапуск и видна человеку.
+          attempt=1
+          for n in 1 2 3; do
+            if printf '%s\n' "$labels" | grep -qx "fix/$n"; then
+              attempt=$((n + 1))
+            fi
+          done
+
+          stop=false
+          reason=ok
+          if [ "$attempt" -gt 3 ]; then
+            stop=true
+            reason=attempts-exhausted
+          fi
+
+          {
+            echo "pr=$pr"
+            echo "attempt=$attempt"
+            echo "stop=$stop"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Три попытки исчерпаны — дальше человек
+        if: steps.attempt.outputs.reason == 'attempts-exhausted'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.attempt.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Починка остановлена'
+            echo
+            # Кавычки у разделителя обязательны: внутри обратные кавычки
+            # markdown, и без них shell попытается их выполнить.
+            cat <<'TEXT'
+          Три попытки (`fix/1`, `fix/2`, `fix/3`) не дали зелёной проверки.
+          Четвёртая попытка того же агента на том же месте — не починка,
+          а её имитация, поэтому цикл остановлен.
+          TEXT
+            echo
+            echo "Последний запуск: $RUN_URL"
+          } > body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label 'agent/needs-human'
+
+      - name: Лог упавшего job
+        id: log
+        if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if ! gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > raw.log; then
+            echo 'Лог упавшего job недоступен: срок хранения истёк или запуск удалён.' > raw.log
+          fi
+          # Лог сырой, но ограниченный хвостом: причина падения .NET-сборки
+          # всегда в конце, а целиком он не влезет ни в один разумный
+          # контекст.
+          tail -n 3000 raw.log > ci-failure.log
+          wc -l ci-failure.log
+
+      - name: Лог как артефакт
+        if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-failure-log
+          path: ci-failure.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Похоже ли это на флаки-тест
+        id: flaky
+        if: github.event_name == 'workflow_run' && steps.attempt.outputs.stop == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Шаг только читает лог и возвращает вердикт: писать в
+          # репозиторий ему нечем и незачем.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            PR: #${{ steps.attempt.outputs.pr }}
+
+            В файле `ci-failure.log` — сырой лог упавших job быстрого CI.
+            Прочитай его и реши: падение случайное или настоящее.
+
+            Признаки случайного (флаки):
+            - таймаут, отменённый по времени шаг, обрыв сети, 5xx от nuget.org;
+            - падение теста, который зависит от текущего времени, порядка
+              выполнения, свободного порта или гонки потоков;
+            - формулировка, не связанная с изменением в этом PR.
+
+            Признаки настоящего:
+            - ошибка компиляции;
+            - `dotnet format --verify-no-changes` нашёл расхождение стиля;
+            - падение архитектурного теста;
+            - утверждение теста не выполнилось по существу.
+
+            Ничего не правь: доступно только чтение. Сомневаешься — ставь
+            is_flaky=false: лишняя попытка починки дешевле, чем настоящая
+            ошибка, списанная на флаки-тест.
+
+            Отвечай по-русски.
+          claude_args: |
+            # Только чтение: на этом шаге решается «что это», а не «как чинить».
+            --allowedTools 'Read,Glob,Grep'
+            --max-turns 10
+            --json-schema '{"type":"object","properties":{"is_flaky":{"type":"boolean","description":"Падение выглядит случайным"},"confidence":{"type":"number","minimum":0,"maximum":1,"description":"Уверенность в оценке"},"summary":{"type":"string","description":"Одно-два предложения: что именно упало и почему такой вывод"}},"required":["is_flaky","confidence","summary"]}'
+
+      - name: Вердикт по флаки
+        id: verdict
+        if: steps.attempt.outputs.stop == 'false'
+        env:
+          EVENT: ${{ github.event_name }}
+          # Результат написан моделью по содержимому лога и попадает в
+          # скрипт только через окружение: подстановка ${{ }} прямо в `run:`
+          # позволила бы содержимому лога выполнить команду.
+          RESULT: ${{ steps.flaky.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+
+          # На пути `changes_requested` лога нет и шаг оценки не выполнялся.
+          if [ "$EVENT" != 'workflow_run' ] || [ -z "$RESULT" ]; then
+            echo 'flaky=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          is_flaky=$(printf '%s' "$RESULT" | jq -r '.is_flaky')
+          confidence=$(printf '%s' "$RESULT" | jq -r '.confidence')
+
+          # Порог: неуверенная догадка про флаки — повод чинить, а не
+          # повод не чинить. Значение передаётся через -v, а не подстановкой
+          # в текст программы: оно тоже написано моделью. Пустое или null
+          # превращается в 0 и порог не проходит.
+          flaky=false
+          if [ "$is_flaky" = 'true' ] && awk -v c="$confidence" 'BEGIN { exit !(c >= 0.7) }'; then
+            flaky=true
+          fi
+
+          echo "flaky=$flaky" >> "$GITHUB_OUTPUT"
+          echo "Оценка: is_flaky=$is_flaky, confidence=$confidence, решение=$flaky"
+
+      - name: Флаки — код не правим
+        if: steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.attempt.outputs.pr }}
+          RESULT: ${{ steps.flaky.outputs.structured_output }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Падение похоже на флаки-тест'
+            echo
+            printf '%s' "$RESULT" | jq -r '.summary'
+            echo
+            echo "Упавший запуск: $RUN_URL"
+            echo
+            echo 'Код не менялся: править работающий код под случайное падение —'
+            echo 'худший из возможных исходов. Перезапустите проверку; если она'
+            echo 'падает снова, снимите метку agent/flaky — падение настоящее.'
+          } > body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label 'agent/flaky'
+
+      - name: Отметка попытки
+        # Метка ставится ДО починки, а не после: она считает попытки, а не
+        # успехи. Поставленная после, она теряется, если раннер умер посреди
+        # правки, — и счётчик никогда не дойдёт до трёх, а попытки станут
+        # неограниченными и платными. Флаки-путь сюда не доходит: случайное
+        # падение попытку не тратит.
+        if: steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.attempt.outputs.pr }}
+          ATTEMPT: ${{ steps.attempt.outputs.attempt }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label "fix/$ATTEMPT"
+
+      - name: Установка .NET
+        if: steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Восстановление пакетов
+        if: steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
+        run: dotnet restore
+
+      - name: Починка
+        id: repair
+        if: steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # AGENT_TOKEN, а не GITHUB_TOKEN: пуш штатным токеном не
+          # перезапустит CI, и результат починки останется непроверенным —
+          # цикл «упало → починил → проверил» разомкнётся.
+          github_token: ${{ secrets.AGENT_TOKEN }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            PR: #${{ steps.attempt.outputs.pr }}
+            Ветка: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+            Попытка: ${{ steps.attempt.outputs.attempt }} из 3
+            Событие: ${{ github.event_name }}
+
+            Что чинить:
+            - при событии `workflow_run` — падение быстрого CI. Сырой лог
+              упавших job лежит в файле `ci-failure.log` в корне рабочей
+              копии, прочитай его первым делом;
+            - при событии `pull_request_review` — замечания ревьюера.
+              Посмотри их через `gh pr view --comments`.
+
+            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория.
+            Обязательны разделы «Запрещённые способы „починить“ сборку» и
+            «Границы работы агента».
+
+            Порядок:
+
+            1. Найди **причину**, а не проявление. Красное чинится по
+               существу: если тест падает, потому что поведение не
+               реализовано, — реализуй поведение, а не подгоняй утверждение
+               под текущий результат.
+            2. Почини минимальным изменением. Попутный рефакторинг в этом
+               же диффе — не починка, а новая порция риска.
+            3. Прогони локально ровно эти четыре команды, все четыре:
+
+                   dotnet restore
+                   dotnet build --no-restore -c Release
+                   dotnet test --no-build -c Release
+                   dotnet format --verify-no-changes --no-restore
+
+            4. Закоммить (`fix: …`, Conventional Commits, без трейлеров
+               `Co-Authored-By` и подписей инструментов) и запушь в ту же
+               ветку. Новую ветку не создавай.
+
+            Чего делать нельзя:
+
+            - подавлять предупреждения: `#pragma warning disable`, `<NoWarn>`,
+              `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>`;
+            - отключать, удалять и ослаблять тесты и правила анализаторов:
+              `[Ignore]`, `Skip = "…"`, `[ExcludeFromCodeCoverage]`,
+              `--filter`, прячущий падение;
+            - править конфигурацию качества и пайплайн, чтобы проверка
+              позеленела: `Directory.Build.props`, `.editorconfig`,
+              `global.json`, `.github/**`, `scripts/**`,
+              `continue-on-error: true`;
+            - расширять задачу за пределы починки.
+
+            Признак того, что происходит имитация: диффа в прикладном коде
+            нет, а проверка позеленела. Если причина по существу не чинится —
+            остановись и напиши комментарием к PR, что именно не сходится.
+            Остановка с объяснением — нормальный результат.
+
+            Отвечай по-русски.
+          claude_args: |
+            # Правка кода, четыре команды проверки, коммит и пуш в ту же ветку.
+            # `git checkout -b` не выдан: починка не создаёт новых веток.
+            # Кавычки обязательны: список разбирается shell-подобным
+            # токенизатором, и без них скобки в `Bash(...)` съедаются как
+            # управляющие символы — вместо ограничения получится мусор.
+            --allowedTools 'Read,Glob,Grep,Edit,MultiEdit,Write,Bash(dotnet restore:*),Bash(dotnet build:*),Bash(dotnet test:*),Bash(dotnet format:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)'
+            --max-turns 60
+
+      - name: Починка не удалась
+        if: failure() && steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.attempt.outputs.pr }}
+          ATTEMPT: ${{ steps.attempt.outputs.attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Попытка починки $ATTEMPT из 3 завершилась ошибкой"
+            echo
+            echo "Запуск: $RUN_URL"
+          } > body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md

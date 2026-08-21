@@ -1,0 +1,159 @@
+name: agent-triage
+
+# Первый шаг агентского цикла: задача проверяется на пригодность к работе
+# до того, как на неё потрачен хоть один платный вызов модели на реализацию.
+# Триаж ничего не пишет в код — он читает репозиторий и возвращает вердикт.
+on:
+  issues:
+    types: [opened, edited, labeled]
+
+# Минимум: читать код для проверки путей и писать метки с комментарием.
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: agent-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    name: Триаж задачи
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ.
+    #
+    # Репозиторий публичный. Событие `issues` порождает кто угодно: любой
+    # человек может завести issue, и без этой проверки каждая такая issue
+    # оплачивалась бы владельцем репозитория. `author_association == 'OWNER'`
+    # для события `issues` относится к автору самой задачи — то есть к тому,
+    # кто инициировал расход.
+    #
+    # Второе условие различает действие: без него добавление любой метки
+    # (`area/api`, `priority/high`) к уже размеченной задаче запускало бы
+    # триаж заново — тихая утечка бюджета.
+    #
+    # Третье: пройденный триаж не переигрывается. Метку `agent/ready`
+    # снимает человек, если хочет прогнать заново.
+    if: >-
+      github.event.issue.author_association == 'OWNER' &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'agent') ||
+        (github.event.action != 'labeled' &&
+         contains(github.event.issue.labels.*.name, 'agent'))
+      ) &&
+      !contains(github.event.issue.labels.*.name, 'agent/ready')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Вердикт триажа
+        id: verdict
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Модель здесь только читает и возвращает вердикт: писать в
+          # репозиторий ей нечем и незачем.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            Задача: #${{ github.event.issue.number }}
+
+            Ты проводишь триаж задачи перед тем, как её возьмёт агент.
+            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория,
+            а не по памяти. Особенно разделы «Границы работы агента»,
+            «Definition of Done» и «Поведение при неопределённости».
+
+            Ничего не меняй: доступны только чтение и поиск.
+
+            Задача готова к работе, если выполнено всё:
+
+            1. Критерий готовности сформулирован проверяемо — по нему можно
+               однозначно сказать «сделано» или «не сделано». «Улучшить
+               обработку ошибок» — не критерий. «При недоступности Home
+               Assistant `/api/v1/state` отвечает 503 и пишет предупреждение
+               в лог» — критерий.
+            2. Все пути и типы, упомянутые в задаче, существуют в
+               репозитории — проверь каждый. Раскладка: `src/Domovoy.Api`,
+               `src/Domovoy.Core`, `src/Domovoy.Ha`, `src/Domovoy.Llm`,
+               `src/Domovoy.Voice`, `src/Domovoy.Notifications`,
+               `src/Domovoy.Data`, `tests/Domovoy.Tests`.
+            3. Объём реалистичен для одного PR: одно логическое изменение,
+               ориентировочно до 10 изменённых файлов. Задача крупнее —
+               предложи разбиение, это повод вернуть её.
+            4. Флаги риска проставлены. Если работа затрагивает пути из
+               раздела «Границы работы агента» (`.github/**`, `scripts/**`,
+               `Directory.Build.props`, `global.json`, `.editorconfig`,
+               `docs/decisions/**`, `src/Domovoy.Data/Migrations/**` и
+               прочие) — задаче нужна метка `agent/allow-protected`. Если
+               меняется контракт API (`contracts/**`) — `agent/allow-contract`.
+               Метки нет — задача не готова, и это первый вопрос человеку.
+            5. Требование ТЗ, на которое ссылается задача, не противоречит
+               правилам проекта.
+
+            Верни:
+            - ready: true, только если выполнены все пять пунктов;
+            - summary: одно-два предложения, почему такой вердикт;
+            - questions: markdown-текст комментария для задачи. При
+              ready=false — нумерованный список конкретных вопросов, на
+              каждый из которых человек может ответить одной строкой. При
+              ready=true — пустая строка.
+
+            Отвечай по-русски.
+          claude_args: |
+            # Триаж только читает: ни Edit, ни Write, ни Bash.
+            --allowedTools 'Read,Glob,Grep'
+            --max-turns 15
+            --json-schema '{"type":"object","properties":{"ready":{"type":"boolean","description":"Задача готова к работе агента"},"summary":{"type":"string","description":"Обоснование вердикта, одно-два предложения"},"questions":{"type":"string","description":"Markdown с уточняющими вопросами; пустая строка при ready=true"}},"required":["ready","summary","questions"]}'
+
+      - name: Применение вердикта
+        env:
+          # AGENT_TOKEN, а не GITHUB_TOKEN. Метка, поставленная штатным
+          # токеном рабочего процесса, не порождает событий: agent-plan не
+          # проснулся бы на `agent/ready`, и цепочка оборвалась бы молча.
+          # Это единственная причина, по которой здесь нужен PAT.
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          # Вердикт написан моделью. В `run:` он попадает только через
+          # переменную окружения: подстановка ${{ }} прямо в текст скрипта
+          # позволила бы содержимому задачи выполнить команду.
+          VERDICT: ${{ steps.verdict.outputs.structured_output }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$VERDICT" ]; then
+            echo '::error::Триаж не вернул структурированный вердикт.'
+            exit 1
+          fi
+
+          ready=$(printf '%s' "$VERDICT" | jq -r '.ready')
+          printf '%s' "$VERDICT" | jq -r '.summary' > summary.md
+
+          if [ "$ready" = 'true' ]; then
+            gh issue edit "$ISSUE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --add-label 'agent/ready' \
+              --remove-label 'agent/needs-clarification'
+            echo "Триаж пройден: $(cat summary.md)"
+            exit 0
+          fi
+
+          {
+            echo '## Триаж: нужны уточнения'
+            echo
+            cat summary.md
+            echo
+            printf '%s' "$VERDICT" | jq -r '.questions'
+            echo
+            # Кавычки у разделителя обязательны: внутри обратные кавычки
+            # markdown, и без них shell попытается их выполнить.
+            cat <<'FOOTER'
+          Ответьте в комментарии и снимите метку `agent/needs-clarification`.
+          FOOTER
+          } > body.md
+
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh issue edit "$ISSUE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-label 'agent/needs-clarification' \
+            --remove-label 'agent/ready'

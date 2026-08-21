@@ -1,0 +1,202 @@
+name: agent-implement
+
+# Третий шаг цикла: план согласован человеком — можно писать код.
+# Запускается меткой `plan/approved`, и только ею: единственная точка,
+# где апрув человека превращается в изменение репозитория.
+on:
+  issues:
+    types: [labeled]
+
+# Единственный агентский workflow, которому действительно нужен
+# contents: write — он создаёт ветку и пушит в неё.
+# pull-requests: write — черновой PR; issues: write — метки прогресса.
+#
+# Права ниже относятся к штатному GITHUB_TOKEN. Пуш и создание PR идут
+# через AGENT_TOKEN: событие от штатного токена не запускает CI.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: agent-implement-${{ github.event.issue.number }}
+  # Отмена на середине оставляет ветку в полузаписанном состоянии, поэтому
+  # запуск доводится до конца, а повторный ждёт.
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  CI: 'true'
+
+jobs:
+  implement:
+    name: Реализация задачи
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ.
+    #
+    # Репозиторий публичный, и это самый дорогой workflow цикла: он и платит
+    # за модель, и пишет в репозиторий. Проверок две, потому что они закрывают
+    # разное:
+    #   * `github.actor == github.repository_owner` — метку `plan/approved`
+    #     ставит человек, и здесь это именно тот человек, который её поставил.
+    #     Ни один шаг цикла эту метку не ставит автоматически, так что
+    #     проверка актора никакой штатный путь не ломает;
+    #   * `github.event.issue.author_association == 'OWNER'` — задача заведена
+    #     владельцем, а не посторонним.
+    if: >-
+      github.event.label.name == 'plan/approved' &&
+      github.actor == github.repository_owner &&
+      github.event.issue.author_association == 'OWNER'
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # Полная история: ветка задачи ответвляется от main, и агенту
+          # нужен контекст предыдущих изменений.
+          fetch-depth: 0
+
+      - name: Установка .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Восстановление пакетов
+        # Прогрев: агент не должен тратить ход на первую долгую загрузку.
+        run: dotnet restore
+
+      - name: Отметка «в работе»
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-label 'agent/in-progress' \
+            --remove-label 'plan/proposed'
+
+      - name: Реализация
+        id: implement
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # AGENT_TOKEN обязателен именно здесь: пуш и создание PR,
+          # сделанные штатным GITHUB_TOKEN, не порождают событий — CI на
+          # ветке не запустится, а agent-fix, который следит за её
+          # падениями, окажется недостижим.
+          github_token: ${{ secrets.AGENT_TOKEN }}
+          prompt: |
+            Репозиторий: ${{ github.repository }}
+            Задача: #${{ github.event.issue.number }}
+            Базовая ветка: main
+
+            Реализуй задачу по плану, согласованному в комментарии к ней.
+            План — обязательство, а не набросок: расхождение с ним
+            описывается в PR отдельным абзацем.
+
+            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория,
+            а не по памяти. Обязательны к исполнению разделы «Архитектура»,
+            «Границы работы агента», «Запрещённые способы „починить“ сборку»,
+            «Правила синхронизации», «Git», «Definition of Done».
+
+            Порядок работы:
+
+            1. Ветка от main: `feat/${{ github.event.issue.number }}-краткое-описание`,
+               описание — латиницей, через дефис, три-четыре слова.
+            2. **Сначала тесты.** Пиши тест, проверяющий требуемое поведение,
+               убеждайся, что он падает по существу, и только потом пиши код.
+               Тест, который проходит при сломанной реализации, — хуже
+               отсутствующего.
+            3. После каждого осмысленного шага прогоняй локально ровно эти
+               четыре команды, все четыре:
+
+                   dotnet restore
+                   dotnet build --no-restore -c Release
+                   dotnet test --no-build -c Release
+                   dotnet format --verify-no-changes --no-restore
+
+               Красное чинится сразу, до следующего шага. Не копи правки в
+               надежде, что сборка соберётся в конце.
+            4. Коммить по ходу: Conventional Commits, один коммит — одно
+               логическое изменение. В сообщениях коммитов не должно быть
+               трейлеров `Co-Authored-By`, упоминаний генерации и подписей
+               инструментов: это проверяет хук и отдельная работа в CI.
+            5. Обнови то, что перечислено в таблице «Правила синхронизации»:
+               `.env.example`, `appsettings.json`, README, docker-compose,
+               описание инструмента в системном промпте — по тому, что
+               реально изменилось.
+            6. Запушь ветку и открой **черновой** PR (`gh pr create --draft`)
+               с телом, содержащим строку `Closes #${{ github.event.issue.number }}`,
+               краткое описание изменения и список того, что осталось за
+               рамками. Ревью запускает человек, снимая с PR черновик.
+
+            Чего делать нельзя ни при каких обстоятельствах:
+
+            - подавлять предупреждения: `#pragma warning disable`, `<NoWarn>`,
+              `<TreatWarningsAsErrors>false</TreatWarningsAsErrors>`;
+            - отключать, удалять и ослаблять тесты: `[Ignore]`, `Skip = "…"`,
+              `[ExcludeFromCodeCoverage]`, `--filter`, прячущий падение;
+            - править конфигурацию качества и пайплайн: `Directory.Build.props`,
+              `Directory.Packages.props`, `.editorconfig`, `global.json`,
+              `.gitleaks.toml`, `.github/**`, `.githooks/**`, `scripts/**`;
+            - выходить за рамки задачи: замеченная попутно проблема — новая
+              issue, а не правка в этом диффе;
+            - добавлять зависимости: любая новая библиотека требует
+              обоснования в issue до установки.
+
+            Если задача требует правки защищённого пути, а метки
+            `agent/allow-protected` на ней нет (для контракта API —
+            `agent/allow-contract`), не правь его. Гейт целостности
+            `scripts/guard.sh` всё равно завернёт такой PR. Сделай остальное
+            и напиши в PR, что именно осталось и какой метки не хватает.
+
+            Если задача не сходится по существу — остановись и напиши об этом
+            в PR или в комментарии к задаче. Остановка с объяснением —
+            нормальный результат. Зелёная сборка, добытая подавлением, — нет.
+
+            Отвечай по-русски.
+          claude_args: |
+            # Правка кода и ровно те команды, что нужны для цикла
+            # «тест — код — проверка — коммит». `dotnet ef` не выдан
+            # намеренно: миграции лежат в защищённых путях.
+            # Кавычки обязательны: список разбирается shell-подобным
+            # токенизатором, и без них скобки в `Bash(...)` съедаются как
+            # управляющие символы — вместо ограничения получится мусор.
+            --allowedTools 'Read,Glob,Grep,Edit,MultiEdit,Write,Bash(dotnet restore:*),Bash(dotnet build:*),Bash(dotnet test:*),Bash(dotnet format:*),Bash(git checkout:*),Bash(git switch:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh issue view:*),Bash(gh pr create:*),Bash(gh pr view:*)'
+            --max-turns 80
+
+      - name: Снятие отметки «в работе»
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --remove-label 'agent/in-progress'
+
+      - name: Остановка с объяснением
+        # Реализация не доехала — задача возвращается человеку, а не висит
+        # с меткой «в работе», по которой не видно, что работа встала.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Реализация остановлена'
+            echo
+            echo "Запуск agent-implement завершился ошибкой: $RUN_URL"
+            echo
+            echo 'Дальше нужен человек. Метка agent/in-progress снята.'
+          } > body.md
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh issue edit "$ISSUE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-label 'agent/needs-human' \
+            --remove-label 'agent/in-progress'
