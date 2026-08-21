@@ -1,0 +1,209 @@
+name: CI (fast)
+
+# Дешёвые проверки: именно на этих логах итерируется агент, поэтому цена
+# одной итерации задаётся временем этой работы. Всё, что измеряется
+# минутами — сборка образа, CodeQL — вынесено в ci-heavy.yml.
+#
+# Ориентир постановки — под 5 минут. Полный прогон build, test и format
+# по всему решению занимает 19 секунд локально, так что запас здесь не в
+# оптимизации, а в том, чтобы ничего медленного сюда не добавлять.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Предыдущий запуск на той же ветке отменяется: агент пушит правки
+# подряд, и очередь из устаревших прогонов только задерживает вердикт.
+concurrency:
+  group: ci-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  # Язык вывода зафиксирован: проверка уязвимых пакетов ищет в выводе
+  # английскую строку, и при другой локали grep молча не нашёл бы её —
+  # проверка стала бы всегда зелёной.
+  DOTNET_CLI_UI_LANGUAGE: 'en'
+  CI: 'true'
+  # Нижняя граница покрытия по строкам. Это защита от обвала, а не цель:
+  # целевые 70% записаны в .claude/CLAUDE.md и пересматриваются после
+  # этапа 2. Сейчас значительная часть периферии — заглушки, каждая
+  # считается непокрытой строкой.
+  COVERAGE_MINIMUM: '50'
+
+jobs:
+  build-test:
+    name: Сборка, стиль, тесты
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # Версии пакетов централизованы в Directory.Packages.props, а
+      # .csproj содержат только имена: ключ по обоим, иначе добавление
+      # пакета в проект не сбросит кэш.
+      - name: Кэш пакетов NuGet
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Восстановление пакетов
+        run: dotnet restore
+
+      - name: Проверка стиля
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Сборка
+        # Предупреждение — это ошибка, которую пока не заметили:
+        # TreatWarningsAsErrors включён в Directory.Build.props. Флаг
+        # продублирован здесь, чтобы правка props не сняла проверку молча.
+        run: dotnet build --configuration Release --no-restore -warnaserror
+
+      - name: Тесты и покрытие
+        run: >-
+          dotnet test --configuration Release --no-build
+          --logger "trx;LogFileName=tests.trx"
+          --results-directory TestResults
+          --collect:"XPlat Code Coverage"
+
+      - name: Порог покрытия
+        # Порог считается здесь, а не флагом сборщика XPlat Code
+        # Coverage: тот принимает Threshold в параметрах и молча его
+        # игнорирует — прогон с заведомо недостижимым порогом всё равно
+        # даёт нулевой код возврата. Гейт, который не может стать
+        # красным, вреднее отсутствующего.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import os
+          import re
+          import sys
+
+          # Ровно один уровень вложенности, без recursive: сборщик кладёт
+          # отчёт дважды — как вложение в TestResults/<guid>/ и как
+          # промежуточную копию в TestResults/<прогон>/In/<машина>/.
+          # Рекурсивный обход находит обе, и оба числа удваиваются.
+          reports = glob.glob('TestResults/*/coverage.cobertura.xml')
+          if not reports:
+              sys.exit(
+                  '::error::Отчёты о покрытии не найдены в TestResults/*/. '
+                  'Либо тесты запускались без --collect, либо сборщик сменил раскладку — '
+                  'разобраться, а не расширять шаблон поиска.')
+
+          # Читается только корневой элемент <coverage ...>: нужны два его
+          # числовых атрибута. Полноценный разбор XML здесь не нужен, а
+          # парсер стандартной библиотеки без defusedxml — лишняя
+          # поверхность там, где хватает поиска по строке.
+          attribute = re.compile(r'(lines-covered|lines-valid)="(\d+)"')
+
+          covered = valid = 0
+          for report in reports:
+              with open(report, encoding='utf-8') as handle:
+                  header = handle.read(4096)
+              start = header.index('<coverage')
+              root = header[start:header.index('>', start)]
+              found = dict(attribute.findall(root))
+              covered += int(found['lines-covered'])
+              valid += int(found['lines-valid'])
+
+          if valid == 0:
+              sys.exit('::error::В отчётах о покрытии нет ни одной строки — отчёт пустой.')
+
+          minimum = float(os.environ['COVERAGE_MINIMUM'])
+          actual = 100.0 * covered / valid
+          print(f'Покрытие по строкам: {actual:.1f}% ({covered} из {valid}), нижняя граница {minimum:.0f}%')
+
+          if actual < minimum:
+              sys.exit(
+                  f'::error::Покрытие {actual:.1f}% ниже границы {minimum:.0f}%. '
+                  'Границу не двигать — дописать тесты.')
+          PY
+
+      - name: Результаты тестов как артефакт
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: TestResults/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  guard:
+    name: Гейт целостности
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Гейт сравнивает ветку с базовой: нужна история, а не срез.
+          fetch-depth: 0
+
+      - name: Проверка
+        env:
+          # Метки снимают запрет на защищённые пути, контракт и
+          # деструктивную миграцию. Ставит их человек — в этом и смысл.
+          GUARD_ALLOW_PROTECTED: >-
+            ${{ contains(github.event.pull_request.labels.*.name, 'agent/allow-protected') }}
+          GUARD_ALLOW_CONTRACT: >-
+            ${{ contains(github.event.pull_request.labels.*.name, 'agent/allow-contract') }}
+          GUARD_ALLOW_DESTRUCTIVE_MIGRATION: >-
+            ${{ contains(github.event.pull_request.labels.*.name, 'agent/allow-destructive-migration') }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_REF"
+          bash scripts/guard.sh "origin/$BASE_REF"
+
+  security:
+    name: Уязвимые пакеты
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Кэш пакетов NuGet
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Известные уязвимости в пакетах
+        # NuGetAudit в Directory.Build.props показывает то же самое как
+        # предупреждения и сборку намеренно не роняет: уязвимость в
+        # транзитивном пакете появляется в день, когда код никто не
+        # трогал. Здесь она обязана быть видимой отдельным красным
+        # чеком, а не строкой в логе успешной сборки.
+        run: |
+          set -euo pipefail
+          dotnet restore
+          report="$(dotnet list package --vulnerable --include-transitive)"
+          echo "$report"
+          if echo "$report" | grep -qi 'has the following vulnerable'; then
+            echo '::error::Найдены пакеты с известными уязвимостями. Обновить версию в Directory.Packages.props.'
+            exit 1
+          fi
+          echo 'Пакетов с известными уязвимостями нет.'

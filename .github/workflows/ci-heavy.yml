@@ -1,0 +1,216 @@
+name: CI (heavy)
+
+# Дорогие проверки: сборка образа с подъёмом стека и CodeQL. Обе
+# измеряются минутами, поэтому в цикл итераций агента не попадают — он
+# итерируется по логам ci-fast.yml.
+#
+# В постановке эту роль играли сборки MAUI под Android и iOS. Мобильного
+# клиента ещё нет (этап 5, issue #38), а дорогая проверка здесь уже
+# есть — сборка Docker-образа. Когда появится Domovoy.Mobile.App, работы
+# под платформы добавляются в этот файл, а не создают третий.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-heavy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+  # Язык вывода зафиксирован: проверка уязвимых пакетов ищет в выводе
+  # английскую строку, и при другой локали grep молча не нашёл бы её —
+  # проверка стала бы всегда зелёной.
+  DOTNET_CLI_UI_LANGUAGE: 'en'
+  CI: 'true'
+
+jobs:
+  gate:
+    name: Нужен ли тяжёлый прогон
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Решение
+        # Черновик тяжёлых проверок не получает: агент открывает PR
+        # черновиком и правит его несколько раз подряд, и каждая правка
+        # стоила бы сборки образа. Проверки приходят, когда PR выведен
+        # из черновика, — то есть когда автор считает работу готовой.
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != 'pull_request' ] || [ "$DRAFT" = 'false' ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+            echo 'Тяжёлые проверки запускаются.'
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+            echo 'PR — черновик, тяжёлые проверки пропускаются до ready_for_review.'
+          fi
+
+  compose:
+    name: Стек поднимается на примерах конфигурации
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Конфигурация из примеров, без правок
+        # Ровно то, что делает человек на чистой машине (ТЗ 5.1.3).
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          cp config/entities.example.yaml         config/entities.yaml
+          cp config/home-profile.example.md       config/home-profile.md
+          cp config/proactive-rules.example.yaml  config/proactive-rules.yaml
+          cp config/response-templates.example.yaml config/response-templates.yaml
+
+      - name: Подъём стека
+        run: docker compose up --detach --build --wait --wait-timeout 300
+
+      - name: Анонимный /health отвечает без секретов
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error http://localhost:8080/health)"
+          echo "ответ: $body"
+          echo "$body" | grep -qE '"status":"(healthy|degraded)"'
+
+      - name: Эндпоинты API требуют аутентификации
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            http://localhost:8080/api/v1/state)"
+          test "$code" = "401" || { echo "ожидался 401, получено $code"; exit 1; }
+
+      - name: В логах старта нет секретов
+        run: |
+          set -euo pipefail
+          docker compose logs api > api.log
+          # Ищем значения, а не имена: DeviceToken и SourceContext в
+          # логах законны, значение токена или пароля — нет.
+          if grep -nE '(Bearer [A-Za-z0-9._-]{20,}|eyJ[A-Za-z0-9_-]{20,}\.|Password=[^;$ ]{4,})' api.log; then
+            echo '::error::В логах старта обнаружено похожее на секрет значение.'
+            exit 1
+          fi
+          echo 'Секретов в логах старта нет.'
+
+      - name: Значения секретов не попадают в логи
+        run: |
+          set -euo pipefail
+          # На пустых секретах эта проверка не может провалиться, поэтому
+          # значения сначала заполняются. Слово «sample» в них нужно, чтобы
+          # правила gitleaks не считали сам workflow утечкой.
+          sed -i 's|^HA_TOKEN=.*|HA_TOKEN=sampleHaTokenValue7f3a2b|'        .env
+          sed -i 's|^LLM_API_KEY=.*|LLM_API_KEY=sampleLlmApiKeyValue4c8d1e|' .env
+          sed -i 's|^NTFY_TOPIC=.*|NTFY_TOPIC=sampleNtfyTopicValue|'         .env
+
+          docker compose up --detach --no-deps --force-recreate api
+
+          # Ждём, пока приложение отработает старт и первую проверку
+          # компонентов. Состояние будет «недоступно» — Home Assistant и
+          # провайдер LLM в стеке отсутствуют, и это нормально: проверяется
+          # не доступность, а то, что значения не утекли в лог.
+          for _ in $(seq 40); do
+            if curl --silent --output /dev/null http://localhost:8080/health; then break; fi
+            sleep 1
+          done
+
+          docker compose logs api --no-color > secret-probe.log
+          for value in sampleHaTokenValue7f3a2b sampleLlmApiKeyValue4c8d1e sampleNtfyTopicValue; do
+            if grep --fixed-strings "$value" secret-probe.log; then
+              echo "::error::Значение секрета попало в лог."
+              exit 1
+            fi
+          done
+          echo 'Значений секретов в логах нет.'
+
+      - name: Логи как артефакт
+        if: always()
+        run: docker compose logs --no-color > compose-logs.txt || true
+
+      - name: Выгрузка логов
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Останов стека
+        if: always()
+        run: docker compose down --volumes
+
+  codeql:
+    name: Статический анализ CodeQL
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Инициализация CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: csharp
+          build-mode: manual
+
+      - name: Сборка для анализа
+        # --no-incremental: CodeQL наблюдает за компиляцией и пропустит
+        # проекты, которые сборщик счёл неизменившимися.
+        run: dotnet build --configuration Release --no-incremental
+
+      - name: Анализ
+        uses: github/codeql-action/analyze@v4
+
+  heavy-ok:
+    # Единственная работа этого файла с постоянным именем и постоянным
+    # запуском. Её и надо ставить в required status checks: работы выше
+    # условные, а пропущенная required-проверка держит PR незакрытым
+    # навсегда.
+    name: Тяжёлые проверки пройдены
+    needs: [gate, compose, codeql]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Итог
+        env:
+          COMPOSE: ${{ needs.compose.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          GATE: ${{ needs.gate.result }}
+        run: |
+          set -euo pipefail
+          echo "gate=$GATE compose=$COMPOSE codeql=$CODEQL"
+          if [ "$GATE" != 'success' ]; then
+            echo '::error::Работа gate не выполнена — состояние тяжёлых проверок неизвестно.'
+            exit 1
+          fi
+          for result in "$COMPOSE" "$CODEQL"; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo '::error::Тяжёлая проверка не пройдена.'; exit 1 ;;
+            esac
+          done
+          echo 'Тяжёлые проверки пройдены или пропущены по условию.'

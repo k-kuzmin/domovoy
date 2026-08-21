@@ -1,7 +1,8 @@
 # Домовой
 
 [![gitleaks](https://github.com/k-kuzmin/domovoy/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/k-kuzmin/domovoy/actions/workflows/gitleaks.yml)
-[![build](https://github.com/k-kuzmin/domovoy/actions/workflows/build.yml/badge.svg)](https://github.com/k-kuzmin/domovoy/actions/workflows/build.yml)
+[![CI (fast)](https://github.com/k-kuzmin/domovoy/actions/workflows/ci-fast.yml/badge.svg)](https://github.com/k-kuzmin/domovoy/actions/workflows/ci-fast.yml)
+[![CI (heavy)](https://github.com/k-kuzmin/domovoy/actions/workflows/ci-heavy.yml/badge.svg)](https://github.com/k-kuzmin/domovoy/actions/workflows/ci-heavy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Персональный AI-агент для умного дома. Управление устройствами и ответы на
