@@ -28,6 +28,7 @@ public static class CoreServiceCollectionExtensions
         services.AddValidatedOptions<VoiceOptions>(configuration, VoiceOptions.SectionName);
         services.AddValidatedOptions<ProactivityOptions>(configuration, ProactivityOptions.SectionName);
         services.AddValidatedOptions<HomeProfileOptions>(configuration, HomeProfileOptions.SectionName);
+        services.AddValidatedOptions<ResponseTemplateOptions>(configuration, ResponseTemplateOptions.SectionName);
 
         return services;
     }

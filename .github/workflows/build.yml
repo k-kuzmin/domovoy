@@ -69,6 +69,7 @@ jobs:
           cp config/entities.example.yaml         config/entities.yaml
           cp config/home-profile.example.md       config/home-profile.md
           cp config/proactive-rules.example.yaml  config/proactive-rules.yaml
+          cp config/response-templates.example.yaml config/response-templates.yaml
 
       - name: Подъём стека
         run: docker compose up --detach --build --wait --wait-timeout 300

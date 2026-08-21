@@ -132,6 +132,7 @@ cp .env.example .env
 cp config/entities.example.yaml       config/entities.yaml
 cp config/home-profile.example.md     config/home-profile.md
 cp config/proactive-rules.example.yaml config/proactive-rules.yaml
+cp config/response-templates.example.yaml config/response-templates.yaml
 
 docker compose up -d --build
 curl -s http://localhost:8080/health
@@ -258,6 +259,16 @@ push и PR, на случай коммита в обход хуков. Поми�
 Приложение делается пятым, а не первым: промпт и набор инструментов будут
 переписываться ежедневно первые недели — на сервере это `git push`, в
 приложении пересборка и переустановка.
+
+## Решения
+
+Решения, расходящиеся с ТЗ или не выводимые из него, записаны в
+[`docs/decisions/`](docs/decisions/README.md). Причина простая: через
+месяц по коду не отличить принятое решение от недосмотра.
+
+Наиболее заметные: в репозитории только плейсхолдеры вместо реальных
+хостов, `/health` разделён на анонимный и защищённый, валидация
+конфигурации на старте проверяет форму, а не наличие секретов.
 
 ## Лицензия
 

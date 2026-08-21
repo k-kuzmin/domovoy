@@ -83,6 +83,7 @@ services:
       Proactivity__RulesPath: config/proactive-rules.yaml
 
       HomeProfile__Path: config/home-profile.md
+      ResponseTemplates__Path: config/response-templates.yaml
     ports:
       - '${API_HTTP_PORT:-8080}:8080'
     volumes:
