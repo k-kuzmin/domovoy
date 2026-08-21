@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Описание сущности из allow-list (FR-HA-4, FR-HA-5). Сущность, не

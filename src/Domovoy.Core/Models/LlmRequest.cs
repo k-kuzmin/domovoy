@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Запрос к провайдеру LLM.</summary>
 public sealed record LlmRequest

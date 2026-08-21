@@ -1,4 +1,4 @@
-﻿using Domovoy.Api.Logging;
+using Domovoy.Api.Logging;
 using FluentAssertions;
 using Serilog;
 using Serilog.Core;

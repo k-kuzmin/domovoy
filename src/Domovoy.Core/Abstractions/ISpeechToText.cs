@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Abstractions;
+namespace Domovoy.Core.Abstractions;
 
 /// <summary>
 /// Распознавание речи. Одна реализация на все клиенты: STT живёт на

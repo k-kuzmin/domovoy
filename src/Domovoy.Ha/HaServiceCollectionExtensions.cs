@@ -1,4 +1,4 @@
-﻿using Domovoy.Core.Abstractions;
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;

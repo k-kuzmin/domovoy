@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Результат вызова инструмента.</summary>
 public sealed record ToolResult

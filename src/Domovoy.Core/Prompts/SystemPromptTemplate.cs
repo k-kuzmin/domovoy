@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Prompts;
+namespace Domovoy.Core.Prompts;
 
 /// <summary>
 /// Скелет системного промпта (раздел 9 ТЗ).

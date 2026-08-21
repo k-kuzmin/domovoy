@@ -1,4 +1,4 @@
-﻿using Domovoy.Core.Abstractions;
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Models;
 using Domovoy.Core.Prompts;
 using FluentAssertions;

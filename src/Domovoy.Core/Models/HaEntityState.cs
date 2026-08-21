@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Текущее состояние сущности.</summary>
 public sealed record HaEntityState

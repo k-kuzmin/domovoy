@@ -1,4 +1,4 @@
-﻿using Domovoy.Core.Abstractions;
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;
 using Microsoft.EntityFrameworkCore;

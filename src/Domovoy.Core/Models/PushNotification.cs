@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Приоритет уведомления. Маппится на приоритеты ntfy (FR-PUSH-2):

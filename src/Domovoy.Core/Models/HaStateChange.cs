@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Событие <c>state_changed</c> из потока Home Assistant (FR-HA-3).</summary>
 public sealed record HaStateChange

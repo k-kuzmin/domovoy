@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Источник запроса. Пишется в аудит-лог (FR-CORE-6).</summary>
 public enum AgentRequestSource

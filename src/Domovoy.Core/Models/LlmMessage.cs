@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Роль сообщения в запросе к модели.</summary>
 public enum LlmRole

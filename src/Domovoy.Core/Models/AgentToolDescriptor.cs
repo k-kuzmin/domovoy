@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Описание инструмента: то, что попадает в схему для LLM и в системный

@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;

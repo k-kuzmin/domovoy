@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Факт долговременной памяти (FR-MEM-3). Хранение key-value,

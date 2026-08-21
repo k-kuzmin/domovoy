@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Путь, которым обработан запрос. Разделение нужно для метрик: целевые

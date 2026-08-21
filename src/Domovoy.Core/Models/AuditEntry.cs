@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Запись аудит-лога изменяющего действия (FR-CORE-6). Ретенция не

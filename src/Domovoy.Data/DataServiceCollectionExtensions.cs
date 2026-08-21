@@ -1,4 +1,4 @@
-﻿using Domovoy.Core.Abstractions;
+using Domovoy.Core.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

@@ -1,4 +1,4 @@
-﻿using Domovoy.Api.Endpoints;
+using Domovoy.Api.Endpoints;
 using Domovoy.Api.Health;
 using Domovoy.Api.Logging;
 using Domovoy.Api.Security;

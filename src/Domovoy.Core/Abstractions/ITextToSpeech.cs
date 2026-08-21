@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Abstractions;
+namespace Domovoy.Core.Abstractions;
 
 /// <summary>Синтез речи. Опционально (FR-VOICE-4).</summary>
 public interface ITextToSpeech

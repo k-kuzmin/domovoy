@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>
 /// Событие потока ответа (FR-CORE-8). Клиент отображает каждое по мере

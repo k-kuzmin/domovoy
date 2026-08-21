@@ -1,4 +1,4 @@
-﻿using Domovoy.Core.Models;
+using Domovoy.Core.Models;
 
 namespace Domovoy.Core.Abstractions;
 

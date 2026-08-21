@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Abstractions;
+namespace Domovoy.Core.Abstractions;
 
 /// <summary>
 /// Профиль дома: статическое описание — комнаты, устройства, кто живёт,

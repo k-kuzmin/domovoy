@@ -1,4 +1,4 @@
-﻿namespace Domovoy.Core.Models;
+namespace Domovoy.Core.Models;
 
 /// <summary>Роль автора сообщения в диалоге.</summary>
 public enum MessageRole
