@@ -60,20 +60,30 @@ jobs:
     # Для `pull_request_review` проверка стоит на авторе самого отзыва:
     # комментировать PR может кто угодно, а `changes_requested` от
     # постороннего не должно ничего запускать.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе: отсутствие секрета его не
+    # останавливает — процесс стартовал бы и упал на шаге вызова модели,
+    # засоряя историю красными прогонами. Включение цикла — установка
+    # `vars.AGENT_LOOP_ENABLED = true` плюс два секрета, и ничего больше.
     if: >-
+      vars.AGENT_LOOP_ENABLED == 'true' &&
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'failure' &&
-        github.event.workflow_run.head_repository.full_name == github.repository &&
-        startsWith(github.event.workflow_run.head_branch, 'feat/') &&
-        github.event.workflow_run.triggering_actor.login == github.repository_owner
-      ) ||
-      (
-        github.event_name == 'pull_request_review' &&
-        github.event.review.state == 'changes_requested' &&
-        github.event.review.author_association == 'OWNER' &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        startsWith(github.event.pull_request.head.ref, 'feat/')
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'failure' &&
+          github.event.workflow_run.head_repository.full_name == github.repository &&
+          startsWith(github.event.workflow_run.head_branch, 'feat/') &&
+          github.event.workflow_run.triggering_actor.login == github.repository_owner
+        ) ||
+        (
+          github.event_name == 'pull_request_review' &&
+          github.event.review.state == 'changes_requested' &&
+          github.event.review.author_association == 'OWNER' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          startsWith(github.event.pull_request.head.ref, 'feat/')
+        )
       )
     steps:
       - name: Checkout ветки задачи

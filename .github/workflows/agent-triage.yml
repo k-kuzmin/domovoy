@@ -35,14 +35,24 @@ jobs:
     #
     # Третье: пройденный триаж не переигрывается. Метку `agent/ready`
     # снимает человек, если хочет прогнать заново.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе: отсутствие секрета его не
+    # останавливает — процесс стартовал бы и упал на шаге вызова модели,
+    # засоряя историю красными прогонами. Включение цикла — установка
+    # `vars.AGENT_LOOP_ENABLED = true` плюс два секрета, и ничего больше.
     if: >-
-      github.event.issue.author_association == 'OWNER' &&
+      vars.AGENT_LOOP_ENABLED == 'true' &&
       (
-        (github.event.action == 'labeled' && github.event.label.name == 'agent') ||
-        (github.event.action != 'labeled' &&
-         contains(github.event.issue.labels.*.name, 'agent'))
-      ) &&
-      !contains(github.event.issue.labels.*.name, 'agent/ready')
+        github.event.issue.author_association == 'OWNER' &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'agent') ||
+          (github.event.action != 'labeled' &&
+           contains(github.event.issue.labels.*.name, 'agent'))
+        ) &&
+        !contains(github.event.issue.labels.*.name, 'agent/ready')
+      )
     steps:
       - name: Checkout
         uses: actions/checkout@v7
