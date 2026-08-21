@@ -63,6 +63,14 @@
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
     <NuGetAuditLevel>low</NuGetAuditLevel>
+
+    <!--
+      Предупреждения аудита остаются видимыми, но сборку не ломают:
+      уязвимость в транзитивном пакете появляется в день, когда код
+      никто не трогал, и «красная» сборка на ровном месте приучает
+      игнорировать её вместо того, чтобы читать.
+    -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 
   <!--

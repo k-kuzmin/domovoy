@@ -100,6 +100,36 @@ jobs:
           fi
           echo 'Секретов в логах старта нет.'
 
+      - name: Значения секретов не попадают в логи
+        run: |
+          set -euo pipefail
+          # На пустых секретах эта проверка не может провалиться, поэтому
+          # значения сначала заполняются. Слово «sample» в них нужно, чтобы
+          # правила gitleaks не считали сам workflow утечкой.
+          sed -i 's|^HA_TOKEN=.*|HA_TOKEN=sampleHaTokenValue7f3a2b|'        .env
+          sed -i 's|^LLM_API_KEY=.*|LLM_API_KEY=sampleLlmApiKeyValue4c8d1e|' .env
+          sed -i 's|^NTFY_TOPIC=.*|NTFY_TOPIC=sampleNtfyTopicValue|'         .env
+
+          docker compose up --detach --no-deps --force-recreate api
+
+          # Ждём, пока приложение отработает старт и первую проверку
+          # компонентов. Состояние будет «недоступно» — Home Assistant и
+          # провайдер LLM в стеке отсутствуют, и это нормально: проверяется
+          # не доступность, а то, что значения не утекли в лог.
+          for _ in $(seq 40); do
+            if curl --silent --output /dev/null http://localhost:8080/health; then break; fi
+            sleep 1
+          done
+
+          docker compose logs api --no-color > secret-probe.log
+          for value in sampleHaTokenValue7f3a2b sampleLlmApiKeyValue4c8d1e sampleNtfyTopicValue; do
+            if grep --fixed-strings "$value" secret-probe.log; then
+              echo "::error::Значение секрета попало в лог."
+              exit 1
+            fi
+          done
+          echo 'Значений секретов в логах нет.'
+
       - name: Логи как артефакт
         if: always()
         run: docker compose logs --no-color > compose-logs.txt || true

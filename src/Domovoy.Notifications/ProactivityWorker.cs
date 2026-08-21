@@ -48,16 +48,30 @@ internal sealed class ProactivityWorker : BackgroundService
             return;
         }
 
-        await foreach (HaStateChange change in _events.SubscribeAsync(stoppingToken).ConfigureAwait(false))
+        try
         {
-            PushNotification? notification = await _rules
-                .EvaluateAsync(change, stoppingToken)
-                .ConfigureAwait(false);
-
-            if (notification is not null)
+            await foreach (HaStateChange change in _events.SubscribeAsync(stoppingToken).ConfigureAwait(false))
             {
-                await _push.SendAsync(notification, stoppingToken).ConfigureAwait(false);
+                PushNotification? notification = await _rules
+                    .EvaluateAsync(change, stoppingToken)
+                    .ConfigureAwait(false);
+
+                if (notification is not null)
+                {
+                    await _push.SendAsync(notification, stoppingToken).ConfigureAwait(false);
+                }
             }
+        }
+        catch (NotImplementedException)
+        {
+            // Незаполненная реализация не имеет права уронить хост.
+            // Поведение BackgroundService по умолчанию — остановить
+            // приложение; вместе с restart: unless-stopped это даёт
+            // цикл перезапусков, в котором /health не поднимается
+            // никогда, а причину видно только в логах контейнера.
+            _logger.LogError(
+                "Проактивные уведомления включены, но поток событий Home Assistant появится на этапе 3. "
+                + "Фоновый сервис остановлен, остальная система работает.");
         }
     }
 }
