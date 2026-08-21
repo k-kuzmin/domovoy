@@ -147,7 +147,7 @@ keywords = [".local", ".lan", ".home", ".internal"]
   description = "Служебные имена файлов и настроек, не относящиеся к домашней сети"
   regexTarget = "match"
   regexes = [
-    '''(?i)^(?:appsettings|settings|properties|package|user|assembly|resources?|launchsettings)\.local$''',
+    '''(?i)^(?:appsettings|settings|properties|package|user|assembly|resources?|launchsettings|env|npmrc|terraform)\.local$''',
     '''(?i)^example\.(?:local|lan|home|internal)$''',
   ]
 
@@ -190,6 +190,7 @@ paths = [
   '''(?:^|/)\.gitleaks\.toml$''',
   '''(?:^|/)\.gitleaksignore$''',
   '''(?:^|/)\.gitignore$''',
+  '''(?:^|/)\.dockerignore$''',
   '''(?:^|/)\.githooks/''',
 ]
 

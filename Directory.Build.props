@@ -30,6 +30,18 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
 
+    <!--
+      IDE0005 (лишние using) работает при сборке только если включён
+      файл документации — известное ограничение Roslyn. Без него сборка
+      падает с ошибкой EnableGenerateDocumentationFile.
+
+      CS1591 при этом отключён: XML-документация нужна нам как побочный
+      эффект для анализатора, а не как публикуемая справка, и требовать
+      комментарий у каждого публичного члена смысла нет.
+    -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
     <!-- Воспроизводимая сборка -->
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>

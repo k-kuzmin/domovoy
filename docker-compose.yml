@@ -1,0 +1,102 @@
+# ============================================================
+# Домовой — базовый стек
+#
+# Поднимается на .env.example без правок (ТЗ 5.1.3):
+#
+#   cp .env.example .env
+#   docker compose up -d --build
+#   curl -s http://localhost:8080/health
+#
+# Здесь только Backend и база — состав этапа 0. Home Assistant,
+# faster-whisper и ntfy добавляются своими этапами: их образы в этом
+# файле сейчас означали бы «docker compose up тянет несколько гигабайт
+# и не работает без реального Home Assistant».
+#
+# Локальные переопределения — docker-compose.override.yml, он закрыт
+# .gitignore. Пример: docker-compose.override.example.yml.
+# ============================================================
+
+name: ${COMPOSE_PROJECT_NAME:-domovoy}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    # Автозапуск после перезагрузки машины обязателен (AR-5).
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Ускоряет инициализацию и делает сравнение строк предсказуемым
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Наружу порт не публикуется: к базе обращается только Backend.
+    # Для отладки открывать через docker-compose.override.yml.
+    expose:
+      - '5432'
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Domovoy.Api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      ASPNETCORE_HTTP_PORTS: '8080'
+
+      # Двойное подчёркивание — разделитель уровней в конфигурации .NET.
+      # Код читает IConfiguration и не знает, откуда пришло значение.
+      ConnectionStrings__Domovoy: >-
+        Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+
+      Ha__BaseUrl: ${HA_BASE_URL}
+      Ha__Token: ${HA_TOKEN}
+      Ha__EntityRegistryPath: config/entities.yaml
+
+      Llm__BaseUrl: ${LLM_BASE_URL}
+      Llm__ApiKey: ${LLM_API_KEY}
+      Llm__Model: ${LLM_MODEL}
+      Llm__Dialect: ${LLM_DIALECT}
+      Llm__Proxy: ${LLM_PROXY}
+      Llm__MonthlyTokenBudget: ${LLM_MONTHLY_TOKEN_BUDGET}
+
+      Ntfy__BaseUrl: ${NTFY_BASE_URL}
+      Ntfy__Topic: ${NTFY_TOPIC}
+
+      Voice__SpeechToTextUrl: ${VOICE_STT_URL}
+      Voice__TextToSpeechUrl: ${VOICE_TTS_URL}
+      Voice__Language: ${VOICE_LANGUAGE}
+
+      Proactivity__Enabled: ${PROACTIVITY_ENABLED}
+      Proactivity__RulesPath: config/proactive-rules.yaml
+
+      HomeProfile__Path: config/home-profile.md
+    ports:
+      - '${API_HTTP_PORT:-8080}:8080'
+    volumes:
+      # Реестр сущностей и профиль дома — только на чтение: содержимое
+      # приватнее токенов, менять его изнутри контейнера незачем.
+      - ./config:/app/config:ro
+    healthcheck:
+      # Анонимный /health: healthcheck контейнера не имеет токена
+      # устройства и получить его не может.
+      test: ['CMD', 'curl', '--fail', '--silent', 'http://localhost:8080/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres-data:

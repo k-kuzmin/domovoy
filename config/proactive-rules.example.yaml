@@ -1,0 +1,77 @@
+# ============================================================
+# Правила проактивности — пример (FR-PRO-2, FR-PRO-3)
+#
+# Решение об отправке принимает правило, не модель. Модель привлекается
+# только для формулировки текста (FR-PRO-4): это защищает от ложных
+# срабатываний и лишних токенов.
+#
+# Критичные для безопасности реакции — протечка перекрывает воду,
+# задымление включает сирену — реализуются на стороне Home Assistant, а
+# не здесь (AR-6). Они обязаны срабатывать при остановленном Backend и
+# без интернета. Правила ниже отвечают только за доставку уведомления.
+#
+# Реальный файл — config/proactive-rules.yaml, закрыт .gitignore:
+# привязки к конкретным сущностям раскрывают расположение датчиков.
+# ============================================================
+
+defaults:
+  # Антиспам-окно по умолчанию (FR-PRO-5)
+  cooldown_minutes: 30
+  quiet_hours:
+    from: '23:00'
+    to: '08:00'
+    # Приоритет urgent обходит тихие часы и режим «не беспокоить»
+    minimum_priority_to_bypass: urgent
+
+rules:
+  - id: leak_detected
+    description: Протечка воды
+    when:
+      entity: binary_sensor.example_kitchen_leak
+      changes_to: 'on'
+    priority: urgent
+    template: 'Протечка: {{ entity_name }}. Вода перекрыта автоматикой дома.'
+    cooldown_minutes: 0
+
+  - id: smoke_detected
+    description: Задымление
+    when:
+      domain: binary_sensor
+      device_class: smoke
+      changes_to: 'on'
+    priority: urgent
+    template: 'Задымление: {{ entity_name }}.'
+    cooldown_minutes: 0
+
+  - id: window_open_when_away
+    description: Окно или дверь открыты при уходе всех из дома
+    when:
+      domain: binary_sensor
+      device_class: [window, door]
+      state: 'on'
+      and:
+        - everyone_away: true
+          for_minutes: 5
+    priority: high
+    template: 'Ушли, а {{ entity_name }} осталось открытым.'
+    cooldown_minutes: 60
+
+  - id: sensor_silent
+    description: Датчик не отвечает более шести часов
+    when:
+      domain: sensor
+      unavailable_for_hours: 6
+    priority: default
+    template: '{{ entity_name }} не отвечает уже {{ hours }} ч.'
+    cooldown_minutes: 360
+
+  - id: battery_low
+    description: Низкий заряд батарейки датчика
+    when:
+      domain: sensor
+      device_class: battery
+      below: 15
+    priority: low
+    template: 'Батарейка в {{ entity_name }} на {{ value }} %.'
+    # Не чаще раза в сутки
+    cooldown_minutes: 1440

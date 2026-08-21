@@ -1,0 +1,96 @@
+# ============================================================
+# Реестр сущностей — пример (FR-HA-4, FR-HA-5)
+#
+# Allow-list: сущность, не попавшая в этот файл, невидима для модели и
+# не может быть изменена. Пустой список запрещает всё, а не разрешает.
+#
+# Квартира ниже вымышлена целиком. Реальный файл — config/entities.yaml,
+# он закрыт .gitignore: вместе с профилем дома реестр даёт планировку и
+# расположение датчиков, это приватнее токенов (ТЗ 5.1.3).
+#
+# entity_id в реальном файле не должны содержать имён людей.
+# ============================================================
+
+areas:
+  - id: kitchen
+    name: Кухня
+    # Падежи нужны шаблонам ответов: «включаю свет на кухне»
+    cases:
+      prepositional: на кухне
+      genitive: кухни
+
+  - id: living_room
+    name: Гостиная
+    cases:
+      prepositional: в гостиной
+      genitive: гостиной
+
+  - id: bedroom
+    name: Спальня
+    cases:
+      prepositional: в спальне
+      genitive: спальни
+
+entities:
+  - entity_id: light.example_kitchen_ceiling
+    name: Свет на кухне
+    area: kitchen
+    domain: light
+    actions: [turn_on, turn_off, toggle, set_brightness]
+
+  - entity_id: light.example_living_room_ceiling
+    name: Свет в гостиной
+    area: living_room
+    domain: light
+    actions: [turn_on, turn_off, toggle, set_brightness]
+
+  - entity_id: switch.example_living_room_tv
+    name: Телевизор
+    area: living_room
+    domain: switch
+    actions: [turn_on, turn_off]
+
+  - entity_id: sensor.example_bedroom_temperature
+    name: Температура в спальне
+    area: bedroom
+    domain: sensor
+    # Датчик только читается
+    actions: [read]
+
+  - entity_id: sensor.example_bedroom_humidity
+    name: Влажность в спальне
+    area: bedroom
+    domain: sensor
+    actions: [read]
+
+  - entity_id: binary_sensor.example_kitchen_window
+    name: Окно на кухне
+    area: kitchen
+    domain: binary_sensor
+    actions: [read]
+
+  - entity_id: binary_sensor.example_kitchen_leak
+    name: Датчик протечки на кухне
+    area: kitchen
+    domain: binary_sensor
+    actions: [read]
+
+  - entity_id: climate.example_bedroom_ac
+    name: Кондиционер в спальне
+    area: bedroom
+    domain: climate
+    actions: [turn_on, turn_off, set_temperature]
+
+  # Замки, ворота, сигнализация и газ требуют подтверждения вторым
+  # сообщением независимо от формулировки запроса (раздел 4.3 ТЗ).
+  - entity_id: lock.example_front_door
+    name: Входная дверь
+    area: living_room
+    domain: lock
+    actions: [lock, unlock]
+    requires_confirmation: true
+
+scripts:
+  - script_id: script.example_good_night
+    name: Спокойной ночи
+    description: Гасит свет, закрывает шторы, включает ночной режим кондиционера
