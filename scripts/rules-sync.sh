@@ -240,21 +240,25 @@ check_own_rules 'определение' "${agents[@]}"
 # правил не перечисляется, а выводится: файл правил, к чьему имени не
 # сходится ни один шаг, общий по построению.
 # ------------------------------------------------------------------
+# Правила, у которых есть свой шаг, собираются один раз проходом по
+# потребителям: обратный порядок — по правилу на каждого потребителя —
+# стоил бы вдвое больше подпроцессов на том же результате.
+owned_rules=''
+for consumer in "${prompts[@]}" "${agents[@]}"; do
+    while IFS= read -r rule; do
+        [ -n "$rule" ] && owned_rules="$owned_rules$rule"$'\n'
+    done < <(rules_of_step "$(step_of "$consumer")")
+done
+
 general=()
 for rule in "${rules[@]}"; do
     base="$(basename "$rule" .md)"
     [ "$base" = 'README' ] && continue
 
-    owned=0
-    for consumer in "${prompts[@]}" "${agents[@]}"; do
-        step="$(step_of "$consumer")"
-        if rules_of_step "$step" | grep -qF "$rule"; then
-            owned=1
-            break
-        fi
-    done
-
-    [ "$owned" -eq 0 ] && general+=("$rule")
+    case "$owned_rules" in
+        *"$rule"$'\n'*) ;;
+        *) general+=("$rule") ;;
+    esac
 done
 
 for rule in "${general[@]}"; do
