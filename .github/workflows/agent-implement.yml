@@ -115,6 +115,9 @@ jobs:
             работы агента», «Запрещённые способы „починить“ сборку», «Правила
             синхронизации», «Git», «Журнал задачи», «Definition of Done».
 
+            Вывод сборки и тестов бывает длинным. Как читать его отбором, а не
+            целиком, — `docs/rules/reading.md`.
+
             Имя ветки: `feat/${{ github.event.issue.number }}-краткое-описание`.
             Журнал задачи: `docs/tasks/${{ github.event.issue.number }}.md`.
             Строка в теле PR: `Closes #${{ github.event.issue.number }}`.
