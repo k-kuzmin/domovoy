@@ -75,7 +75,9 @@ expect_status() {
 }
 
 expect_output() {
-    if ! printf '%s' "$OUTPUT" | grep -qF "$1"; then
+    # Ключ -- обязателен: искомое может начинаться с дефиса (`--no-verify`),
+    # и без него grep примет его за свой собственный ключ.
+    if ! printf '%s' "$OUTPUT" | grep -qF -- "$1"; then
         fail_case "в выводе нет: $1"
     fi
 }
@@ -432,6 +434,113 @@ rm -rf "$repo/.claude/agents"
 run_check
 expect_status 2
 expect_output 'Не найдено ни одного .claude/agents/step-*.md'
+end_case
+
+
+# ------------------------------------------------------------------
+# Сценарий 18. Определению выдан Bash, а граница команд не подключена.
+#
+# Так выглядит убранный при правке блок hooks: субагент получает оболочку
+# целиком, ссылки на правила на месте, и до этой проверки всё зеленело.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash выдан, граница команд не подключена'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'граница команд не подключена'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 19. Хук подключён, но матчер не про оболочку — опечатка,
+# после которой хук не срабатывает ни на одном вызове Bash.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена без матчера Bash'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Edit
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'без матчера Bash'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 20. Хук подключён, список разрешённого пуст. Хук и сам такое
+# отвергнет, но узнать об этом на сверке дешевле, чем на первом вызове
+# шага, который встанет целиком.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена без списка команд'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'без списка разрешённых команд'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 21. Обратная сторона: Bash выдан, граница подключена как
+# положено — сверка молчит. Без этого сценария проверка 3б могла бы
+# краснеть на правильном определении, и её начали бы обходить.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash с подключённой границей — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
 end_case
 
 
