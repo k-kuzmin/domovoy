@@ -544,6 +544,83 @@ expect_output 'сходятся'
 end_case
 
 
+# ------------------------------------------------------------------
+# Сценарий 22. Событие подменено: PostToolUse вместо PreToolUse.
+#
+# Путь границы на месте, матчер на месте, список на месте — и граница
+# при этом выключена: PostToolUse срабатывает после исполнения и
+# отказать уже не может. Проверка, которая смотрит только на путь,
+# такое пропускает.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена не к PreToolUse'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PostToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'хука PreToolUse нет'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 23. Поля tools нет вовсе. Тогда субагент наследует все
+# инструменты, включая Bash, — и молчаливый пропуск такого определения
+# снимает с него требование границы.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: определение без поля tools'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+description: Триаж
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'нет поля tools'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 24. Списочная форма tools: Bash в ней тот же Bash.
+# Признак, смотревший только на однострочную запись, пропускал такое
+# определение целиком.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash списком в tools — требование то же'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools:
+  - Read
+  - Bash
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'граница команд не подключена'
+end_case
+
+
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
 
