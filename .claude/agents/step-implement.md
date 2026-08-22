@@ -12,8 +12,8 @@ hooks:
             'dotnet restore' 'dotnet build' 'dotnet test' 'dotnet format'
             'git checkout' 'git switch' 'git status' 'git diff' 'git log'
             'git add' 'git commit' 'git push'
-            'gh issue view' 'gh pr create' 'gh pr view'
-            'grep' 'head' 'tail' 'sed -n'
+            'gh issue view' 'gh pr create' 'gh pr view' 'gh pr edit'
+            'grep' 'head' 'tail' 'bash scripts/'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.

@@ -13,7 +13,7 @@ hooks:
             'git status' 'git diff' 'git log' 'git add' 'git commit' 'git push'
             'gh pr view' 'gh pr diff' 'gh pr checks' 'gh pr comment'
             'gh run view'
-            'grep' 'head' 'tail' 'sed -n'
+            'grep' 'head' 'tail' 'bash scripts/'
 ---
 
 Ты чинишь красную проверку или замечания ревью на открытом PR.
