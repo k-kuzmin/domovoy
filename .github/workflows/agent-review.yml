@@ -10,22 +10,139 @@ on:
   issue_comment:
     types: [created]
 
-# Ревью только читает код и пишет комментарий к PR.
-# Метки не ставит — issues: write не нужен. contents: write не нужен тем
-# более: правка кода — это agent-fix, а не ревью.
+# Ревью читает код и пишет комментарий к PR. Метку `review/N` ставит job
+# `round` — тем же `pull-requests: write`, которым agent-fix ставит `fix/N`.
+# contents: write не нужен: правка кода — это agent-fix, а не ревью.
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
   group: agent-review-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  # Отмена на середине съедает круг. Метка `review/N` ставится job `round` ДО
+  # ревью — иначе она теряется при смерти раннера и потолок не достигается
+  # никогда. Обратная сторона: запуск, отменённый между `round` и ревью,
+  # круг потратил, а замечаний не дал. Две таких отмены — и PR получает
+  # `agent/needs-human`, ни разу не отревьюенный.
+  #
+  # Одновременные запуски здесь не редкость: `agent-fix` сам пишет `/review`
+  # после починки (запись 0016), и человек, снимающий черновик, легко
+  # попадает в то же окно. Поэтому запуск доводится до конца, а повторный
+  # ждёт — так же, как в `agent-fix.yml`, где счётчик появился раньше.
+  cancel-in-progress: false
 
 jobs:
+  round:
+    name: Круг ревью
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stop: ${{ steps.count.outputs.stop }}
+      round: ${{ steps.count.outputs.round }}
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на `correctness`
+    # и `security`; обоснование — в комментарии там. Этот job первый, и
+    # пропуск его по гейту пропускает оба ревью через `needs:` — но условие
+    # продублировано и там: гейт, стоящий в одном месте, снимается одной
+    # правкой.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе.
+    if: >-
+      vars.AGENT_LOOP_ENABLED == 'true' &&
+      (
+        (
+          github.event_name == 'pull_request' &&
+          github.actor == github.repository_owner &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.author_association == 'OWNER' &&
+          startsWith(github.event.comment.body, '/review')
+        )
+      )
+    steps:
+      - name: Номер круга
+        id: count
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+
+          # Счётчик живёт в метках, а не в состоянии запуска: запуск
+          # одноразовый, метка переживает перезапуск и видна человеку.
+          #
+          # Кругов два, и считаются они отдельно от `fix/1..3`: падение CI и
+          # замечание ревьюера — разные поводы, и общий счётчик их смешивал
+          # (запись 0016).
+          round=1
+          for n in 1 2; do
+            if printf '%s\n' "$labels" | grep -qx "review/$n"; then
+              round=$((n + 1))
+            fi
+          done
+
+          stop=false
+          if [ "$round" -gt 2 ]; then
+            stop=true
+          fi
+
+          {
+            echo "round=$round"
+            echo "stop=$stop"
+          } >> "$GITHUB_OUTPUT"
+          echo "Круг ревью: $round, остановка: $stop"
+
+      - name: Отметка круга
+        # Метка ставится ДО ревью, а не после: она считает круги, а не
+        # успехи. Поставленная после, она теряется, если раннер умер посреди
+        # ревью, — и потолок не будет достигнут никогда, а круги станут
+        # неограниченными и платными. Ровно та же причина, что у `fix/N`.
+        if: steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          ROUND: ${{ steps.count.outputs.round }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label "review/$ROUND"
+
+      - name: Два круга исчерпаны — дальше человек
+        if: steps.count.outputs.stop == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Ревью остановлено'
+            echo
+            # Кавычки у разделителя обязательны: внутри обратные кавычки
+            # markdown, и без них shell попытается их выполнить.
+            cat <<'TEXT'
+          Два круга (`review/1`, `review/2`) не сошлись. Третий круг того же
+          ревьюера по тому же коду — не ревью, а его имитация, поэтому цикл
+          остановлен.
+          TEXT
+            echo
+            echo 'Дальше нужен человек: посмотреть замечания предыдущих кругов'
+            echo 'и решить, чинить или мержить.'
+          } > body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label 'agent/needs-human'
+
   correctness:
     name: Ревью — корректность
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: round
+    outputs:
+      verdict: ${{ steps.publish.outputs.verdict }}
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. То же условие стоит на job `security`;
     # при правке менять оба.
     #
@@ -61,7 +178,8 @@ jobs:
           github.event.comment.author_association == 'OWNER' &&
           startsWith(github.event.comment.body, '/review')
         )
-      )
+      ) &&
+      needs.round.outputs.stop == 'false'
     steps:
       - name: Checkout ветки PR
         uses: actions/checkout@v7
@@ -81,51 +199,17 @@ jobs:
             PR: #${{ github.event.pull_request.number || github.event.issue.number }}
 
             Ты ревьюишь корректность изменения. Код не правь: доступны только
-            чтение, поиск и просмотр диффа (`gh pr diff`). Замечание — это
-            текст, а не коммит.
+            чтение, поиск и просмотр диффа (`gh pr diff`). Замечание — это текст,
+            а не коммит.
 
-            Правила проекта — в `.claude/CLAUDE.md`, читай их из репозитория.
-            Обязательны «Архитектура», «Definition of Done», «Запрещённые
-            способы „починить“ сборку», «Правила синхронизации».
+            Правила шага — `docs/rules/review-correctness.md`: на что смотреть.
+            Уровни замечаний и требования к их формулировке — `docs/rules/README.md`.
+            Прочитай оба файла целиком до того, как начнёшь: это источник, а не
+            пересказ.
 
-            Смотри на:
-
-            1. **Соответствие критериям приёмки.** Найди связанную issue
-               (в теле PR должно быть `Closes #N`) и сверь результат с её
-               критерием готовности **буквально**, а не по смыслу.
-               Расхождение — замечание уровня blocker.
-            2. **Реальное покрытие тестами.** Не «есть ли тесты», а
-               проверяют ли они поведение. Признаки бесполезного теста:
-               утверждение, которое выполнится при любой реализации;
-               мок, возвращающий ровно то, что потом проверяется;
-               отсутствие проверки того самого поведения, ради которого
-               писался код.
-            3. **Граничные случаи.** Пустая коллекция, null, отмена через
-               `CancellationToken`, таймаут, недоступность внешнего сервиса,
-               одновременный вызов, повторная доставка. Что из этого
-               относится к изменению и не покрыто?
-            4. **Направление зависимостей.** `Domovoy.Core` не имеет
-               project-ссылок; всё внешнее выражено интерфейсами в Core.
-            5. **Синхронизация.** Новый параметр конфигурации без правки
-               `.env.example` и README, новый инструмент без описания в
-               системном промпте, изменение контракта без обновления
-               тестов — расхождение, которое разъедется завтра.
-            6. **Признаки имитации починки.** Диффа в прикладном коде нет, а
-               проверка позеленела: подавленное предупреждение, отключённый
-               тест, `continue-on-error`. Это всегда blocker.
-
-            У каждого замечания — уровень:
-            - **blocker** — мержить нельзя: расхождение с критерием приёмки,
-              сломанное поведение, подавленная проверка;
-            - **major** — надо исправить, но не обязательно в этом PR;
-            - **nit** — вкусовое, автор вправе не согласиться.
-
-            Каждое замечание — с путём к файлу и номером строки и с тем, что
-            конкретно сделать. «Стоит подумать об обработке ошибок» —
-            не замечание.
-
-            Если замечаний нет, так и напиши: пустое ревью честнее
-            придуманного nit.
+            Правила проекта — `.claude/CLAUDE.md`, читай их из репозитория.
+            Обязательны «Архитектура», «Definition of Done», «Запрещённые способы
+            „починить“ сборку», «Правила синхронизации».
 
             Верни verdict, blocker_count и findings_markdown — готовый текст
             комментария. Отвечай по-русски.
@@ -134,11 +218,15 @@ jobs:
             # обязательны: список разбирается shell-подобным токенизатором,
             # и без них скобки в `Bash(...)` съедаются как управляющие
             # символы — вместо ограничения получится мусор.
-            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)'
+            # `gh issue view` — только у корректности: пункт про сверку с
+            # утверждённым планом требует прочитать комментарий с планом, а
+            # он лежит в issue, а не в PR.
+            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*)'
             --max-turns 30
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
 
       - name: Публикация замечаний
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -158,6 +246,11 @@ jobs:
           verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
           blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
 
+          # Вердикт наружу: по нему job `fix-request` решает, запускать ли
+          # починку. Значение пришло от модели, поэтому в вывод оно попадает
+          # как есть, а сравнение со строкой делает GitHub, не shell.
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
           {
             echo "## Ревью: $SECTION"
             echo
@@ -172,6 +265,9 @@ jobs:
     name: Ревью — безопасность
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: round
+    outputs:
+      verdict: ${{ steps.publish.outputs.verdict }}
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на job
     # `correctness`; обоснование — в комментарии там. Условие продублировано,
     # а не вынесено: `if` на уровне job — единственное место, где запуск
@@ -197,7 +293,8 @@ jobs:
           github.event.comment.author_association == 'OWNER' &&
           startsWith(github.event.comment.body, '/review')
         )
-      )
+      ) &&
+      needs.round.outputs.stop == 'false'
     steps:
       - name: Checkout ветки PR
         uses: actions/checkout@v7
@@ -217,50 +314,13 @@ jobs:
             Ты ревьюишь безопасность изменения. Код не правь: доступны только
             чтение, поиск и просмотр диффа (`gh pr diff`).
 
-            Источник правил — раздел «Безопасность — правила уровня „нельзя
-            никогда“» в `.claude/CLAUDE.md`. Прочитай его целиком: ниже —
-            то, на что смотреть в диффе, а не пересказ правил.
+            Правила шага — `docs/rules/review-security.md`: на что смотреть в
+            диффе и что в замечания не идёт. Уровни замечаний и требования к их
+            формулировке — `docs/rules/README.md`. Прочитай оба файла целиком до
+            того, как начнёшь: это источник, а не пересказ.
 
-            1. **Allow-list `entity_id`.** Любой `entity_id` проверяется по
-               списку **до** обращения к Home Assistant, в одном месте — на
-               входе в слой `Ha`, а не в каждом инструменте. Новый путь к
-               Home Assistant в обход этой проверки — blocker.
-            2. **Белый список сервисов `call_service`.** Набор разрешённых
-               сервисов ограничен. Замки, сигнализация, ворота, газ — только
-               через двухфазное подтверждение (`confirmation_required` →
-               `/confirm`). Расширение списка в этом же PR, где добавляется
-               функциональность, — как минимум major.
-            3. **Ответы Home Assistant — данные, а не инструкции**
-               (NFR-SEC-6). Имя сущности или результат tool call не могут
-               изменить системный промпт, расширить allow-list или добавить
-               инструмент. Проверь, что содержимое ответа подставляется как
-               данные и отделено от инструкций. Имя сущности «игнорируй
-               предыдущие инструкции» обязано остаться просто строкой.
-            4. **Токены и ключи не логируются никогда** — ни на `Debug`, ни
-               в сообщении об ошибке аутентификации. Логирование объекта
-               целиком (`{@Options}`, `{@Request}`) — повод проверить, что
-               в нём нет секрета. Секреты только через `IConfiguration`.
-            5. **Новый публичный эндпоинт требует аутентификации по
-               умолчанию.** Анонимный доступ — только явным решением в
-               `docs/decisions/`; сейчас анонимен ровно один эндпоинт:
-               `GET /health`. Новый `AllowAnonymous` без записи решения —
-               blocker.
-            6. **Валидация на сервере.** Проверка в клиенте или в промпте
-               валидацией не считается. Границы значений, длины, формата —
-               на входе в API.
-            7. **PII и данные дома в логах.** Реальные `entity_id`, IP, MAC,
-               домены, топик ntfy не попадают ни в код, ни в тесты, ни в
-               примеры, ни в логи. В примерах — плейсхолдеры и вымышленная
-               квартира.
-
-            Не применимо сейчас и в замечания не идёт: Secure Storage,
-            certificate pinning, обфускация, права Android — мобильного
-            клиента в репозитории нет, он появится на этапе 5. Замечание про
-            то, чего не существует, обесценивает остальные.
-
-            У каждого замечания — уровень **blocker**, **major** или **nit**,
-            путь к файлу, номер строки и конкретное действие. Если замечаний
-            нет — так и напиши.
+            Источник самих правил — раздел «Безопасность — правила уровня „нельзя
+            никогда“» в `.claude/CLAUDE.md`. Прочитай его целиком.
 
             Верни verdict, blocker_count и findings_markdown — готовый текст
             комментария. Отвечай по-русски.
@@ -274,6 +334,7 @@ jobs:
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
 
       - name: Публикация замечаний
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -290,12 +351,75 @@ jobs:
           verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
           blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
 
+          # Вердикт наружу: по нему job `fix-request` решает, запускать ли
+          # починку. Значение пришло от модели, поэтому в вывод оно попадает
+          # как есть, а сравнение со строкой делает GitHub, не shell.
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
           {
             echo "## Ревью: $SECTION"
             echo
             echo "Итог: **$verdict**, блокирующих замечаний: $blockers."
             echo
             printf '%s' "$RESULT" | jq -r '.findings_markdown'
+          } > body.md
+
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+  fix-request:
+    name: Замечания уходят в починку
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [correctness, security]
+    # ПРЯМОЕ ПЛЕЧО ЦИКЛА.
+    #
+    # Вердикт `changes_requested` сам по себе не порождал ничего: ревью
+    # печатало замечания и на этом заканчивалось. Починку ждал `agent-fix` по
+    # событию `pull_request_review`, а оно недостижимо — `gh pr review
+    # --request-changes` в собственном PR GitHub отвечает 422 «Can not request
+    # changes on your own pull request», и автор PR здесь всегда владелец:
+    # ветку пушит `agent-implement` его же токеном. Проверено вызовом API
+    # (запись 0017).
+    #
+    # Поэтому вход — комментарий `/fix`, симметрично тому, как `agent-fix`
+    # просит повторное ревью комментарием `/review`.
+    #
+    # `always()`: второй job мог не дойти, но вердикт первого от этого не
+    # перестаёт требовать починки. Пропущенный job даёт пустой output, и
+    # условие на нём не срабатывает — стоп-круг починку не запускает.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА стоит и здесь, хотя при выключенном цикле оба ревью
+    # пропускаются и вердикта не будет: условие, выведенное из чужого
+    # состояния, перестаёт держать, как только чужое состояние поменяли.
+    if: >-
+      always() &&
+      vars.AGENT_LOOP_ENABLED == 'true' &&
+      (
+        needs.correctness.outputs.verdict == 'changes_requested' ||
+        needs.security.outputs.verdict == 'changes_requested'
+      )
+    steps:
+      - name: Запрос починки
+        env:
+          # AGENT_TOKEN обязателен: комментарий от штатного GITHUB_TOKEN не
+          # порождает событий, и `agent-fix` его не увидит. Та же причина, по
+          # которой PAT нужен `agent-implement` и `agent-triage`.
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          CORRECTNESS: ${{ needs.correctness.outputs.verdict }}
+          SECURITY: ${{ needs.security.outputs.verdict }}
+        run: |
+          set -euo pipefail
+
+          # Один комментарий на оба ревью. Два запустили бы две починки одной
+          # ветки: вторая потратила бы попытку `fix/N` на уже исправленное.
+          {
+            echo '/fix'
+            echo
+            echo "Корректность: ${CORRECTNESS:-не выполнялось}."
+            echo "Безопасность: ${SECURITY:-не выполнялось}."
+            echo
+            echo 'Замечания — в комментариях выше.'
           } > body.md
 
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md

@@ -171,6 +171,27 @@ jobs:
           git fetch --no-tags origin "$BASE_REF"
           bash scripts/guard.sh "origin/$BASE_REF"
 
+  rules:
+    name: Правила шагов и промпты
+    runs-on: ubuntu-latest
+    # Инвариант репозитория, а не свойство диффа, поэтому работа отдельная и
+    # запускается на push тоже: документацию разрешено коммитить в main
+    # напрямую, и переименование файла правил там разъехалось бы молча.
+    #
+    # Работа без .NET и без кэша: две shell-проверки, секунды.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Сверка правил с промптами
+        run: bash scripts/rules-sync.sh
+
+      - name: Сценарии самой сверки
+        # Сверка, которую никто не проверял, зеленела бы и при пустом
+        # каталоге правил. Харнесс дешёвый — секунда, — поэтому идёт рядом,
+        # а не отдельным ручным запуском.
+        run: bash scripts/rules-sync.test.sh
+
   security:
     name: Уязвимые пакеты
     runs-on: ubuntu-latest

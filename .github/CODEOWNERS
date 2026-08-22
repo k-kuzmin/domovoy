@@ -37,6 +37,7 @@
 
 # --- Правила проекта и принятые решения ---
 /.claude/CLAUDE.md            @k-kuzmin
+/docs/rules/                  @k-kuzmin
 /docs/decisions/              @k-kuzmin
 
 # --- Поиск секретов ---
