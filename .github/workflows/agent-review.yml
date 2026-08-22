@@ -100,7 +100,10 @@ jobs:
             # обязательны: список разбирается shell-подобным токенизатором,
             # и без них скобки в `Bash(...)` съедаются как управляющие
             # символы — вместо ограничения получится мусор.
-            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*)'
+            # `gh issue view` — только у корректности: пункт про сверку с
+            # утверждённым планом требует прочитать комментарий с планом, а
+            # он лежит в issue, а не в PR.
+            --allowedTools 'Read,Glob,Grep,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh issue view:*)'
             --max-turns 30
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
 
