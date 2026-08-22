@@ -141,6 +141,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: round
+    outputs:
+      verdict: ${{ steps.publish.outputs.verdict }}
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. То же условие стоит на job `security`;
     # при правке менять оба.
     #
@@ -224,6 +226,7 @@ jobs:
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
 
       - name: Публикация замечаний
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -243,6 +246,11 @@ jobs:
           verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
           blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
 
+          # Вердикт наружу: по нему job `fix-request` решает, запускать ли
+          # починку. Значение пришло от модели, поэтому в вывод оно попадает
+          # как есть, а сравнение со строкой делает GitHub, не shell.
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
           {
             echo "## Ревью: $SECTION"
             echo
@@ -258,6 +266,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: round
+    outputs:
+      verdict: ${{ steps.publish.outputs.verdict }}
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на job
     # `correctness`; обоснование — в комментарии там. Условие продублировано,
     # а не вынесено: `if` на уровне job — единственное место, где запуск
@@ -324,6 +334,7 @@ jobs:
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"],"description":"Итог ревью"},"blocker_count":{"type":"integer","minimum":0,"description":"Число замечаний уровня blocker"},"findings_markdown":{"type":"string","description":"Готовый markdown со списком замечаний"}},"required":["verdict","blocker_count","findings_markdown"]}'
 
       - name: Публикация замечаний
+        id: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
@@ -340,12 +351,70 @@ jobs:
           verdict=$(printf '%s' "$RESULT" | jq -r '.verdict')
           blockers=$(printf '%s' "$RESULT" | jq -r '.blocker_count')
 
+          # Вердикт наружу: по нему job `fix-request` решает, запускать ли
+          # починку. Значение пришло от модели, поэтому в вывод оно попадает
+          # как есть, а сравнение со строкой делает GitHub, не shell.
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
           {
             echo "## Ревью: $SECTION"
             echo
             echo "Итог: **$verdict**, блокирующих замечаний: $blockers."
             echo
             printf '%s' "$RESULT" | jq -r '.findings_markdown'
+          } > body.md
+
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+  fix-request:
+    name: Замечания уходят в починку
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [correctness, security]
+    # ПРЯМОЕ ПЛЕЧО ЦИКЛА.
+    #
+    # Вердикт `changes_requested` сам по себе не порождал ничего: ревью
+    # печатало замечания и на этом заканчивалось. Починку ждал `agent-fix` по
+    # событию `pull_request_review`, а оно недостижимо — `gh pr review
+    # --request-changes` в собственном PR GitHub отвечает 422 «Can not request
+    # changes on your own pull request», и автор PR здесь всегда владелец:
+    # ветку пушит `agent-implement` его же токеном. Проверено вызовом API
+    # (запись 0017).
+    #
+    # Поэтому вход — комментарий `/fix`, симметрично тому, как `agent-fix`
+    # просит повторное ревью комментарием `/review`.
+    #
+    # `always()`: второй job мог не дойти, но вердикт первого от этого не
+    # перестаёт требовать починки. Пропущенный job даёт пустой output, и
+    # условие на нём не срабатывает — стоп-круг починку не запускает.
+    if: >-
+      always() &&
+      (
+        needs.correctness.outputs.verdict == 'changes_requested' ||
+        needs.security.outputs.verdict == 'changes_requested'
+      )
+    steps:
+      - name: Запрос починки
+        env:
+          # AGENT_TOKEN обязателен: комментарий от штатного GITHUB_TOKEN не
+          # порождает событий, и `agent-fix` его не увидит. Та же причина, по
+          # которой PAT нужен `agent-implement` и `agent-triage`.
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          CORRECTNESS: ${{ needs.correctness.outputs.verdict }}
+          SECURITY: ${{ needs.security.outputs.verdict }}
+        run: |
+          set -euo pipefail
+
+          # Один комментарий на оба ревью. Два запустили бы две починки одной
+          # ветки: вторая потратила бы попытку `fix/N` на уже исправленное.
+          {
+            echo '/fix'
+            echo
+            echo "Корректность: ${CORRECTNESS:-не выполнялось}."
+            echo "Безопасность: ${SECURITY:-не выполнялось}."
+            echo
+            echo 'Замечания — в комментариях выше.'
           } > body.md
 
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md

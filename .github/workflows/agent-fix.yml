@@ -1,7 +1,11 @@
 name: agent-fix
 
-# Пятый шаг цикла: починка того, что не сошлось. Два входа —
-# упавший быстрый CI на ветке задачи и запрошенные изменения в ревью.
+# Пятый шаг цикла: починка того, что не сошлось. Три входа — упавший быстрый
+# CI на ветке задачи, отзыв `changes_requested` от человека и комментарий
+# `/fix`. Третий существует потому, что второй недостижим для агента:
+# запросить изменения в собственном PR GitHub не даёт, а автор PR здесь всегда
+# владелец (запись 0017). Комментарий `/fix` пишет `agent-review`, и он же
+# остаётся рычагом человека — как `/review` у ревью.
 #
 # Имя отслеживаемого workflow должно совпадать с реальным буква в букву:
 # `workflow_run` с несуществующим именем не ошибка, он просто никогда не
@@ -12,9 +16,16 @@ on:
     types: [completed]
   pull_request_review:
     types: [submitted]
+  # Вход прямого плеча: `agent-review` пишет `/fix`, когда вердикт —
+  # `changes_requested`. Формальный отзыв вместо комментария невозможен:
+  # запросить изменения в своём PR GitHub не даёт (запись 0017).
+  issue_comment:
+    types: [created]
 
 # contents: write — агент пушит починку в ветку задачи.
 # pull-requests: write — метки счётчика попыток и комментарии на PR.
+# issue_comment приходит как событие issue, но метки и комментарии ставятся
+# на PR: отдельного issues: write для этого не нужно.
 # actions: read — скачать лог упавшего job.
 #
 # Права ниже относятся к штатному GITHUB_TOKEN. Пуш починки идёт через
@@ -26,7 +37,13 @@ permissions:
   actions: read
 
 concurrency:
-  group: agent-fix-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+  # У `issue_comment` контекста ветки нет вовсе, поэтому запасной ключ —
+  # номер PR. Без него группа выродилась бы в `agent-fix-` и починки разных
+  # задач встали бы в одну очередь.
+  group: >-
+    agent-fix-${{ github.event.workflow_run.head_branch
+      || github.event.pull_request.head.ref
+      || format('pr-{0}', github.event.issue.number) }}
   # Отмена на середине оставляет ветку в полузаписанном состоянии.
   cancel-in-progress: false
 
@@ -83,40 +100,71 @@ jobs:
           github.event.review.author_association == 'OWNER' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           startsWith(github.event.pull_request.head.ref, 'feat/')
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.author_association == 'OWNER' &&
+          startsWith(github.event.comment.body, '/fix')
         )
       )
     steps:
-      - name: Checkout ветки задачи
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
-          fetch-depth: 0
-
-      - name: PR и номер попытки
+      # Шаг идёт ДО checkout: у события `issue_comment` контекста ветки нет
+      # вовсе, а checkout без неё взял бы main и починка ушла бы не туда.
+      - name: Ветка, PR и номер попытки
         id: attempt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
-          PR_HINT: ${{ github.event.pull_request.number }}
+          BRANCH_HINT: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+          PR_HINT: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
 
           pr="$PR_HINT"
-          if [ -z "$pr" ]; then
-            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
+          branch="$BRANCH_HINT"
+
+          # `issue_comment` знает номер, но не ветку — она добывается запросом.
+          if [ -z "$branch" ] && [ -n "$pr" ]; then
+            branch=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" \
+              --json headRefName --jq '.headRefName // empty')
+          fi
+
+          # `workflow_run` знает ветку, но не номер PR.
+          if [ -z "$pr" ] && [ -n "$branch" ]; then
+            pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" \
               --state open --json number --jq '.[0].number // empty')
           fi
 
-          if [ -z "$pr" ]; then
-            echo "::notice::Для ветки $BRANCH нет открытого PR — чинить нечего."
+          if [ -z "$pr" ] || [ -z "$branch" ]; then
+            echo '::notice::Нет пары «ветка — открытый PR» — чинить нечего.'
             {
               echo 'stop=true'
               echo 'reason=no-pr'
               echo 'pr='
+              echo 'branch='
               echo 'attempt=0'
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # Префикс `feat/` ограничивает починку ветками агентского цикла:
+          # main и ветки документации чинит человек. Для двух других событий
+          # это проверено гейтом на уровне job, но у `issue_comment` ветки в
+          # событии нет — поэтому здесь, где она уже известна.
+          case "$branch" in
+            feat/*) ;;
+            *)
+              echo "::notice::Ветка $branch вне агентского цикла — чинит человек."
+              {
+                echo 'stop=true'
+                echo 'reason=not-agent-branch'
+                echo "pr=$pr"
+                echo "branch=$branch"
+                echo 'attempt=0'
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
 
           labels=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
 
@@ -138,10 +186,19 @@ jobs:
 
           {
             echo "pr=$pr"
+            echo "branch=$branch"
             echo "attempt=$attempt"
             echo "stop=$stop"
             echo "reason=$reason"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout ветки задачи
+        # Ветка взята из предыдущего шага, а не из события: см. комментарий там.
+        if: steps.attempt.outputs.stop == 'false'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.attempt.outputs.branch }}
+          fetch-depth: 0
 
       - name: Три попытки исчерпаны — дальше человек
         if: steps.attempt.outputs.reason == 'attempts-exhausted'
@@ -378,7 +435,7 @@ jobs:
           prompt: |
             Репозиторий: ${{ github.repository }}
             PR: #${{ steps.attempt.outputs.pr }}
-            Ветка: ${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref }}
+            Ветка: ${{ steps.attempt.outputs.branch }}
             Попытка: ${{ steps.attempt.outputs.attempt }} из 3
             Событие: ${{ github.event_name }}
 
@@ -386,8 +443,10 @@ jobs:
             - при событии `workflow_run` — падение быстрого CI. Сырой лог
               упавших job лежит в файле `ci-failure.log` в корне рабочей
               копии, прочитай его первым делом;
-            - при событии `pull_request_review` — замечания ревьюера.
-              Посмотри их через `gh pr view --comments`.
+            - при событиях `pull_request_review` и `issue_comment` — замечания
+              ревью. Посмотри их через `gh pr view --comments`: комментарий
+              `/fix` называет вердикт каждой половины ревью, сами замечания —
+              в комментариях выше него.
 
             Правила шага — `docs/rules/fix.md`: причина вместо проявления,
             минимальность правки, порядок проверки и признак имитации. Прочитай
@@ -422,7 +481,7 @@ jobs:
         # Только путь `pull_request_review`: починка упавшего CI перезапускает
         # CI, а не ревью. Потолок кругов считает сам `agent-review`.
         if: >-
-          github.event_name == 'pull_request_review' &&
+          github.event_name != 'workflow_run' &&
           steps.attempt.outputs.stop == 'false' &&
           steps.verdict.outputs.flaky == 'false'
         env:
