@@ -15,6 +15,27 @@
 Форма `domovoi` не используется нигде: ни в namespace, ни в именах файлов, ни
 в конфигурации, ни в тексте. Корневой namespace — `Domovoy`.
 
+## Правила шагов работы
+
+Этот файл отвечает на вопрос «что в проекте можно и нельзя». На вопрос «на что
+смотреть на конкретном шаге» отвечает каталог `docs/rules/` — критерии триажа,
+состав плана, порядок реализации, что проверяет ревью, чем починка отличается
+от её имитации.
+
+| Шаг | Правила |
+|---|---|
+| Триаж | [`docs/rules/triage.md`](../docs/rules/triage.md) |
+| План | [`docs/rules/plan.md`](../docs/rules/plan.md) |
+| Реализация | [`docs/rules/implement.md`](../docs/rules/implement.md) |
+| Ревью — корректность | [`docs/rules/review-correctness.md`](../docs/rules/review-correctness.md) |
+| Ревью — безопасность | [`docs/rules/review-security.md`](../docs/rules/review-security.md) |
+| Починка | [`docs/rules/fix.md`](../docs/rules/fix.md) |
+
+**Перед шагом читается файл шага.** Раньше эти правила лежали в промптах
+`.github/workflows/agent-*.yml`, и живой режим работы — задачу ведёт человек из
+Claude CLI — не видел их вовсе: `.github/**` он не открывает. Источник теперь
+один, промпты на него ссылаются. Указатель — `docs/rules/README.md`.
+
 ## Стек и версии
 
 | Компонент | Версия |
@@ -291,6 +312,7 @@ MAUI-проект, оплачивается этими минутами на к�
 | Изменение контракта API | README, шаблон запроса, тесты |
 | Архитектурное решение, расходящееся с ТЗ | раздел ТЗ + запись в `docs/decisions/` |
 | Стадия задачи, принятое решение, отвергнутый вариант | `docs/tasks/<номер>.md` |
+| Метод шага: критерии триажа, состав плана, порядок реализации, пункты ревью, правила починки | `docs/rules/<шаг>.md` — и только он, промпты `agent-*.yml` ссылаются |
 
 **Отдельно: системный промпт и набор инструментов не должны расходиться
 никогда.** Тест, проверяющий, что каждый зарегистрированный в DI `IAgentTool`
@@ -334,7 +356,7 @@ git log --format=%B | grep -iE 'co-authored|generated with|anthropic'
 - конфигурация качества: `Directory.Build.props`, `Directory.Packages.props`,
   `.editorconfig`, `global.json`, `*.ruleset`;
 - сам пайплайн: `.github/**`, `.githooks/**`, `scripts/**`;
-- правила: `.claude/CLAUDE.md`, `docs/decisions/**`;
+- правила: `.claude/CLAUDE.md`, `docs/rules/**`, `docs/decisions/**`;
 - правила поиска секретов: `.gitleaks.toml`;
 - миграции: `src/Domovoy.Data/Migrations/**`;
 - контракт API и сгенерированный из него клиент: `contracts/**`,
