@@ -13,7 +13,10 @@ hooks:
             'git checkout' 'git switch' 'git status' 'git diff' 'git log'
             'git add' 'git commit' 'git push'
             'gh issue view' 'gh pr create' 'gh pr view' 'gh pr edit'
-            'grep' 'head' 'tail' 'bash scripts/'
+            'grep' 'head' 'tail'
+            'bash scripts/rules-sync.sh' 'bash scripts/rules-sync.test.sh'
+            'bash scripts/wiring.sh' 'bash scripts/wiring.test.sh'
+            'bash scripts/guard.test.sh' 'bash scripts/step-bash-allow.test.sh'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.
@@ -31,6 +34,14 @@ hooks:
 Задачу и согласованный план читай сам: `gh issue view <номер> --comments`.
 План — обязательство, а не набросок; расхождение с ним описывается в теле PR
 отдельным абзацем.
+
+Сценарии обвязки перечислены поимённо, а не каталогом: `bash scripts/` целиком
+означало бы «запусти любой скрипт», а у тебя есть `Write` — то есть исполнение
+чего угодно мимо списка. Нужен новый сценарий — он добавляется в этот список
+вместе с самим сценарием.
+
+`gh pr edit` выдан ради тела чернового PR (пункт 7 правил шага). Правка меток
+через него запрещена: метки `agent/allow-*` — разрешения человека.
 
 `dotnet ef` тебе не выдан намеренно: миграции лежат в защищённых путях, и
 менять их — отдельная задача с апрувом человека. Команда не пройдёт границу

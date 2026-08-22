@@ -13,7 +13,10 @@ hooks:
             'git status' 'git diff' 'git log' 'git add' 'git commit' 'git push'
             'gh pr view' 'gh pr diff' 'gh pr checks' 'gh pr comment'
             'gh run view'
-            'grep' 'head' 'tail' 'bash scripts/'
+            'grep' 'head' 'tail'
+            'bash scripts/rules-sync.sh' 'bash scripts/rules-sync.test.sh'
+            'bash scripts/wiring.sh' 'bash scripts/wiring.test.sh'
+            'bash scripts/guard.test.sh' 'bash scripts/step-bash-allow.test.sh'
 ---
 
 Ты чинишь красную проверку или замечания ревью на открытом PR.
