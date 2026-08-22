@@ -94,8 +94,10 @@ expect_silence() {
 }
 
 expect_output() {
-    # Ключ -- обязателен: искомое может начинаться с дефиса (`--no-verify`),
-    # и без него grep примет его за свой собственный ключ.
+    # Ключ -- перед искомым обязателен: оно может начинаться с дефиса
+    # (`--no-verify`), и без него grep примет его за свой ключ. Вызов тоже
+    # умеет принимать `--` первым аргументом — так читается яснее.
+    [ "$1" = '--' ] && shift
     if ! printf '%s' "$OUTPUT" | grep -qF -- "$1"; then
         fail_case "в выводе нет: $1"
     fi
@@ -404,19 +406,53 @@ end_case
 # ------------------------------------------------------------------
 # Сценарий 25. Флаги, которые список команд не видит: он смотрит на
 # начало строки, а флаг стоит где угодно.
+#
+# Проверка идёт по словам нормализованной части, и сценарии перечисляют
+# ровно то, чем её обходили: кавычки вокруг флага и внутри него,
+# табуляция вместо пробела, однозначное сокращение длинной опции и
+# короткий синоним. Голое написание — только первый из шести.
 # ------------------------------------------------------------------
 begin_case 'git commit --no-verify — отказ'
 call_hook 'git commit --no-verify -m "мимо хуков"' 'git commit'
 expect_status 0
 expect_deny
-expect_output '--no-verify'
+expect_output -- '--no-verify'
 end_case
 
-begin_case 'запись через --output — отказ'
-call_hook 'git diff --output=/tmp/утечка.txt' 'git diff'
+begin_case 'флаг в кавычках — отказ'
+call_hook 'git commit "--no-verify" -m x' 'git commit'
 expect_status 0
 expect_deny
-expect_output '--output'
+end_case
+
+begin_case 'кавычки внутри флага — отказ'
+call_hook 'git commit --no-veri"fy" -m x' 'git commit'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'табуляция перед флагом — отказ'
+call_hook "$(printf 'git commit -m x\t--no-verify')" 'git commit'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'сокращение длинной опции — отказ'
+call_hook 'git commit --no-veri -m x' 'git commit'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'короткий синоним -n у git commit — отказ'
+call_hook 'git commit -n -m x' 'git commit'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'сцепка коротких флагов -nm — отказ'
+call_hook 'git commit -nm x' 'git commit'
+expect_status 0
+expect_deny
 end_case
 
 begin_case 'git push --force — отказ'
@@ -426,12 +462,84 @@ expect_deny
 expect_output 'Насильный пуш запрещён'
 end_case
 
+begin_case 'git push -f — отказ'
+call_hook 'git push -f origin ветка' 'git push'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'сокращённый --forc у git push — отказ'
+call_hook 'git push --forc origin ветка' 'git push'
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'запись через --output у git — отказ'
+call_hook "git log '--output=/tmp/утечка.txt' -p" 'git log'
+expect_status 0
+expect_deny
+expect_output -- '--output'
+end_case
+
+begin_case 'правка меток через gh — отказ'
+call_hook 'gh pr edit 76 --add-label agent/allow-protected' 'gh pr edit'
+expect_status 0
+expect_deny
+expect_output 'Правка меток запрещена'
+end_case
+
+begin_case 'снятие метки через gh — отказ'
+call_hook 'gh pr edit 76 --remove-label review/1' 'gh pr edit'
+expect_status 0
+expect_deny
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 26. Обратная сторона запретов: то, что шагам нужно каждый
+# день, проходит. Без этих сценариев запрет флага чинится расширением
+# запрета, а выдача — мёртвой записью в списке, чего никто не заметит.
+# ------------------------------------------------------------------
+begin_case 'dotnet build --output — молчание: запрет только у git и gh'
+call_hook 'dotnet build --output bin/Release' 'dotnet build'
+expect_status 0
+expect_silence
+end_case
+
+begin_case 'обычный git commit — молчание'
+call_hook 'git commit -m "правка по существу"' 'git commit'
+expect_status 0
+expect_silence
+end_case
+
 begin_case 'обычный git push — молчание'
 call_hook 'git push origin ветка' 'git push'
 expect_status 0
 expect_silence
 end_case
 
+begin_case 'правка тела PR через gh pr edit — молчание'
+call_hook 'gh pr edit 76 --body-file /tmp/body.md' 'gh pr edit'
+expect_status 0
+expect_silence
+end_case
+
+begin_case 'ключи grep с дефисами — молчание'
+call_hook 'grep -n --color=never образец README.md' 'grep'
+expect_status 0
+expect_silence
+end_case
+
+begin_case 'поимённый сценарий обвязки — молчание'
+call_hook 'bash scripts/rules-sync.test.sh' 'bash scripts/rules-sync.test.sh' 'bash scripts/guard.test.sh'
+expect_status 0
+expect_silence
+end_case
+
+begin_case 'посторонний скрипт под scripts/ — отказ'
+call_hook 'bash scripts/чужой.sh' 'bash scripts/rules-sync.test.sh'
+expect_status 0
+expect_deny
+end_case
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
