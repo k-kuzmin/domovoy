@@ -10,9 +10,9 @@ on:
   issue_comment:
     types: [created]
 
-# Ревью только читает код и пишет комментарий к PR.
-# Метки не ставит — issues: write не нужен. contents: write не нужен тем
-# более: правка кода — это agent-fix, а не ревью.
+# Ревью читает код и пишет комментарий к PR. Метку `review/N` ставит job
+# `round` — тем же `pull-requests: write`, которым agent-fix ставит `fix/N`.
+# contents: write не нужен: правка кода — это agent-fix, а не ревью.
 permissions:
   contents: read
   pull-requests: write
@@ -22,10 +22,115 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  round:
+    name: Круг ревью
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stop: ${{ steps.count.outputs.stop }}
+      round: ${{ steps.count.outputs.round }}
+    # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на `correctness`
+    # и `security`; обоснование — в комментарии там. Этот job первый, и
+    # пропуск его по гейту пропускает оба ревью через `needs:` — но условие
+    # продублировано и там: гейт, стоящий в одном месте, снимается одной
+    # правкой.
+    #
+    # ВЫКЛЮЧАТЕЛЬ ЦИКЛА. Основной режим работы — задачу ведёт человек из
+    # Claude CLI, а эти процессы лежат выключенными (docs/pipeline.md).
+    # Без переменной запуск не начинается вовсе.
+    if: >-
+      vars.AGENT_LOOP_ENABLED == 'true' &&
+      (
+        (
+          github.event_name == 'pull_request' &&
+          github.actor == github.repository_owner &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.comment.author_association == 'OWNER' &&
+          startsWith(github.event.comment.body, '/review')
+        )
+      )
+    steps:
+      - name: Номер круга
+        id: count
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name')
+
+          # Счётчик живёт в метках, а не в состоянии запуска: запуск
+          # одноразовый, метка переживает перезапуск и видна человеку.
+          #
+          # Кругов два, и считаются они отдельно от `fix/1..3`: падение CI и
+          # замечание ревьюера — разные поводы, и общий счётчик их смешивал
+          # (запись 0016).
+          round=1
+          for n in 1 2; do
+            if printf '%s\n' "$labels" | grep -qx "review/$n"; then
+              round=$((n + 1))
+            fi
+          done
+
+          stop=false
+          if [ "$round" -gt 2 ]; then
+            stop=true
+          fi
+
+          {
+            echo "round=$round"
+            echo "stop=$stop"
+          } >> "$GITHUB_OUTPUT"
+          echo "Круг ревью: $round, остановка: $stop"
+
+      - name: Отметка круга
+        # Метка ставится ДО ревью, а не после: она считает круги, а не
+        # успехи. Поставленная после, она теряется, если раннер умер посреди
+        # ревью, — и потолок не будет достигнут никогда, а круги станут
+        # неограниченными и платными. Ровно та же причина, что у `fix/N`.
+        if: steps.count.outputs.stop == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          ROUND: ${{ steps.count.outputs.round }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label "review/$ROUND"
+
+      - name: Два круга исчерпаны — дальше человек
+        if: steps.count.outputs.stop == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Ревью остановлено'
+            echo
+            # Кавычки у разделителя обязательны: внутри обратные кавычки
+            # markdown, и без них shell попытается их выполнить.
+            cat <<'TEXT'
+          Два круга (`review/1`, `review/2`) не сошлись. Третий круг того же
+          ревьюера по тому же коду — не ревью, а его имитация, поэтому цикл
+          остановлен.
+          TEXT
+            echo
+            echo 'Дальше нужен человек: посмотреть замечания предыдущих кругов'
+            echo 'и решить, чинить или мержить.'
+          } > body.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-label 'agent/needs-human'
+
   correctness:
     name: Ревью — корректность
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: round
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. То же условие стоит на job `security`;
     # при правке менять оба.
     #
@@ -61,7 +166,8 @@ jobs:
           github.event.comment.author_association == 'OWNER' &&
           startsWith(github.event.comment.body, '/review')
         )
-      )
+      ) &&
+      needs.round.outputs.stop == 'false'
     steps:
       - name: Checkout ветки PR
         uses: actions/checkout@v7
@@ -141,6 +247,7 @@ jobs:
     name: Ревью — безопасность
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    needs: round
     # ГЕЙТ ДОСТУПА — НЕ УДАЛЯТЬ. Дословно то же условие, что на job
     # `correctness`; обоснование — в комментарии там. Условие продублировано,
     # а не вынесено: `if` на уровне job — единственное место, где запуск
@@ -166,7 +273,8 @@ jobs:
           github.event.comment.author_association == 'OWNER' &&
           startsWith(github.event.comment.body, '/review')
         )
-      )
+      ) &&
+      needs.round.outputs.stop == 'false'
     steps:
       - name: Checkout ветки PR
         uses: actions/checkout@v7

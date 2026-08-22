@@ -409,6 +409,29 @@ jobs:
             --allowedTools 'Read,Glob,Grep,Edit,MultiEdit,Write,Bash(dotnet restore:*),Bash(dotnet build:*),Bash(dotnet test:*),Bash(dotnet format:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)'
             --max-turns 60
 
+      - name: Ревью заново
+        # Возвратное плечо цикла. Без этого шага повторное ревью не начнётся:
+        # `agent-review` слушает `ready_for_review` и комментарий `/review`, а
+        # `synchronize` намеренно не слушает — он срабатывает на каждый пуш в
+        # PR, включая пуши по ходу реализации, и оплачивал бы два ревью на
+        # каждый коммит (запись 0016).
+        #
+        # AGENT_TOKEN обязателен: комментарий от штатного GITHUB_TOKEN не
+        # порождает событий, и `agent-review` его не увидит.
+        #
+        # Только путь `pull_request_review`: починка упавшего CI перезапускает
+        # CI, а не ревью. Потолок кругов считает сам `agent-review`.
+        if: >-
+          github.event_name == 'pull_request_review' &&
+          steps.attempt.outputs.stop == 'false' &&
+          steps.verdict.outputs.flaky == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_TOKEN }}
+          PR: ${{ steps.attempt.outputs.pr }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body '/review'
+
       - name: Починка не удалась
         if: failure() && steps.attempt.outputs.stop == 'false' && steps.verdict.outputs.flaky == 'false'
         env:
