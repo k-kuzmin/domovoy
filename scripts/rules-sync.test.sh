@@ -75,7 +75,9 @@ expect_status() {
 }
 
 expect_output() {
-    if ! printf '%s' "$OUTPUT" | grep -qF "$1"; then
+    # Ключ -- обязателен: искомое может начинаться с дефиса (`--no-verify`),
+    # и без него grep примет его за свой собственный ключ.
+    if ! printf '%s' "$OUTPUT" | grep -qF -- "$1"; then
         fail_case "в выводе нет: $1"
     fi
 }
@@ -87,7 +89,7 @@ expect_output() {
 new_fixture() {
     repo="$SANDBOX/repo-$RANDOM$RANDOM"
     mkdir -p "$repo/.github/workflows" "$repo/docs/rules" \
-        "$repo/docs/decisions" "$repo/.claude"
+        "$repo/docs/decisions" "$repo/.claude" "$repo/.claude/agents"
 
     cat > "$repo/.github/workflows/agent-triage.yml" <<'EOF'
 name: agent-triage
@@ -98,6 +100,7 @@ jobs:
         with:
           prompt: |
             Правила шага — `docs/rules/triage.md`. Прочитай целиком.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
 EOF
 
     cat > "$repo/.github/workflows/agent-review.yml" <<'EOF'
@@ -110,12 +113,14 @@ jobs:
           prompt: |
             Правила шага — `docs/rules/review-correctness.md`.
             Уровни замечаний — `docs/rules/README.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
   security:
     steps:
       - name: Проверка
         with:
           prompt: |
             Правила шага — `docs/rules/review-security.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
 EOF
 
     printf '# Указатель\n\nУровни замечаний.\n' > "$repo/docs/rules/README.md"
@@ -125,6 +130,19 @@ EOF
     printf '# Ревью — безопасность\n\nЗапись [0016](../decisions/0016-x.md).\n' \
         > "$repo/docs/rules/review-security.md"
     printf '# 0016\n\nРешение.\n' > "$repo/docs/decisions/0016-x.md"
+    printf '# Чтение\n\nСначала отбор, потом чтение целиком.\n' \
+        > "$repo/docs/rules/reading.md"
+
+    # Определения субагентов — второй класс потребителей. Три штуки: шаг с
+    # единственным файлом правил и обе половины ревью.
+    new_agent() {
+        printf -- '---\nname: step-%s\ntools: Read\n---\n\nПравила шага — `docs/rules/%s.md`.\nЧтение объёмного вывода — `docs/rules/reading.md`.\n' \
+            "$1" "$1" > "$repo/.claude/agents/step-$1.md"
+    }
+
+    new_agent 'triage'
+    new_agent 'review-correctness'
+    new_agent 'review-security'
 
     cat > "$repo/.claude/CLAUDE.md" <<'EOF'
 # Правила проекта
@@ -137,6 +155,7 @@ EOF
 | Триаж | docs/rules/triage.md |
 | Ревью — корректность | docs/rules/review-correctness.md |
 | Ревью — безопасность | docs/rules/review-security.md |
+| Любой шаг | docs/rules/reading.md |
 EOF
 }
 
@@ -173,6 +192,7 @@ printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
 run_check
 expect_status 1
 expect_output 'не упомянут ни одним промптом'
+expect_output 'не упомянут ни одним определением'
 end_case
 
 # ------------------------------------------------------------------
@@ -292,6 +312,314 @@ run_check
 expect_status 2
 expect_output 'Не найден каталог'
 end_case
+
+# ------------------------------------------------------------------
+# Сценарий 11. Определение ссылается на файл, которого нет.
+# Так выглядит переименование правил без правки определения — тот же
+# случай, что сценарий 1, но со стороны локального режима.
+# ------------------------------------------------------------------
+begin_case 'проверка 1: ссылка из определения в пустоту'
+new_fixture
+sed -i 's#docs/rules/triage.md#docs/rules/triage-rules.md#' \
+    "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 1
+expect_output 'ссылка на несуществующие правила: docs/rules/triage-rules.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 12. Правила есть, промпт на них ссылается, определения нет.
+# Так выглядит правило, которое существует только для цикла: локальная
+# сессия шаг выполнит, но по правилам его никто не пройдёт.
+# ------------------------------------------------------------------
+begin_case 'проверка 2: правила знает только цикл'
+new_fixture
+printf '# Починка\n\nПравила.\n' > "$repo/docs/rules/fix.md"
+printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
+cat > "$repo/.github/workflows/agent-fix.yml" <<'EOF'
+name: agent-fix
+jobs:
+  fix:
+    steps:
+      - name: Починка
+        with:
+          prompt: |
+            Правила шага — `docs/rules/fix.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'не упомянут ни одним определением'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 13. Определение шага ссылается на чужие правила, но не на
+# свои. Так выглядит определение, скопированное с соседнего шага.
+# ------------------------------------------------------------------
+begin_case 'проверка 3: определение шага не ссылается на свои правила'
+new_fixture
+sed -i 's#docs/rules/review-security.md#docs/rules/review-correctness.md#' \
+    "$repo/.claude/agents/step-review-security.md"
+run_check
+expect_status 1
+expect_output 'определение шага «review-security» не ссылается на свои правила'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 14. Общее правило пропало из одного определения. Именно так
+# правило «поверх всех шагов» перестаёт действовать на одном из них —
+# молча и без битых ссылок.
+# ------------------------------------------------------------------
+begin_case 'проверка 3а: определение без общего правила'
+new_fixture
+sed -i '/reading.md/d' "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 1
+expect_output 'не ссылается на общее правило: docs/rules/reading.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 15. То же со стороны цикла: промпт без общего правила.
+# Проверка одна на оба класса потребителей, и это проверяется.
+# ------------------------------------------------------------------
+begin_case 'проверка 3а: промпт без общего правила'
+new_fixture
+sed -i '/reading.md/d' "$repo/.github/workflows/agent-triage.yml"
+run_check
+expect_status 1
+expect_output 'не ссылается на общее правило: docs/rules/reading.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 16. Подшаг без своего файла правил живёт по правилам шага:
+# step-fix-flaky.md ссылается на fix.md, и это не расхождение.
+#
+# Обратная ошибка дороже прямой: проверка, требующая от каждого
+# определения одноимённый файл правил, заставила бы завести
+# docs/rules/fix-flaky.md — то есть размножить правила под каждый вызов
+# модели вместо шага.
+# ------------------------------------------------------------------
+begin_case 'проверка 3: подшаг ссылается на правила своего шага — сверка молчит'
+new_fixture
+printf '# Починка\n\nПравила.\n' > "$repo/docs/rules/fix.md"
+printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
+cat > "$repo/.github/workflows/agent-fix.yml" <<'EOF'
+name: agent-fix
+jobs:
+  fix:
+    steps:
+      - name: Починка
+        with:
+          prompt: |
+            Правила шага — `docs/rules/fix.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+printf -- '---\nname: step-fix\ntools: Read\n---\n\nПравила — `docs/rules/fix.md`, чтение — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/step-fix.md"
+printf -- '---\nname: step-fix-flaky\ntools: Read\n---\n\nПравила — `docs/rules/fix.md`, раздел про случайное падение; чтение — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/step-fix-flaky.md"
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 17. Определений нет вовсе — код 2, а не ложное «сходится».
+# Так выглядит клон, в котором каталог определений потеряли: сверка
+# обязана сказать об этом, а не промолчать за отсутствием потребителей.
+# ------------------------------------------------------------------
+begin_case 'запуск: определений нет — код 2 и понятное сообщение'
+new_fixture
+rm -rf "$repo/.claude/agents"
+run_check
+expect_status 2
+expect_output 'Не найдено ни одного .claude/agents/step-*.md'
+end_case
+
+
+# ------------------------------------------------------------------
+# Сценарий 18. Определению выдан Bash, а граница команд не подключена.
+#
+# Так выглядит убранный при правке блок hooks: субагент получает оболочку
+# целиком, ссылки на правила на месте, и до этой проверки всё зеленело.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash выдан, граница команд не подключена'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'граница команд не подключена'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 19. Хук подключён, но матчер не про оболочку — опечатка,
+# после которой хук не срабатывает ни на одном вызове Bash.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена без матчера Bash'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Edit
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'без матчера Bash'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 20. Хук подключён, список разрешённого пуст. Хук и сам такое
+# отвергнет, но узнать об этом на сверке дешевле, чем на первом вызове
+# шага, который встанет целиком.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена без списка команд'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'без списка разрешённых команд'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 21. Обратная сторона: Bash выдан, граница подключена как
+# положено — сверка молчит. Без этого сценария проверка 3б могла бы
+# краснеть на правильном определении, и её начали бы обходить.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash с подключённой границей — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+
+# ------------------------------------------------------------------
+# Сценарий 22. Событие подменено: PostToolUse вместо PreToolUse.
+#
+# Путь границы на месте, матчер на месте, список на месте — и граница
+# при этом выключена: PostToolUse срабатывает после исполнения и
+# отказать уже не может. Проверка, которая смотрит только на путь,
+# такое пропускает.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: граница подключена не к PreToolUse'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PostToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'хука PreToolUse нет'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 23. Поля tools нет вовсе. Тогда субагент наследует все
+# инструменты, включая Bash, — и молчаливый пропуск такого определения
+# снимает с него требование границы.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: определение без поля tools'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+description: Триаж
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'нет поля tools'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 24. Списочная форма tools: Bash в ней тот же Bash.
+# Признак, смотревший только на однострочную запись, пропускал такое
+# определение целиком.
+# ------------------------------------------------------------------
+begin_case 'проверка 3б: Bash списком в tools — требование то же'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools:
+  - Read
+  - Bash
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'граница команд не подключена'
+end_case
+
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
