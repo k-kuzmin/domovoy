@@ -123,45 +123,70 @@ jobs:
           pr="$PR_HINT"
           branch="$BRANCH_HINT"
 
-          # `issue_comment` знает номер, но не ветку — она добывается запросом.
-          if [ -z "$branch" ] && [ -n "$pr" ]; then
-            branch=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" \
-              --json headRefName --jq '.headRefName // empty')
-          fi
-
           # `workflow_run` знает ветку, но не номер PR.
           if [ -z "$pr" ] && [ -n "$branch" ]; then
             pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" \
               --state open --json number --jq '.[0].number // empty')
           fi
 
-          if [ -z "$pr" ] || [ -z "$branch" ]; then
-            echo '::notice::Нет пары «ветка — открытый PR» — чинить нечего.'
+          stop_with() {
+            echo "::notice::$2"
             {
               echo 'stop=true'
-              echo 'reason=no-pr'
-              echo 'pr='
-              echo 'branch='
+              echo "reason=$1"
+              echo "pr=$pr"
+              echo "branch=$branch"
               echo 'attempt=0'
             } >> "$GITHUB_OUTPUT"
+          }
+
+          if [ -z "$pr" ]; then
+            branch=''
+            stop_with 'no-pr' 'Нет открытого PR — чинить нечего.'
+            exit 0
+          fi
+
+          # Один запрос отвечает на два вопроса: как называется ветка — у
+          # `issue_comment` её в событии нет вовсе — и лежит ли она в этом
+          # репозитории.
+          info=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" \
+            --json headRefName,isCrossRepository)
+          # Не `[ -z "$branch" ] && branch=…`: под `set -e` ложный тест уронил
+          # бы весь шаг, когда ветка уже известна из события.
+          if [ -z "$branch" ]; then
+            branch=$(printf '%s' "$info" | jq -r '.headRefName // empty')
+          fi
+          cross=$(printf '%s' "$info" | jq -r '.isCrossRepository')
+
+          # ГЕЙТ ДОСТУПА, ВТОРАЯ ПОЛОВИНА — НЕ УДАЛЯТЬ.
+          #
+          # У `workflow_run` и `pull_request_review` принадлежность ветки этому
+          # репозиторию проверена в `if` на уровне job — это основной барьер
+          # против постороннего. У `issue_comment` такой проверки в payload
+          # выразить нечем: событие про комментарий, а не про PR. Поэтому она
+          # стоит здесь.
+          #
+          # `author_association == 'OWNER'` её не заменяет: оно ограничивает,
+          # КТО написал комментарий, а не ЧЬЮ ветку мы сейчас выкачаем и в
+          # какую запушим. Шаг починки работает с `contents: write`, и код из
+          # форка с веткой, названной `feat/…`, получил бы наши секреты.
+          if [ "$cross" = 'true' ]; then
+            stop_with 'fork' "PR #$pr из форка — починка не запускается."
+            exit 0
+          fi
+
+          if [ -z "$branch" ]; then
+            stop_with 'no-branch' "У PR #$pr не удалось определить ветку."
             exit 0
           fi
 
           # Префикс `feat/` ограничивает починку ветками агентского цикла:
-          # main и ветки документации чинит человек. Для двух других событий
-          # это проверено гейтом на уровне job, но у `issue_comment` ветки в
-          # событии нет — поэтому здесь, где она уже известна.
+          # main и ветки документации чинит человек.
           case "$branch" in
             feat/*) ;;
             *)
-              echo "::notice::Ветка $branch вне агентского цикла — чинит человек."
-              {
-                echo 'stop=true'
-                echo 'reason=not-agent-branch'
-                echo "pr=$pr"
-                echo "branch=$branch"
-                echo 'attempt=0'
-              } >> "$GITHUB_OUTPUT"
+              stop_with 'not-agent-branch' \
+                "Ветка $branch вне агентского цикла — чинит человек."
               exit 0
               ;;
           esac
