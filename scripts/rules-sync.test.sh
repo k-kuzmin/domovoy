@@ -87,7 +87,7 @@ expect_output() {
 new_fixture() {
     repo="$SANDBOX/repo-$RANDOM$RANDOM"
     mkdir -p "$repo/.github/workflows" "$repo/docs/rules" \
-        "$repo/docs/decisions" "$repo/.claude"
+        "$repo/docs/decisions" "$repo/.claude" "$repo/.claude/agents"
 
     cat > "$repo/.github/workflows/agent-triage.yml" <<'EOF'
 name: agent-triage
@@ -98,6 +98,7 @@ jobs:
         with:
           prompt: |
             Правила шага — `docs/rules/triage.md`. Прочитай целиком.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
 EOF
 
     cat > "$repo/.github/workflows/agent-review.yml" <<'EOF'
@@ -110,12 +111,14 @@ jobs:
           prompt: |
             Правила шага — `docs/rules/review-correctness.md`.
             Уровни замечаний — `docs/rules/README.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
   security:
     steps:
       - name: Проверка
         with:
           prompt: |
             Правила шага — `docs/rules/review-security.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
 EOF
 
     printf '# Указатель\n\nУровни замечаний.\n' > "$repo/docs/rules/README.md"
@@ -125,6 +128,19 @@ EOF
     printf '# Ревью — безопасность\n\nЗапись [0016](../decisions/0016-x.md).\n' \
         > "$repo/docs/rules/review-security.md"
     printf '# 0016\n\nРешение.\n' > "$repo/docs/decisions/0016-x.md"
+    printf '# Чтение\n\nСначала отбор, потом чтение целиком.\n' \
+        > "$repo/docs/rules/reading.md"
+
+    # Определения субагентов — второй класс потребителей. Три штуки: шаг с
+    # единственным файлом правил и обе половины ревью.
+    new_agent() {
+        printf -- '---\nname: step-%s\ntools: Read\n---\n\nПравила шага — `docs/rules/%s.md`.\nЧтение объёмного вывода — `docs/rules/reading.md`.\n' \
+            "$1" "$1" > "$repo/.claude/agents/step-$1.md"
+    }
+
+    new_agent 'triage'
+    new_agent 'review-correctness'
+    new_agent 'review-security'
 
     cat > "$repo/.claude/CLAUDE.md" <<'EOF'
 # Правила проекта
@@ -137,6 +153,7 @@ EOF
 | Триаж | docs/rules/triage.md |
 | Ревью — корректность | docs/rules/review-correctness.md |
 | Ревью — безопасность | docs/rules/review-security.md |
+| Любой шаг | docs/rules/reading.md |
 EOF
 }
 
@@ -173,6 +190,7 @@ printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
 run_check
 expect_status 1
 expect_output 'не упомянут ни одним промптом'
+expect_output 'не упомянут ни одним определением'
 end_case
 
 # ------------------------------------------------------------------
@@ -292,6 +310,130 @@ run_check
 expect_status 2
 expect_output 'Не найден каталог'
 end_case
+
+# ------------------------------------------------------------------
+# Сценарий 11. Определение ссылается на файл, которого нет.
+# Так выглядит переименование правил без правки определения — тот же
+# случай, что сценарий 1, но со стороны локального режима.
+# ------------------------------------------------------------------
+begin_case 'проверка 1: ссылка из определения в пустоту'
+new_fixture
+sed -i 's#docs/rules/triage.md#docs/rules/triage-rules.md#' \
+    "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 1
+expect_output 'ссылка на несуществующие правила: docs/rules/triage-rules.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 12. Правила есть, промпт на них ссылается, определения нет.
+# Так выглядит правило, которое существует только для цикла: локальная
+# сессия шаг выполнит, но по правилам его никто не пройдёт.
+# ------------------------------------------------------------------
+begin_case 'проверка 2: правила знает только цикл'
+new_fixture
+printf '# Починка\n\nПравила.\n' > "$repo/docs/rules/fix.md"
+printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
+cat > "$repo/.github/workflows/agent-fix.yml" <<'EOF'
+name: agent-fix
+jobs:
+  fix:
+    steps:
+      - name: Починка
+        with:
+          prompt: |
+            Правила шага — `docs/rules/fix.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'не упомянут ни одним определением'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 13. Определение шага ссылается на чужие правила, но не на
+# свои. Так выглядит определение, скопированное с соседнего шага.
+# ------------------------------------------------------------------
+begin_case 'проверка 3: определение шага не ссылается на свои правила'
+new_fixture
+sed -i 's#docs/rules/review-security.md#docs/rules/review-correctness.md#' \
+    "$repo/.claude/agents/step-review-security.md"
+run_check
+expect_status 1
+expect_output 'определение шага «review-security» не ссылается на свои правила'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 14. Общее правило пропало из одного определения. Именно так
+# правило «поверх всех шагов» перестаёт действовать на одном из них —
+# молча и без битых ссылок.
+# ------------------------------------------------------------------
+begin_case 'проверка 3а: определение без общего правила'
+new_fixture
+sed -i '/reading.md/d' "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 1
+expect_output 'не ссылается на общее правило: docs/rules/reading.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 15. То же со стороны цикла: промпт без общего правила.
+# Проверка одна на оба класса потребителей, и это проверяется.
+# ------------------------------------------------------------------
+begin_case 'проверка 3а: промпт без общего правила'
+new_fixture
+sed -i '/reading.md/d' "$repo/.github/workflows/agent-triage.yml"
+run_check
+expect_status 1
+expect_output 'не ссылается на общее правило: docs/rules/reading.md'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 16. Подшаг без своего файла правил живёт по правилам шага:
+# step-fix-flaky.md ссылается на fix.md, и это не расхождение.
+#
+# Обратная ошибка дороже прямой: проверка, требующая от каждого
+# определения одноимённый файл правил, заставила бы завести
+# docs/rules/fix-flaky.md — то есть размножить правила под каждый вызов
+# модели вместо шага.
+# ------------------------------------------------------------------
+begin_case 'проверка 3: подшаг ссылается на правила своего шага — сверка молчит'
+new_fixture
+printf '# Починка\n\nПравила.\n' > "$repo/docs/rules/fix.md"
+printf '| Починка | docs/rules/fix.md |\n' >> "$repo/.claude/CLAUDE.md"
+cat > "$repo/.github/workflows/agent-fix.yml" <<'EOF'
+name: agent-fix
+jobs:
+  fix:
+    steps:
+      - name: Починка
+        with:
+          prompt: |
+            Правила шага — `docs/rules/fix.md`.
+            Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+printf -- '---\nname: step-fix\ntools: Read\n---\n\nПравила — `docs/rules/fix.md`, чтение — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/step-fix.md"
+printf -- '---\nname: step-fix-flaky\ntools: Read\n---\n\nПравила — `docs/rules/fix.md`, раздел про случайное падение; чтение — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/step-fix-flaky.md"
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 17. Определений нет вовсе — код 2, а не ложное «сходится».
+# Так выглядит клон, в котором каталог определений потеряли: сверка
+# обязана сказать об этом, а не промолчать за отсутствием потребителей.
+# ------------------------------------------------------------------
+begin_case 'запуск: определений нет — код 2 и понятное сообщение'
+new_fixture
+rm -rf "$repo/.claude/agents"
+run_check
+expect_status 2
+expect_output 'Не найдено ни одного .claude/agents/step-*.md'
+end_case
+
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
