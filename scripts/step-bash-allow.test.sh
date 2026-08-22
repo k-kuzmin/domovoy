@@ -76,9 +76,14 @@ expect_status() {
     fi
 }
 
+# Отказ проверяется разбором, а не поиском подстроки: поиск проходил и на
+# невалидном JSON — то есть на ответе, который потребитель хука прочитать не
+# может и трактует как «решения нет». Утверждение, зеленеющее на сломанном
+# ответе, — тот самый бесполезный тест из docs/rules/review-correctness.md.
 expect_deny() {
-    if ! printf '%s' "$OUTPUT" | grep -qF '"permissionDecision":"deny"'; then
-        fail_case 'ожидался отказ, а его нет'
+    if ! printf '%s' "$OUTPUT" \
+        | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
+        fail_case 'ожидался разбираемый отказ, а его нет'
     fi
 }
 
@@ -89,7 +94,9 @@ expect_silence() {
 }
 
 expect_output() {
-    if ! printf '%s' "$OUTPUT" | grep -qF "$1"; then
+    # Ключ -- обязателен: искомое может начинаться с дефиса (`--no-verify`),
+    # и без него grep примет его за свой собственный ключ.
+    if ! printf '%s' "$OUTPUT" | grep -qF -- "$1"; then
         fail_case "в выводе нет: $1"
     fi
 }
@@ -343,6 +350,88 @@ call_hook 'git commit -m "стало < было"' 'git commit'
 expect_status 0
 expect_silence
 end_case
+
+# ------------------------------------------------------------------
+# Сценарий 22. Обратный слеш перед кавычкой — обход на один символ.
+#
+# Для bash `\'` это литеральная кавычка, и разбор продолжается вне кавычек.
+# Разбор, который считал такую кавычку открывающей, объявлял весь хвост
+# текстом и терял разом разделители, подстановку и перенаправление. Три
+# сценария на три потерянные проверки.
+# ------------------------------------------------------------------
+begin_case 'экранированная кавычка не прячет разделитель'
+call_hook "head -1 README.md \' ; dotnet ef database drop ; echo \'" 'head'
+expect_status 0
+expect_deny
+expect_output 'dotnet ef database drop'
+end_case
+
+begin_case 'экранированная кавычка не прячет перенаправление'
+call_hook "grep -n x README.md \' > out.txt \'" 'grep'
+expect_status 0
+expect_deny
+expect_output 'Перенаправление вывода запрещено'
+end_case
+
+begin_case 'экранированная кавычка не прячет подстановку'
+call_hook "grep -n x README.md \' \$(dotnet ef migrations list) \'" 'grep'
+expect_status 0
+expect_deny
+expect_output 'Подстановка команд запрещена'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 23. Экранированный разделитель — это текст, а не разделитель:
+# обратная ошибка к сценарию 22.
+# ------------------------------------------------------------------
+begin_case 'экранированная точка с запятой не делит команду'
+call_hook 'grep -n a\;b README.md' 'grep'
+expect_status 0
+expect_silence
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 24. Управляющий символ в команде: отказ обязан остаться
+# разбираемым. Ручная сборка JSON здесь ломалась, и отказ читался как
+# «решения нет» — то есть как разрешение.
+# ------------------------------------------------------------------
+begin_case 'таб в команде — отказ остаётся разбираемым JSON'
+call_hook "$(printf 'dotnet\tef database drop')" 'dotnet build'
+expect_status 0
+expect_deny
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 25. Флаги, которые список команд не видит: он смотрит на
+# начало строки, а флаг стоит где угодно.
+# ------------------------------------------------------------------
+begin_case 'git commit --no-verify — отказ'
+call_hook 'git commit --no-verify -m "мимо хуков"' 'git commit'
+expect_status 0
+expect_deny
+expect_output '--no-verify'
+end_case
+
+begin_case 'запись через --output — отказ'
+call_hook 'git diff --output=/tmp/утечка.txt' 'git diff'
+expect_status 0
+expect_deny
+expect_output '--output'
+end_case
+
+begin_case 'git push --force — отказ'
+call_hook 'git push --force origin ветка' 'git push'
+expect_status 0
+expect_deny
+expect_output 'Насильный пуш запрещён'
+end_case
+
+begin_case 'обычный git push — молчание'
+call_hook 'git push origin ветка' 'git push'
+expect_status 0
+expect_silence
+end_case
+
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
