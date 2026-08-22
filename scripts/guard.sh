@@ -246,6 +246,7 @@ PROTECTED_PATTERNS=(
     'scripts/.+'
     # --- Правила проекта и принятые решения ---
     '\.claude/CLAUDE\.md'
+    '\.claude/agents/.+'
     'docs/rules/.+'
     'docs/decisions/.+'
     # --- Поиск секретов ---

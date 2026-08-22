@@ -37,6 +37,7 @@
 
 # --- Правила проекта и принятые решения ---
 /.claude/CLAUDE.md            @k-kuzmin
+/.claude/agents/              @k-kuzmin
 /docs/rules/                  @k-kuzmin
 /docs/decisions/              @k-kuzmin
 

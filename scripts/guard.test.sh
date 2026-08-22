@@ -311,6 +311,35 @@ expect_output 'agent/allow-protected'
 end_case
 
 # ------------------------------------------------------------------
+# Сценарий 1д. Определения субагентов защищены.
+#
+# Определение задаёт шагу модель, набор инструментов и список разрешённых
+# команд. Агент, правящий собственные границы, — тот же случай, что агент,
+# правящий критерии своего ревью: без метки такой PR красный.
+# ------------------------------------------------------------------
+begin_case 'проверка 1: определения субагентов защищены'
+new_fixture
+mkdir -p "$repo/.claude/agents"
+printf -- '---\nname: step-fix\ntools: Read, Bash\n---\n\nПравила — docs/rules/fix.md\n' \
+    > "$repo/.claude/agents/step-fix.md"
+commit_all "$repo" 'feat: определение шага починки'
+run_guard "$repo"
+expect_status 1
+expect_output '.claude/agents/step-fix.md'
+expect_output 'agent/allow-protected'
+end_case
+
+begin_case 'проверка 1: определение субагента с меткой — гейт пропускает'
+new_fixture
+mkdir -p "$repo/.claude/agents"
+printf -- '---\nname: step-fix\ntools: Read, Bash\n---\n\nПравила — docs/rules/fix.md\n' \
+    > "$repo/.claude/agents/step-fix.md"
+commit_all "$repo" 'feat: определение шага починки'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 0
+end_case
+
+# ------------------------------------------------------------------
 # Сценарий 2а. Подавление проверок в обычном файле.
 # ------------------------------------------------------------------
 begin_case 'проверка 2: подавление в обычном файле — гейт падает с номером строки'
