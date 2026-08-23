@@ -89,6 +89,22 @@ jobs:
             --add-label 'agent/in-progress' \
             --remove-label 'plan/proposed'
 
+      - name: Снимок открытых PR до шага модели
+        # Признак «PR создан этим прогоном» не должен быть производным от
+        # того, что выбирает модель. Имя ветки задаёт строка промпта, а
+        # выбирает его тот же актор, у которого мы отнимаем право на метку, —
+        # ветка, названная иначе, выпала бы из выборки молча.
+        id: prs_before
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          before="$(
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+              --json number --jq '[.[].number] | sort | join(",")'
+          )"
+          printf 'numbers=%s\n' "$before" >> "$GITHUB_OUTPUT"
+
       - name: Реализация
         id: implement
         uses: anthropics/claude-code-action@v1
@@ -133,7 +149,7 @@ jobs:
             --allowedTools 'Read,Glob,Grep,Edit,MultiEdit,Write,Bash(dotnet restore:*),Bash(dotnet build:*),Bash(dotnet test:*),Bash(dotnet format:*),Bash(git checkout:*),Bash(git switch:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh issue view:*),Bash(gh pr create:*),Bash(gh pr view:*)'
             --max-turns 80
 
-      - name: Снятие меток-разрешений с созданного PR
+      - name: Снятие меток-разрешений с PR, созданных этим прогоном
         # `gh pr create` выдан модели намеренно — черновой PR открывает она.
         # Но этот флаг граница `Bash(команда:*)` не разбирает, а
         # `gh pr create --label agent/allow-protected` не правит метки, а
@@ -141,28 +157,47 @@ jobs:
         # человек дифф не смотрел. Запрет ставится здесь, после модели,
         # потому что в списке инструментов его выразить нечем.
         #
-        # Локально ту же дырку закрывает `scripts/step-bash-allow.sh` —
-        # запретом флагов `--label` и `-l`. Здесь запрет посмертный, там
-        # предупредительный; разница объяснена в записи 0018.
+        # Локально ту же дырку закрывает `scripts/step-bash-allow.sh`. Здесь
+        # запрет посмертный, там предупредительный; разница — в записи 0018.
         #
-        # `always()`: если модель упала после создания PR, метка снимается
-        # тем более — иначе разрешение осталось бы висеть на брошенной работе.
+        # Отбор — разность со снимком до шага, а не имя ветки: снимаем только
+        # с PR, появившихся за этот прогон. Метку, поставленную человеком на
+        # уже существующий PR, шаг не тронет — иначе повторный запуск
+        # реализации отзывал бы согласие человека, печатая при этом
+        # «разрешения ставит человек».
+        #
+        # Чего этот отбор не делает: PR, открытый человеком в те же минуты,
+        # тоже считается новым. Признак «создан этим прогоном» независим от
+        # модели, но не от времени.
+        #
+        # `always()`: если модель упала после создания PR, метка снимается тем
+        # более — иначе разрешение висело бы на брошенной работе. Но при
+        # неснятом снимке шаг падает, а не чистит наугад.
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ github.event.issue.number }}
+          BEFORE: ${{ steps.prs_before.outputs.numbers }}
+          BEFORE_OUTCOME: ${{ steps.prs_before.outcome }}
         run: |
           set -euo pipefail
-          mapfile -t rows < <(
-            gh pr list --repo "$GITHUB_REPOSITORY" --state open \
-              --json number,headRefName,labels \
-              --jq '.[]
-                    | select(.headRefName | startswith("feat/" + env.ISSUE + "-"))
-                    | .labels[].name as $name
-                    | select($name | startswith("agent/allow-"))
-                    | "\(.number)\t\($name)"'
-          )
-          for row in "${rows[@]:-}"; do
+          if [ "$BEFORE_OUTCOME" != 'success' ]; then
+            echo "Снимок открытых PR до шага не снят ($BEFORE_OUTCOME) — сравнивать не с чем, и чистить наугад нельзя." >&2
+            exit 1
+          fi
+          # Присваивание, а не подстановка процесса в mapfile: pipefail её не
+          # покрывает, и упавший `gh pr list` дал бы пустой список и зелёный
+          # шаг — граница, не сработавшая без следа.
+          after="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,labels)"
+          rows="$(printf '%s' "$after" | jq -r --arg before "$BEFORE" '
+            ($before | split(",") | map(select(length > 0))) as $known
+            | .[]
+            | (.number | tostring) as $num
+            | select(($known | index($num)) == null)
+            | .labels[].name as $label
+            | select($label | startswith("agent/allow-"))
+            | "\($num)\t\($label)"')"
+          mapfile -t rows_arr <<< "$rows"
+          for row in "${rows_arr[@]:-}"; do
             [ -z "$row" ] && continue
             pr="${row%%$'\t'*}"
             label="${row#*$'\t'}"

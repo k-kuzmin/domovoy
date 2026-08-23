@@ -515,6 +515,37 @@ expect_status 0
 expect_deny
 end_case
 
+# Найдено ревью круга 2 в #81: точное сравнение с `-l` пропускало оба
+# обходных написания. gh разбирает флаги через pflag, а он принимает и
+# сцепку коротких, и приклеенное значение.
+begin_case 'метка сцепкой коротких флагов — отказ'
+call_hook "gh pr create -dl agent/allow-protected --title 'x' --body 'y'" 'gh pr create'
+expect_status 0
+expect_deny
+expect_output -- '-l'
+end_case
+
+begin_case 'метка приклеенным значением — отказ'
+call_hook "gh pr create -lagent/allow-protected --title 'x' --body 'y'" 'gh pr create'
+expect_status 0
+expect_deny
+end_case
+
+# Обратная сторона: запрет узкий намеренно. Без этих двух сценариев он
+# чинится расширением области, и никто не заметит, что шаг перестал
+# открывать PR и рассказывать о самой границе.
+begin_case 'обычное создание чернового PR — молчание'
+call_hook "gh pr create --draft --title 'x' --body 'y'" 'gh pr create'
+expect_status 0
+expect_silence
+end_case
+
+begin_case 'слово --label в тексте комментария — молчание'
+call_hook "gh pr comment 88 --body 'запрещены --label и -l'" 'gh pr comment'
+expect_status 0
+expect_silence
+end_case
+
 # ------------------------------------------------------------------
 # Сценарий 26. Обратная сторона запретов: то, что шагам нужно каждый
 # день, проходит. Без этих сценариев запрет флага чинится расширением
