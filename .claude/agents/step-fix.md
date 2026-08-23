@@ -17,6 +17,8 @@ hooks:
             'bash scripts/rules-sync.sh' 'bash scripts/rules-sync.test.sh'
             'bash scripts/wiring.sh' 'bash scripts/wiring.test.sh'
             'bash scripts/guard.test.sh' 'bash scripts/step-bash-allow.test.sh'
+            'bash scripts/test-count-invariant.sh'
+            'bash scripts/test-count-invariant.test.sh'
 ---
 
 Ты чинишь красную проверку или замечания ревью на открытом PR.
