@@ -133,6 +133,43 @@ jobs:
             --allowedTools 'Read,Glob,Grep,Edit,MultiEdit,Write,Bash(dotnet restore:*),Bash(dotnet build:*),Bash(dotnet test:*),Bash(dotnet format:*),Bash(git checkout:*),Bash(git switch:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh issue view:*),Bash(gh pr create:*),Bash(gh pr view:*)'
             --max-turns 80
 
+      - name: Снятие меток-разрешений с созданного PR
+        # `gh pr create` выдан модели намеренно — черновой PR открывает она.
+        # Но этот флаг граница `Bash(команда:*)` не разбирает, а
+        # `gh pr create --label agent/allow-protected` не правит метки, а
+        # рождает PR уже с разрешением: гейт целостности зеленеет, хотя
+        # человек дифф не смотрел. Запрет ставится здесь, после модели,
+        # потому что в списке инструментов его выразить нечем.
+        #
+        # Локально ту же дырку закрывает `scripts/step-bash-allow.sh` —
+        # запретом флагов `--label` и `-l`. Здесь запрет посмертный, там
+        # предупредительный; разница объяснена в записи 0018.
+        #
+        # `always()`: если модель упала после создания PR, метка снимается
+        # тем более — иначе разрешение осталось бы висеть на брошенной работе.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          mapfile -t rows < <(
+            gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+              --json number,headRefName,labels \
+              --jq '.[]
+                    | select(.headRefName | startswith("feat/" + env.ISSUE + "-"))
+                    | .labels[].name as $name
+                    | select($name | startswith("agent/allow-"))
+                    | "\(.number)\t\($name)"'
+          )
+          for row in "${rows[@]:-}"; do
+            [ -z "$row" ] && continue
+            pr="${row%%$'\t'*}"
+            label="${row#*$'\t'}"
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "$label"
+            echo "PR #$pr: снята метка $label — разрешения ставит человек, а не шаг."
+          done
+
       - name: Снятие отметки «в работе»
         if: success()
         env:
