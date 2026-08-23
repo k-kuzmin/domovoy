@@ -12,7 +12,7 @@ hooks:
           command: >-
             bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
             'gh pr checks' 'gh pr view' 'gh run view'
-            'grep' 'head' 'tail'
+            'grep' 'head' 'tail' 'pwd'
 ---
 
 Ты оцениваешь упавшую проверку CI: падение настоящее или случайное.

@@ -10,7 +10,7 @@ hooks:
           command: >-
             bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
             'gh pr diff' 'gh pr view' 'gh pr checks' 'gh issue view'
-            'grep' 'head' 'tail'
+            'grep' 'head' 'tail' 'pwd'
 ---
 
 Ты ревьюишь PR на корректность.

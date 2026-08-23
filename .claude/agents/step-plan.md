@@ -9,7 +9,7 @@ hooks:
         - type: command
           command: >-
             bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
-            'gh issue view' 'grep' 'head' 'tail'
+            'gh issue view' 'grep' 'head' 'tail' 'pwd'
 ---
 
 Ты составляешь план реализации задачи. На этом шаге код не пишется.

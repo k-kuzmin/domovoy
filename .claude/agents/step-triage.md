@@ -11,7 +11,7 @@ hooks:
         - type: command
           command: >-
             bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
-            'gh issue view' 'grep' 'head' 'tail'
+            'gh issue view' 'grep' 'head' 'tail' 'pwd'
 ---
 
 Ты проводишь триаж задачи перед тем, как её возьмёт агент.
