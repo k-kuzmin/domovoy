@@ -427,8 +427,8 @@ git log --format=%B | grep -iE 'co-authored|generated with|anthropic'
 
 Изменение любого из них требует апрува человека. Перечислены в
 `.github/CODEOWNERS`; механическая проверка — гейт целостности
-`scripts/guard.sh`, который появляется следующим шагом внедрения
-пайплайна: без метки `agent/allow-protected` PR с такими правками красный.
+`scripts/guard.sh` — работа «Гейт целостности» в `CI (fast)`: без метки
+`agent/allow-protected` PR с такими правками красный.
 
 - конфигурация качества: `Directory.Build.props`, `Directory.Packages.props`,
   `.editorconfig`, `global.json`, `*.ruleset`;
