@@ -540,6 +540,16 @@ expect_status 0
 expect_silence
 end_case
 
+# `gh pr edit` выдан шагу реализации ради тела чернового PR
+# (step-implement.md), и запрет стоит на той же команде. Короткие флаги у неё
+# буквы l не содержат — но проверяется это здесь, а не рассуждением: сузить
+# запрет до подкоманд и уронить шаг на его же ежедневной команде — одна правка.
+begin_case 'правка тела PR коротким флагом — молчание'
+call_hook "gh pr edit 88 -b 'текст тела'" 'gh pr edit'
+expect_status 0
+expect_silence
+end_case
+
 begin_case 'слово --label в тексте комментария — молчание'
 call_hook "gh pr comment 88 --body 'запрещены --label и -l'" 'gh pr comment'
 expect_status 0
