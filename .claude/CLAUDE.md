@@ -90,7 +90,12 @@ Claude CLI — не видел их вовсе: `.github/**` он не откр�
   починки ведут они сами;
 - запускает `step-fix-flaky` перед `step-fix` и по его ответу решает,
   перезапустить проверку или чинить: субагент не может породить субагента,
-  инструмент `Agent` у него отнят.
+  инструмент `Agent` у него отнят;
+- правит конфигурацию прав шага — список команд в `hooks.PreToolUse`, поле
+  `tools`, само определение `.claude/agents/step-*.md`. Причина здесь иная:
+  `Edit` у шагов реализации и починки есть, а человека в их сессии нет, и
+  метка `agent/allow-protected` его согласие туда не доставляет. Почему —
+  запись [0018](../docs/decisions/0018-local-orchestrator-and-step-subagents.md).
 
 **Границы команд Bash задаёт хук**, а не поле `tools`: список разрешённого
 перечислен в определении шага, проверяет его `scripts/step-bash-allow.sh`.
@@ -422,8 +427,8 @@ git log --format=%B | grep -iE 'co-authored|generated with|anthropic'
 
 Изменение любого из них требует апрува человека. Перечислены в
 `.github/CODEOWNERS`; механическая проверка — гейт целостности
-`scripts/guard.sh`, который появляется следующим шагом внедрения
-пайплайна: без метки `agent/allow-protected` PR с такими правками красный.
+`scripts/guard.sh` — работа «Гейт целостности» в `CI (fast)`: без метки
+`agent/allow-protected` PR с такими правками красный.
 
 - конфигурация качества: `Directory.Build.props`, `Directory.Packages.props`,
   `.editorconfig`, `global.json`, `*.ruleset`;
