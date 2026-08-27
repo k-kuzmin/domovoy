@@ -68,7 +68,7 @@ jobs:
             только чтение и поиск, и это не ограничение инструмента, а суть
             шага — план обсуждается до того, как написана первая строка.
 
-            Правила шага — `docs/rules/plan.md`: шесть разделов плана и то, что
+            Правила шага — `docs/rules/plan.md`: разделы плана и то, что
             делать, когда план составить нельзя. Прочитай файл целиком до того,
             как начнёшь: это источник, а не пересказ.
 
@@ -88,7 +88,7 @@ jobs:
             # Планирование только читает: ни Edit, ни Write, ни Bash.
             --allowedTools 'Read,Glob,Grep'
             --max-turns 25
-            --json-schema '{"type":"object","properties":{"plan_markdown":{"type":"string","description":"Полный текст плана в markdown, шесть разделов"},"blocked":{"type":"boolean","description":"План составить нельзя, нужен ответ человека"},"blocked_reason":{"type":"string","description":"Чего не хватает; пустая строка при blocked=false"}},"required":["plan_markdown","blocked","blocked_reason"]}'
+            --json-schema '{"type":"object","properties":{"plan_markdown":{"type":"string","description":"Полный текст плана в markdown, разделами из docs/rules/plan.md в их порядке"},"blocked":{"type":"boolean","description":"План составить нельзя, нужен ответ человека"},"blocked_reason":{"type":"string","description":"Чего не хватает; пустая строка при blocked=false"}},"required":["plan_markdown","blocked","blocked_reason"]}'
 
       - name: Публикация плана
         env:
