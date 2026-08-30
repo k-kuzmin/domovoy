@@ -840,6 +840,113 @@ expect_status 0
 expect_output 'сходятся'
 end_case
 
+# ------------------------------------------------------------------
+# Сценарий 32. Матчер опознан по имени ключа, а не по значению: под
+# PreToolUse: два элемента, у первого matcher: Bash с безобидной командой, у
+# второго matcher: Read — и вызов границы лежит именно во втором.
+#
+# Проверка 3б сверяет матчер текстом по всему блоку и находит «- matcher: Bash»
+# в чужом элементе. Цепочка 3г при этом считается от вызова границы и упирается
+# в элемент с matcher: Read — если значение не сверять, элемент считается
+# годным. Харнесс вешает границу на Read: Bash у шага есть, границы команд нет.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: вызов границы висит на матчере другого инструмента'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: echo
+    - matcher: Read
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'нет matcher: Bash'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 33. Зеркало сценария 29: блок hooks: на верхнем уровне, но
+# PreToolUse: лежит не прямо под ним, а через промежуточный ключ.
+#
+# YAML это разбирает, 3б проходит целиком, а харнесс читает hooks.PreToolUse и
+# глубже не заглядывает — хук не подключается. Отказ открытый, как и в
+# сценарии 32.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: PreToolUse: не прямой потомок блока hooks:'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  settings:
+    PreToolUse:
+      - matcher: Bash
+        hooks:
+          - type: command
+            command: >-
+              bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+              'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'глубже прямого потомка'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 34. Комментарий YAML в колонке 0 внутри фронтматера — законная
+# запись, и определение с ней харнесс грузит.
+#
+# Для обхода 3г такая строка выглядит ключом нулевого отступа и обрывает его:
+# поиск PreToolUse: идёт, пока строки вложены в блок hooks:. Проверка,
+# краснеющая на комментарии, кончается тем, что комментарии перестают писать
+# либо саму проверку обходят.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: комментарий в колонке 0 — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+# Граница команд шага: список правится вместе с правилами шага.
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
