@@ -117,6 +117,12 @@ expect_output() {
     fi
 }
 
+expect_no_output() {
+    if printf '%s' "$OUTPUT" | grep -qF -- "$1"; then
+        fail_case "в выводе не должно быть: $1"
+    fi
+}
+
 expect_no_violations() {
     if printf '%s' "$OUTPUT" | grep -qF 'нарушение:'; then
         fail_case 'в выводе есть сообщения о нарушениях, а не должно быть ни одного'
@@ -283,6 +289,23 @@ expect_output 'scripts/**'
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Путь за деревом репозитория отвергается, границы его не спасают'
+# Граница «../**» добавлена нарочно: она делает такой путь «в границах», то
+# есть план авторизует себя сам. Проверка обязана сработать до класса 2.
+run_validate "$(mutate '
+    .files[0].path = "../home-agent-source/tz-home-agent.md"
+    | .files[0].protected = false
+    | .boundaries += ["../**"]')"
+expect_status 1
+expect_output 'путь вне репозитория: ../home-agent-source/tz-home-agent.md'
+
+run_validate "$(mutate '.files[0].path = "/etc/hosts" | .files[0].protected = false')"
+expect_status 1
+expect_output 'путь вне репозитория: /etc/hosts'
+expect_no_output 'путь вне границ задачи: /etc/hosts'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Класс 3: защищённая зона оформлена неверно, два подслучая'
 run_validate "$(mutate '.files[0].protected = false | .files[2].owner = "implement"')"
 expect_status 1
@@ -295,6 +318,23 @@ begin_case 'Класс 4: пункт приёмки без покрывающе�
 run_validate "$(mutate '.tests[0].covers = ["marker-expiry"]')"
 expect_status 1
 expect_output 'пункт приёмки «marker-reason» не покрыт ни одним тестом'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Класс 4 с обратной стороны: covers ссылается в пустоту'
+# Оба настоящих пункта остаются покрытыми, поэтому прямая проверка молчит —
+# видно ровно опечатку в идентификаторе, а не её последствие.
+run_validate "$(mutate '.tests += [{
+    "name": "маркер без срока называет дату отсечения",
+    "file": "scripts/wiring.test.sh",
+    "new": true,
+    "covers": ["marker-expiery"],
+    "behavior": "в сообщении стоит дата, после которой освобождение считается просроченным"
+  }]')"
+expect_status 1
+expect_output 'покрывает несуществующий пункт приёмки: «marker-expiery»'
+expect_output 'маркер без срока называет дату отсечения'
+expect_no_output 'не покрыт ни одним тестом'
 end_case
 
 # ------------------------------------------------------------------
