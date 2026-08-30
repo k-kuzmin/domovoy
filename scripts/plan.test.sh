@@ -14,7 +14,8 @@
 #
 #   1. на согласованном плане валидатор молчит — проверка, шумящая на
 #      нормальной работе, перестаёт читаться;
-#   2. согласованная фикстура полна по схеме, иначе инвариант рендера
+#   2. согласованная фикстура полна по схеме — вглубь, вместе с полями
+#      вложенных объектов и элементов массивов, — иначе инвариант рендера
 #      проверялся бы на неполном плане;
 #   3. каждое строковое значение фикстуры доезжает до рендера — поле,
 #      добавленное в схему без ветки рендера, иначе исчезало бы из
@@ -290,6 +291,17 @@ expect_output 'План сходится'
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Наблюдение «как устроено сейчас»: путь и номер строки'
+run_validate "$(mutate '.current_state[0].path = "scripts/wiring-which-never-was.sh"')"
+expect_status 1
+expect_output 'наблюдение «как устроено сейчас» ссылается на несуществующий путь: scripts/wiring-which-never-was.sh'
+
+run_validate "$(mutate '.current_state[0].line = 999999')"
+expect_status 1
+expect_output 'наблюдение ссылается на строку 999999, а в scripts/wiring.sh строк'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Класс 1: путь на правку не существует'
 run_validate "$(mutate '.files[0].path = "scripts/wiring-which-never-was.sh"')"
 expect_status 1
@@ -327,6 +339,20 @@ run_validate "$(mutate '.files[0].protected = false | .files[2].owner = "impleme
 expect_status 1
 expect_output 'защищённый путь без отметки protected: scripts/wiring.sh'
 expect_output 'конфигурация прав шага с owner=implement: .claude/agents/step-plan.md'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Класс 3: два оставшихся подслучая — отметка без пути и путь без флага'
+run_validate "$(mutate '.files[3].protected = true')"
+expect_status 1
+expect_output 'отметка protected на незащищённом пути: docs/tasks/4242.md'
+
+# Флаг снят при трёх защищённых путях: краснеет и сам путь, и класс 6 —
+# метку, которую просит план, снимать некому.
+run_validate "$(mutate '.flags.allow_protected = false')"
+expect_status 1
+expect_output 'защищённый путь при flags.allow_protected=false: scripts/wiring.sh'
+expect_output 'флаг allow_protected не заявлен, а в плане есть защищённый путь'
 end_case
 
 # ------------------------------------------------------------------
@@ -421,13 +447,50 @@ expect_output 'вне enum схемы'
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Полнота согласованной фикстуры: каждое поле схемы заполнено'
+# Обход схемы идёт вглубь: поле, объявленное во вложенном объекте или в items
+# массива, обязано быть заполнено — иначе инвариант рендера проверялся бы на
+# плане, в котором этого поля нет вовсе, и обещание «поле схемы без ветки
+# рендера роняет этот харнесс» держалось бы только на первом уровне.
+#
+# Для массива поле считается пропущенным, когда его нет ни в одном элементе:
+# ровно этого требует цель обхода — чтобы значение доехало до рендера хотя бы
+# раз. Сегодня все вложенные поля схемы обязательны, и разница между «ни в
+# одном» и «не в каждом» проявится на первом же необязательном.
+WALK_PROGRAM='
+def walk($s; $v; $p):
+  if ($s.type == "object") then
+    [ (($s.properties // {}) | keys_unsorted)[] as $k
+      | if (($v | type) == "object") and ($v | has($k))
+        then walk($s.properties[$k]; $v[$k]; "\($p).\($k)")[]
+        else "\($p).\($k)" end ]
+  elif ($s.type == "array") then
+    ( if (($v | type) != "array") or (($v | length) == 0)
+      then ["\($p)[]"]
+      else ([ $v[] | walk($s.items; .; "\($p)[]") ]) as $lists
+        | [ $lists[0][] | select(. as $m | ($lists | map(index($m) != null) | all)) ]
+      end )
+  else [] end;
+
+walk($schema_in[0]; $plan_in[0]; "план") | .[]
+'
+
+missing_fields() {
+    jq -rn --slurpfile schema_in "$SCHEMA" --slurpfile plan_in "$1" "$WALK_PROGRAM" | tr -d '\r'
+}
+
+begin_case 'Полнота согласованной фикстуры: заполнены и вложенные поля схемы'
 while IFS= read -r key; do
     [ -z "$key" ] && continue
-    if ! jq -e --arg k "$key" 'has($k)' "$CANON" >/dev/null 2>&1; then
-        fail_case "в согласованной фикстуре нет поля схемы: $key"
-    fi
-done < <(jq -r '.properties | keys_unsorted[]' "$SCHEMA" | tr -d '\r')
+    fail_case "в согласованной фикстуре нет поля схемы: $key"
+done < <(missing_fields "$CANON")
+
+# Обход проверяется на себе. Проверка полноты, которая молчит всегда, — это
+# ровно та видимость проверки, против которой написан харнесс.
+TRIMMED="$SANDBOX/trimmed.json"
+jq 'del(.files[].why)' "$CANON" > "$TRIMMED"
+if ! missing_fields "$TRIMMED" | grep -qxF 'план.files[].why'; then
+    fail_case 'обход не заметил вложенное поле, удалённое из всех элементов массива'
+fi
 end_case
 
 # ------------------------------------------------------------------
