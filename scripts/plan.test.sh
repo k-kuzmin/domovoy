@@ -123,6 +123,22 @@ expect_no_output() {
     fi
 }
 
+# Число разделителей в строке таблицы markdown. Экранированные пайпы из строки
+# выбрасываются: считается ровно то, что разрезает строку на ячейки.
+expect_cells() {
+    local needle="$1" want="$2" row stripped got
+    row="$(printf '%s\n' "$OUTPUT" | grep -F -- "$needle" | head -n 1)"
+    if [ -z "$row" ]; then
+        fail_case "в рендере нет строки с: $needle"
+        return
+    fi
+    stripped="${row//\\|/}"
+    got="$(printf '%s' "$stripped" | tr -cd '|' | wc -c | tr -d ' \r')"
+    if [ "$got" -ne "$want" ]; then
+        fail_case "разделителей в строке таблицы $got, ожидалось $want: $row"
+    fi
+}
+
 expect_no_violations() {
     if printf '%s' "$OUTPUT" | grep -qF 'нарушение:'; then
         fail_case 'в выводе есть сообщения о нарушениях, а не должно быть ни одного'
@@ -424,6 +440,25 @@ while IFS= read -r value; do
         fail_case "в рендере нет значения из плана: $value"
     fi
 done < <(jq -r '[.. | strings] | .[]' "$CANON" | tr -d '\r')
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Рендер: пайп в значении не разъезжает строку таблицы'
+# Способ проверки вида grep -nE "a|b" — не выдумка сценария: ровно такой стоит
+# в контракте приёмки настоящих задач. В согласованную фикстуру пайп не
+# кладётся: инвариант рендера ищет значения дословно, и там он поймал бы
+# экранирование как пропажу значения.
+run_render "$(mutate '
+    .files[0].why = "разбор маркера: причина|срок вместо одной причины"
+    | .tests[0].name = "освобождение без срока|без причины не проходит сверку"
+    | .acceptance[0].id = "marker|reason"
+    | .tests[0].covers = ["marker|reason"]
+    | .acceptance[0].method = "grep -nE \"curl|anthropic\" scripts/plan.sh"')"
+expect_status 0
+expect_cells 'причина\|срок' 6
+expect_cells 'срока\|без причины' 6
+expect_cells 'marker\|reason' 6
+expect_cells 'curl\|anthropic' 4
 end_case
 
 # ------------------------------------------------------------------

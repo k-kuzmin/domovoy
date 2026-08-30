@@ -607,6 +607,14 @@ do_validate() {
 # ------------------------------------------------------------------
 RENDERED=''
 
+# Значение, попадающее в ячейку таблицы markdown. Пайп внутри значения
+# разъезжает строку таблицы в опубликованном комментарии, и на способе
+# проверки вида `grep -nE 'a|b'` это не гипотеза. Экранирование — только для
+# ячеек: в списках и абзацах «\|» было бы видно как мусор. split/join, а не
+# gsub: в замене gsub обратный слэш разбирается, и правило пришлось бы
+# держать в голове при каждой правке.
+CELL='def cell: split("|") | join("\\|");'
+
 render_field() {
     local key="$1"
     case "$key" in
@@ -628,10 +636,11 @@ render_field() {
         files)
             printf '| Файл | Действие | Кто правит | Защищённый | Зачем |\n'
             printf '|---|---|---|---|---|\n'
-            pjq '.files[]
-                | "| `\(.path)` | \(.action) | \(.owner) | "
+            pjq "$CELL"'
+                .files[]
+                | "| `\(.path | cell)` | \(.action) | \(.owner) | "
                   + (if .protected then "да" else "нет" end)
-                  + " | \(.why) |"' "$PLAN"
+                  + " | \(.why | cell) |"' "$PLAN"
             ;;
         boundaries)
             pjq '.boundaries[] | "- `\(.)`"' "$PLAN"
@@ -648,16 +657,18 @@ render_field() {
         tests)
             printf '| Тест | Файл | Новый | Покрывает | Проверяемое поведение |\n'
             printf '|---|---|---|---|---|\n'
-            pjq '.tests[]
-                | "| \(.name) | `\(.file)` | "
+            pjq "$CELL"'
+                .tests[]
+                | "| \(.name | cell) | `\(.file | cell)` | "
                   + (if .new then "да" else "нет" end)
-                  + " | \(.covers | join(", ")) | \(.behavior) |"' "$PLAN"
+                  + " | \(.covers | map(cell) | join(", ")) | \(.behavior | cell) |"' "$PLAN"
             ;;
         acceptance)
             printf '| Пункт критерия | Способ проверки | Что считается доказательством |\n'
             printf '|---|---|---|\n'
-            pjq '.acceptance[]
-                | "| **\(.id).** \(.criterion) | \(.method) | \(.evidence) |"' "$PLAN"
+            pjq "$CELL"'
+                .acceptance[]
+                | "| **\(.id | cell).** \(.criterion | cell) | \(.method | cell) | \(.evidence | cell) |"' "$PLAN"
             ;;
         risks)
             pjq '.risks | to_entries[]
