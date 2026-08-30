@@ -67,8 +67,8 @@ flowchart TD
     triage -->|формулировка неоднозначна| clar["agent/needs-clarification<br/>статус Blocked"]
     clar -->|владелец ответил| triage
     triage -->|границы и критерии ясны| ready["agent/ready<br/>статус Todo"]
-    ready --> plan["Агент публикует план<br/>plan/proposed"]
-    plan --> planreview["Круг ревью плана<br/>выполнимость, не замысел"]
+    ready --> plan["Агент публикует план"]
+    plan -->|валидатор пропустил: plan/proposed| planreview["Круг ревью плана<br/>выполнимость, не замысел"]
     planreview -->|замечания| clar
     planreview -->|фактов не разошлось| planok["План ждёт человека"]
     plan -->|валидатор не пропустил| clar
