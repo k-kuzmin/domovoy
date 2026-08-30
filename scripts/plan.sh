@@ -40,9 +40,10 @@
 #     7. способ проверки пуст, либо «непроверяем» без причины.
 #
 #   Сверх классов: наблюдение раздела «Как устроено сейчас» ссылается на
-#   несуществующий путь или на строку за концом файла; путь в files уводит за
-#   дерево репозитория — ведущим «/» или сегментом «..»; новая зависимость без
-#   обоснования со ссылкой на комментарий issue.
+#   несуществующий путь или на строку за концом файла; путь уводит за дерево
+#   репозитория — ведущим «/» или сегментом «..», одинаково в files и в
+#   current_state; новая зависимость без обоснования со ссылкой на комментарий
+#   issue.
 #
 #   Предупреждением, не отказом: план больше PLAN_FILES_WARN файлов. Жёсткий
 #   предел краснел бы на плане, который человек уже одобрил, то есть запрещал
@@ -63,9 +64,12 @@
 #   определению нет. Отсюда способ обойти проверку — объявить пункт
 #   непроверяемым; причина при нём обязательна, и читает её человек.
 #
-#   Тексты самих планов исключены из поиска существующих тестов
+#   Тексты самих планов и журналы задач исключены из поиска существующих тестов
 #   (SEARCH_EXCLUDE): план называет новый тест по имени, и машиночитаемый план,
-#   лежащий в репозитории, сделал бы каждый такой тест «уже существующим».
+#   лежащий в репозитории, сделал бы каждый такой тест «уже существующим». То
+#   же и с docs/tasks: журнал заводится до плана и цитирует имена сценариев
+#   дословно, поэтому при повторном планировании собственное имя теста
+#   вернулось бы из журнала как «уже существующее».
 #
 #   Многострочные значения. Разбор идёт построчно, и перевод строки внутри
 #   значения план сломает. Поля плана — одна строка каждое.
@@ -95,10 +99,12 @@ PATHS_FILE="$SCRIPT_DIR/protected-paths.sh"
 # предупреждение должно отмечать необычный план, а не каждый второй.
 PLAN_FILES_WARN=15
 
-# Пути, в которых имя теста — это текст плана, а не код. См. «ЧЕГО НЕ ЛОВИТ».
+# Пути, в которых имя теста — это текст плана или журнала, а не код.
+# См. «ЧЕГО НЕ ЛОВИТ».
 SEARCH_EXCLUDE=(
     ':(exclude)scripts/fixtures/plans'
     ':(exclude)scripts/plan.test.sh'
+    ':(exclude)docs/tasks'
 )
 
 die() {
@@ -267,6 +273,20 @@ matches() {
     printf '%s' "$1" | grep -qE "$2"
 }
 
+# Путь пишется от корня репозитория. Ведущий «/» и сегмент «..» выводят план за
+# дерево, и проверки, которые должны были бы это поймать, молчат: существование
+# без --at считается от корня рабочего каталога, а границы плана такой путь
+# авторизуют сами — граница «../**» покрывает «../..». Отсюда отказ до
+# остальных проверок: разбирать путь, которого в репозитории быть не может,
+# незачем, а file_line_count на нём превращает отчёт валидатора — он едет
+# комментарием в публичную issue — в ответ о файле на раннере.
+#
+# Условие здесь одно на оба места, где путь приходит из плана: files и
+# current_state. Второй список тех же двух признаков разъехался бы с первым.
+escapes_tree() {
+    [ "${1#/}" != "$1" ] || matches "$1" '(^|/)\.\.(/|$)'
+}
+
 # Единственный способ звать jq в этом скрипте. На Windows jq отдаёт CRLF, и
 # хвостовой возврат каретки превращал бы сравнение путей и идентификаторов в
 # ложное: `scripts/**` и `scripts/**` с CR — разные строки, а на глаз
@@ -375,9 +395,15 @@ check_form() {
 # Содержательные проверки.
 # ------------------------------------------------------------------
 check_current_state() {
-    local path line observation lines
+    local path line observation lines rows
+    rows="$(pjq ".current_state[] | [.path, (.line | tostring), .observation] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (current_state).'
     while IFS="$SEP" read -r path line observation; do
         [ -z "$path" ] && continue
+        if escapes_tree "$path"; then
+            report "наблюдение «как устроено сейчас» ссылается на путь вне репозитория: $path — путь пишется от корня, без ведущего «/» и без сегмента «..»"
+            continue
+        fi
         if ! path_exists "$path"; then
             report "наблюдение «как устроено сейчас» ссылается на несуществующий путь: $path"
             continue
@@ -388,7 +414,7 @@ check_current_state() {
         if [ -n "$lines" ] && [ "$line" -gt "$lines" ]; then
             report "наблюдение ссылается на строку $line, а в $path строк $lines"
         fi
-    done < <(pjq ".current_state[] | [.path, (.line | tostring), .observation] | $JOIN" "$PLAN")
+    done <<< "$rows"
 }
 
 check_flag() {
@@ -402,13 +428,14 @@ check_flag() {
 }
 
 check_files() {
-    local path action owner protected why boundary covered
+    local path action owner protected why boundary covered rows
     local total=0
     local -a boundaries=()
 
+    rows="$(pjq '.boundaries[]' "$PLAN")" || die 'Разбор плана не отработал (boundaries).'
     while IFS= read -r boundary; do
         [ -n "$boundary" ] && boundaries+=("$boundary")
-    done < <(pjq '.boundaries[]' "$PLAN")
+    done <<< "$rows"
 
     local allow_protected allow_contract destructive
     allow_protected="$(pjq '.flags.allow_protected' "$PLAN")"
@@ -417,18 +444,15 @@ check_files() {
 
     local seen_protected=0 seen_contract=0 seen_migration=0
 
+    rows="$(pjq ".files[] | [.path, .action, .owner, (.protected | tostring), .why] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (files).'
     while IFS="$SEP" read -r path action owner protected why; do
         [ -z "$path" ] && continue
         total=$((total + 1))
 
-        # Путь пишется от корня репозитория. Ведущий «/» и сегмент «..»
-        # выводят план за дерево, и обе проверки, которые должны были бы это
-        # поймать, молчат: существование без --at считается от корня рабочего
-        # каталога, а границы плана такой путь авторизуют сами — граница
-        # «../**» покрывает «../..». Поэтому отказ здесь, до остальных
-        # проверок: разбирать границы у пути, которого в репозитории быть не
-        # может, незачем.
-        if [ "${path#/}" != "$path" ] || matches "$path" '(^|/)\.\.(/|$)'; then
+        # Условие вынесено в escapes_tree — там же причина, по которой отказ
+        # стоит до остальных проверок.
+        if escapes_tree "$path"; then
             report "путь вне репозитория: $path — путь пишется от корня, без ведущего «/» и без сегмента «..»"
             continue
         fi
@@ -472,7 +496,7 @@ check_files() {
 
         matches "$path" "$CONTRACT_RE" && seen_contract=1
         matches "$path" "$MIGRATION_RE" && seen_migration=1
-    done < <(pjq ".files[] | [.path, .action, .owner, (.protected | tostring), .why] | $JOIN" "$PLAN")
+    done <<< "$rows"
 
     # Класс 6. Флаг и пути сверяются в обе стороны: заявленный без повода флаг
     # просит у человека метку, которая ничего не разрешает.
@@ -486,18 +510,21 @@ check_files() {
 }
 
 check_acceptance() {
-    local unverifiable id criterion method evidence
+    local unverifiable id criterion method evidence rows
     local -a ids=()
     unverifiable="$(pjq '.properties.acceptance["x-unverifiable"]' "$SCHEMA")"
     [ -n "$unverifiable" ] && [ "$unverifiable" != 'null' ] \
         || die 'В схеме нет значения x-unverifiable: различать «способа нет» и «забыли» стало нечем.'
 
     local -a covered=()
+    rows="$(pjq '.tests[].covers[]' "$PLAN")" || die 'Разбор плана не отработал (tests[].covers).'
     while IFS= read -r id; do
         [ -n "$id" ] && covered+=("$id")
-    done < <(pjq '.tests[].covers[]' "$PLAN")
+    done <<< "$rows"
 
     local found c
+    rows="$(pjq ".acceptance[] | [.id, .criterion, .method, .evidence] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (acceptance).'
     while IFS="$SEP" read -r id criterion method evidence; do
         [ -z "$id" ] && continue
         ids+=("$id")
@@ -528,12 +555,14 @@ check_acceptance() {
             fi
         done
         [ "$found" -eq 1 ] || report "пункт приёмки «$id» не покрыт ни одним тестом"
-    done < <(pjq ".acceptance[] | [.id, .criterion, .method, .evidence] | $JOIN" "$PLAN")
+    done <<< "$rows"
 
     # Обратная сторона класса 4. Опечатка в tests[].covers ссылается в пустоту
     # и молчит, пока каждый настоящий пункт покрыт другим тестом: покрытие
     # выглядит полным, а один тест на самом деле не закрывает ничего.
     local test_name cover
+    rows="$(pjq ".tests[] | .name as \$n | .covers[] | [\$n, .] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (tests[].name + covers).'
     while IFS="$SEP" read -r test_name cover; do
         [ -z "$cover" ] && continue
         found=0
@@ -545,11 +574,13 @@ check_acceptance() {
         done
         [ "$found" -eq 1 ] \
             || report "тест «$test_name» покрывает несуществующий пункт приёмки: «$cover»"
-    done < <(pjq ".tests[] | .name as \$n | .covers[] | [\$n, .] | $JOIN" "$PLAN")
+    done <<< "$rows"
 }
 
 check_tests() {
-    local name file new behavior hits
+    local name file new behavior hits rows
+    rows="$(pjq ".tests[] | [.name, .file, (.new | tostring), .behavior] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (tests).'
     while IFS="$SEP" read -r name file new behavior; do
         [ -z "$name" ] && continue
         [ "$new" = 'true' ] || continue
@@ -560,7 +591,7 @@ check_tests() {
         if [ -n "$hits" ]; then
             report "тест объявлен новым, но имя уже встречается: $name — в $hits"
         fi
-    done < <(pjq ".tests[] | [.name, .file, (.new | tostring), .behavior] | $JOIN" "$PLAN")
+    done <<< "$rows"
 }
 
 check_dependency() {

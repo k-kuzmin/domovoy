@@ -334,6 +334,27 @@ expect_no_output 'путь вне границ задачи: /etc/hosts'
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Наблюдение за деревом репозитория отвергается тем же условием'
+# Путь из current_state уходил в path_exists и file_line_count без этой
+# проверки, и без --at обе ветки считают от корня рабочего каталога. Отчёт
+# валидатора едет комментарием в публичную issue, то есть строка «в <путь вне
+# дерева> строк N» отвечает на вопрос о файле раннера. Номер строки взят
+# заведомо большим: сценарий обязан краснеть одинаково и там, где файл вне
+# дерева существует, и там, где его нет.
+run_validate "$(mutate '
+    .current_state[0].path = "../home-agent-source/tz-home-agent.md"
+    | .current_state[0].line = 999999')"
+expect_status 1
+expect_output 'путь вне репозитория: ../home-agent-source/tz-home-agent.md'
+expect_no_output 'а в ../home-agent-source/tz-home-agent.md строк'
+
+run_validate "$(mutate '.current_state[0].path = "/etc/hosts" | .current_state[0].line = 999999')"
+expect_status 1
+expect_output 'путь вне репозитория: /etc/hosts'
+expect_no_output 'а в /etc/hosts строк'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Класс 3: защищённая зона оформлена неверно, два подслучая'
 run_validate "$(mutate '.files[0].protected = false | .files[2].owner = "implement"')"
 expect_status 1
@@ -619,6 +640,34 @@ else
     expect_status 1
     expect_output 'тест объявлен новым, но имя уже встречается'
 fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Отказ разбора плана роняет валидатор, а не зеленит его молча'
+# Содержательные циклы читали план подстановкой процесса, а pipefail на неё не
+# распространяется: умерший jq отдал бы циклу ноль строк — ни одного нарушения
+# и «План сходится» кодом 0 на плане, который никто не проверял. Подставной jq
+# отказывает ровно на одном запросе, поэтому форма разбирается настоящим и
+# проходит, а падает первый содержательный цикл.
+SHIM_DIR="$SANDBOX/bin"
+mkdir -p "$SHIM_DIR"
+JQ_REAL="$(command -v jq)"
+cat > "$SHIM_DIR/jq" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    case "\$arg" in
+        *current_state*) exit 3 ;;
+    esac
+done
+exec "$JQ_REAL" "\$@"
+SHIM
+chmod +x "$SHIM_DIR/jq"
+
+OUTPUT="$(PATH="$SHIM_DIR:$PATH" bash "$CHECK" validate "$CANON" 2>&1)"
+STATUS=$?
+expect_status 2
+expect_output 'Разбор плана не отработал'
+expect_no_output 'План сходится'
 end_case
 
 # ------------------------------------------------------------------
