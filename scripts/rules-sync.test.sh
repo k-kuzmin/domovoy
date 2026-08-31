@@ -621,6 +621,333 @@ expect_output 'граница команд не подключена'
 end_case
 
 
+# ------------------------------------------------------------------
+# Сценарий 25. Незакавыченное значение верхнего уровня содержит «: ».
+#
+# Так выглядит правка описания шага, после которой фронтматер перестаёт
+# разбираться: для YAML это вложенное отображение, а не текст, харнесс
+# определение не загружает и тип шага пропадает из доступных. Наблюдено на
+# #97 — все проверки репозитория при этом возвращали ноль.
+# ------------------------------------------------------------------
+begin_case 'проверка 3в: незакавыченный скаляр с двоеточием в значении'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+description: Триаж задачи — вердикт о пригодности и то, чего в задаче нет: вопросы владельцу.
+tools: Read
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'незакавыченное значение ключа «description»'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 26. То же двоеточие, но значение в кавычках — законная запись.
+#
+# Различающий случай, ради которого правило звучит «незакавыченный скаляр», а
+# не «скаляр»: в кавычках двоеточие для YAML — часть текста, а не разделитель.
+# Правило без этой оговорки роняло бы законную запись, и неважно, лежит такая
+# в репозитории сегодня или появится завтра: фикстура проверяет правило, а не
+# состояние дерева.
+# ------------------------------------------------------------------
+begin_case 'проверка 3в: закавыченный скаляр с двоеточием — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+description: 'Триаж задачи — вердикт о пригодности и то, чего в задаче нет: вопросы владельцу.'
+tools: Read
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 27. Двоеточие во вложенном значении — не верхний уровень.
+#
+# Проверка смотрит только ключи нулевого отступа, и это её названная
+# граница: команда хука с двоеточием законна и краснеть на ней нельзя.
+# Признак без привязки к началу строки завалил бы каждое определение с
+# подключённой границей команд.
+# ------------------------------------------------------------------
+begin_case 'проверка 3в: двоеточие во вложенном значении — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+
+# ------------------------------------------------------------------
+# Сценарий 28. Блок hooks: разбирается как YAML, но вложенный hooks: лежит
+# рядом с PreToolUse:, а не внутри элемента с матчером.
+#
+# Проверка 3б такое определение проходит целиком: PreToolUse: на месте, строка
+# «- matcher: Bash» на месте, вызов границы и список команд на месте — она
+# ищет строки текстом и к отступу нечувствительна. Харнесс при этом читает
+# hooks.PreToolUse[].hooks, не находит там ничего и хук не подключает. Отказ
+# открытый: шаг доступен, Bash выдан, границы команд нет.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: вложенный hooks: лежит вне элемента с матчером'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+  hooks:
+    - type: command
+      command: >-
+        bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+        'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'вне списка под ключом PreToolUse'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 29. Весь блок хука уехал на уровень ниже — лежит под чужим
+# ключом. YAML это разбирает, харнесс на верхнем уровне hooks: не находит.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: блок hooks: не на верхнем уровне фронтматера'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+settings:
+  hooks:
+    PreToolUse:
+      - matcher: Bash
+        hooks:
+          - type: command
+            command: >-
+              bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+              'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'не лежит на верхнем уровне'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 30. Структура безупречна, но вызов границы висит на другом
+# событии: под PreToolUse: пустышка, а step-bash-allow.sh — под PostToolUse:.
+#
+# Проверка 3б смотрит текст от первого PreToolUse: до конца фронтматера, и
+# литерал границы находит в чужом блоке. Поэтому 3г ищет не «где-то есть
+# правильная цепочка», а цепочку того самого элемента, в котором лежит вызов
+# границы: иначе достаточно приписать рядом безупречный по форме блок.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: вызов границы подвешен к другому событию'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: echo
+  PostToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output 'вне списка под ключом PreToolUse'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 31. Законный вариант записи: элементы списка стоят на том же
+# отступе, что и ключ, которому принадлежат.
+#
+# Для YAML это ровно та же структура, что и с отступом, и харнесс её грузит.
+# Правило «элемент вложен глубже ключа» завалило бы такую запись — а проверка,
+# краснеющая на правильном определении, кончается тем, что её обходят.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: список на отступе ключа — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+  - matcher: Bash
+    hooks:
+    - type: command
+      command: >-
+        bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+        'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 32. Матчер опознан по имени ключа, а не по значению: под
+# PreToolUse: два элемента, у первого matcher: Bash с безобидной командой, у
+# второго matcher: Read — и вызов границы лежит именно во втором.
+#
+# Проверка 3б сверяет матчер текстом по всему блоку и находит «- matcher: Bash»
+# в чужом элементе. Цепочка 3г при этом считается от вызова границы и упирается
+# в элемент с matcher: Read — если значение не сверять, элемент считается
+# годным. Харнесс вешает границу на Read: Bash у шага есть, границы команд нет.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: вызов границы висит на матчере другого инструмента'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: echo
+    - matcher: Read
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'нет matcher: Bash'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 33. Зеркало сценария 29: блок hooks: на верхнем уровне, но
+# PreToolUse: лежит не прямо под ним, а через промежуточный ключ.
+#
+# YAML это разбирает, 3б проходит целиком, а харнесс читает hooks.PreToolUse и
+# глубже не заглядывает — хук не подключается. Отказ открытый, как и в
+# сценарии 32.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: PreToolUse: не прямой потомок блока hooks:'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+  settings:
+    PreToolUse:
+      - matcher: Bash
+        hooks:
+          - type: command
+            command: >-
+              bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+              'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'глубже прямого потомка'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 34. Комментарий YAML в колонке 0 внутри фронтматера — законная
+# запись, и определение с ней харнесс грузит.
+#
+# Для обхода 3г такая строка выглядит ключом нулевого отступа и обрывает его:
+# поиск PreToolUse: идёт, пока строки вложены в блок hooks:. Проверка,
+# краснеющая на комментарии, кончается тем, что комментарии перестают писать
+# либо саму проверку обходят.
+# ------------------------------------------------------------------
+begin_case 'проверка 3г: комментарий в колонке 0 — сверка молчит'
+new_fixture
+cat > "$repo/.claude/agents/step-triage.md" <<'EOF'
+---
+name: step-triage
+tools: Read, Glob, Grep, Bash
+hooks:
+# Граница команд шага: список правится вместе с правилами шага.
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: >-
+            bash "$CLAUDE_PROJECT_DIR/scripts/step-bash-allow.sh"
+            'gh issue view' 'grep'
+---
+
+Правила шага — `docs/rules/triage.md`.
+Чтение объёмного вывода — `docs/rules/reading.md`.
+EOF
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
 
