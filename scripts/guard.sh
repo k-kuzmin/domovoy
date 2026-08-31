@@ -244,49 +244,35 @@ select_lines() {
 # ------------------------------------------------------------------
 # Проверка 1. Защищённые пути
 #
-# Список синхронизирован с .github/CODEOWNERS — он источник истины.
-# Порядок и группировка повторяют CODEOWNERS, чтобы расхождение было видно
-# глазами при сравнении двух файлов.
+# Список лежит в scripts/protected-paths.sh: у него два потребителя — этот
+# гейт и валидатор плана, — а копия в каждом была бы четвёртым описанием одного
+# множества при трёх существующих (CODEOWNERS, раздел в CLAUDE.md, машинная
+# форма). Путь считается от каталога самого скрипта, а не от рабочего: гейт
+# запускают и `bash scripts/guard.sh` из корня, и по абсолютному пути из
+# харнесса.
 # ------------------------------------------------------------------
-PROTECTED_PATTERNS=(
-    # --- Конфигурация качества и сборки ---
-    'Directory\.Build\.props'
-    'Directory\.Packages\.props'
-    '\.editorconfig'
-    'global\.json'
-    '(.+/)?[^/]+\.ruleset'
-    # --- Сам пайплайн ---
-    '\.github/.+'
-    '\.githooks/.+'
-    'scripts/.+'
-    # --- Правила проекта и принятые решения ---
-    '\.claude/CLAUDE\.md'
-    '\.claude/agents/.+'
-    'docs/rules/.+'
-    'docs/decisions/.+'
-    # --- Поиск секретов ---
-    '\.gitleaks\.toml'
-    # --- Данные ---
-    'src/Domovoy\.Data/Migrations/.+'
-    # --- Контракт API и генерация клиента ---
-    'contracts/.+'
-    'src/Domovoy\.Mobile\.Core/Generated/.+'
-    # --- Платформенное и подписи ---
-    'src/Domovoy\.Mobile\.App/Platforms/.+'
-    'src/Domovoy\.Mobile\.App/Resources/.+'
-    '(.+/)?[^/]+\.keystore'
-    '(.+/)?[^/]+\.mobileprovision'
-    '(.+/)?[^/]+\.p12'
-    '(.+/)?google-services\.json'
-    '(.+/)?GoogleService-Info\.plist'
-    '(.+/)?AndroidManifest\.xml'
-    '(.+/)?Info\.plist'
-)
+GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATHS_FILE="$GUARD_DIR/protected-paths.sh"
 
-PROTECTED_RE="$(
-    IFS='|'
-    printf '^(%s)$' "${PROTECTED_PATTERNS[*]}"
-)"
+if [ ! -f "$PATHS_FILE" ]; then
+    printf 'Не найден список защищённых путей: %s\n' "$PATHS_FILE" >&2
+    exit 2
+fi
+
+# shellcheck source=scripts/protected-paths.sh
+. "$PATHS_FILE"
+
+# `set -e` здесь намеренно выключен, чтобы гейт печатал все нарушения за один
+# прогон. Поэтому неудачное источение само по себе прогон не остановит: без
+# этой проверки проверка 1 продолжилась бы с пустым списком и пропустила бы
+# что угодно, оставшись зелёной. Пустой список — сломанная проверка, а не
+# отсутствие защищённых путей.
+if [ "${#PROTECTED_PATTERNS[@]}" -eq 0 ]; then
+    printf 'Список защищённых путей пуст: %s\n' "$PATHS_FILE" >&2
+    exit 2
+fi
+
+PROTECTED_RE="$(protected_regex)"
 
 PROTECTED_HIT="$WORK/protected.txt"
 : > "$PROTECTED_HIT"

@@ -19,6 +19,7 @@ hooks:
             'bash scripts/guard.test.sh' 'bash scripts/step-bash-allow.test.sh'
             'bash scripts/test-count-invariant.sh'
             'bash scripts/test-count-invariant.test.sh'
+            'bash scripts/plan.sh' 'bash scripts/plan.test.sh'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.

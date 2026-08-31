@@ -1,0 +1,286 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "scripts/plan-schema.json",
+  "title": "Машиночитаемый план реализации",
+  "description": "Единственный источник формы плана. Читают её трое: шаг планирования (заполняет), scripts/plan.sh (берёт отсюда required, properties, enum и заголовки разделов), scripts/plan.test.sh (сверяет полноту согласованной фикстуры). Своей копии списка полей нет ни у кого: копия разъезжается молча. Разделы и их порядок — docs/rules/plan.md; заголовок раздела живёт в x-title, номер в x-section, поле без раздела печатается внутри раздела из x-render-into.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "issue",
+    "current_state",
+    "approach",
+    "files",
+    "boundaries",
+    "flags",
+    "tests",
+    "acceptance",
+    "risks",
+    "out_of_scope"
+  ],
+  "properties": {
+    "issue": {
+      "type": "integer",
+      "description": "Номер задачи, к которой относится план.",
+      "x-render-into": 0
+    },
+    "current_state": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 1,
+      "x-title": "Как устроено сейчас",
+      "description": "Наблюдения о том, что уже есть в коде: путь, строка, что именно там увидено. Раздел показывает, что существующее прочитано, поэтому наблюдение без ссылки на файл сюда не годится — валидатор проверяет, что путь существует, а номер строки не выходит за длину файла.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "line", "observation"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Путь от корня репозитория."
+          },
+          "line": {
+            "type": "integer",
+            "description": "Номер строки. 0 — наблюдение о файле целиком."
+          },
+          "observation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Что именно там увидено. Не пересказ назначения файла, а факт, на который опирается план."
+          }
+        }
+      }
+    },
+    "approach": {
+      "type": "object",
+      "x-section": 2,
+      "x-title": "Подход",
+      "description": "Одно решение, а не перечень вариантов. Отвергнутые называются строкой с причиной.",
+      "additionalProperties": false,
+      "required": ["summary", "rejected"],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Выбранное решение целиком."
+        },
+        "rejected": {
+          "type": "array",
+          "description": "Отвергнутые варианты. Пустой массив допустим: вариант был один.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["option", "reason"],
+            "properties": {
+              "option": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Отвергнутый вариант."
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Почему отвергнут."
+              }
+            }
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 3,
+      "x-title": "Файлы",
+      "description": "Что создаётся, что меняется, что удаляется, по каждому — зачем, кто правит и защищён ли путь.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "action", "owner", "protected", "why"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Путь от корня репозитория."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["create", "modify", "delete"],
+            "description": "Что с файлом делается. Для modify и delete валидатор проверяет, что путь существует."
+          },
+          "owner": {
+            "type": "string",
+            "enum": ["implement", "orchestrator"],
+            "description": "Кто правит файл. Конфигурацию прав шага (.claude/agents/**) правит только orchestrator: метка снимает гейт в CI, но согласие человека внутрь субагента не передаёт — запись 0018."
+          },
+          "protected": {
+            "type": "boolean",
+            "description": "Путь из раздела «Файлы, которые агент не трогает». Отметка сверяется со списком scripts/protected-paths.sh в обе стороны."
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Зачем этот файл в плане."
+          }
+        }
+      }
+    },
+    "boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "x-render-into": 3,
+      "x-label": "Границы задачи",
+      "description": "Пути и маски, за которые план не выходит. Поддержаны * (внутри одного сегмента) и ** (любая глубина). Каждый путь из files обязан попадать хотя бы под одну границу.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "flags": {
+      "type": "object",
+      "x-render-into": 3,
+      "x-label": "Флаги",
+      "description": "Явные объявления плана. Каждый флаг, кроме new_dependency, сверяется с путями в обе стороны: не объявлен при подпадающем пути — нарушение, объявлен без единого подпадающего пути — тоже.",
+      "additionalProperties": false,
+      "required": [
+        "allow_protected",
+        "allow_contract",
+        "destructive_migration",
+        "new_dependency",
+        "new_dependency_reason"
+      ],
+      "properties": {
+        "allow_protected": {
+          "type": "boolean",
+          "description": "План правит защищённые пути, PR нужна метка agent/allow-protected."
+        },
+        "allow_contract": {
+          "type": "boolean",
+          "description": "План меняет контракт API, PR нужна метка agent/allow-contract."
+        },
+        "destructive_migration": {
+          "type": "boolean",
+          "description": "План трогает миграции БД, PR нужна метка agent/allow-destructive-migration."
+        },
+        "new_dependency": {
+          "type": "boolean",
+          "description": "План вводит новую библиотеку. Правила проекта требуют обоснования в комментарии к issue до установки."
+        },
+        "new_dependency_reason": {
+          "type": "string",
+          "description": "Обоснование новой зависимости со ссылкой на комментарий issue (#номер или URL). Пустая строка при new_dependency=false."
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 4,
+      "x-title": "Тесты",
+      "description": "Какие тесты появятся и какое поведение каждый проверяет. Тест, проходящий при сломанной реализации, хуже отсутствующего, поэтому behavior формулирует поведение, а не «покрытие класса».",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "file", "new", "covers", "behavior"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Имя теста или сценария так, как оно будет выглядеть в коде."
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Файл, в котором тест живёт."
+          },
+          "new": {
+            "type": "boolean",
+            "description": "Тест появляется этой задачей. Валидатор проверяет, что имени ещё нет в дереве: существующий тест, выданный за новый, — приписанная работа."
+          },
+          "covers": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Идентификаторы пунктов контракта приёмки, которые этот тест закрывает.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "behavior": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Какое поведение проверяется."
+          }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 5,
+      "x-title": "Контракт приёмки",
+      "x-unverifiable": "непроверяем",
+      "description": "Строка на каждый пункт критерия готовности из issue: пункт, способ проверки, доказательство. Пустая ячейка не допускается — она не отличает «способа нет, и вот почему» от «забыли заполнить». Способа нет — в method стоит значение из x-unverifiable, а в evidence причина, почему его нет.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "criterion", "method", "evidence"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Короткий идентификатор пункта, на который ссылаются tests[].covers."
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Пункт критерия готовности из issue."
+          },
+          "method": {
+            "type": "string",
+            "description": "Команда с ожидаемым результатом, запрос или наблюдение. Либо значение из x-unverifiable."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Что считается доказательством: вывод команды, число, цитата файл:строка. При непроверяем — причина, почему способа нет."
+          }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 6,
+      "x-title": "Риски",
+      "description": "Что может пойти не так и что с этим делается.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["risk", "mitigation"],
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Что может пойти не так."
+          },
+          "mitigation": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Мера. «Быть внимательным» мерой не считается."
+          }
+        }
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "minItems": 1,
+      "x-section": 7,
+      "x-title": "Что не входит",
+      "description": "Границы задачи словами. Замеченное попутно — новая issue, а не незапланированная правка.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

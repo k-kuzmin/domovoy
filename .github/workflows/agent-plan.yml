@@ -72,6 +72,18 @@ jobs:
             делать, когда план составить нельзя. Прочитай файл целиком до того,
             как начнёшь: это источник, а не пересказ.
 
+            Форма плана — `scripts/plan-schema.json`. Прочитай схему целиком и
+            верни план полем `plan_json`: строкой, в которой лежит JSON по этой
+            схеме. Человекочитаемый комментарий соберётся из структуры
+            автоматикой, второго канала прозой нет — раздел, которому не нашлось
+            поля, в опубликованный план не попадёт вовсе. Обязательные поля,
+            допустимые значения и смысл каждого поля описаны в самой схеме.
+
+            План проверяется детерминированным валидатором до публикации:
+            несуществующий путь, путь вне границ задачи, защищённый путь без
+            отметки, непокрытый пункт приёмки, существующий тест, выданный за
+            новый, — всё это отказ, а не замечание на будущее.
+
             Правила проекта — `.claude/CLAUDE.md`, читай их из репозитория.
             Обязательны «Архитектура», «Границы работы агента», «Правила
             синхронизации», «Definition of Done».
@@ -88,7 +100,10 @@ jobs:
             # Планирование только читает: ни Edit, ни Write, ни Bash.
             --allowedTools 'Read,Glob,Grep'
             --max-turns 25
-            --json-schema '{"type":"object","properties":{"plan_markdown":{"type":"string","description":"Полный текст плана в markdown, разделами из docs/rules/plan.md в их порядке"},"blocked":{"type":"boolean","description":"План составить нельзя, нужен ответ человека"},"blocked_reason":{"type":"string","description":"Чего не хватает; пустая строка при blocked=false"}},"required":["plan_markdown","blocked","blocked_reason"]}'
+            # Обёртка остаётся той же по форме, что работала до этого:
+            # строковое поле плюс blocked и blocked_reason. Схема плана в
+            # аргумент не интерполируется — шаг читает её файлом.
+            --json-schema '{"type":"object","properties":{"plan_json":{"type":"string","description":"Машиночитаемый план: строка с JSON по форме scripts/plan-schema.json. Поля, обязательность и допустимые значения берутся из схемы"},"blocked":{"type":"boolean","description":"План составить нельзя, нужен ответ человека"},"blocked_reason":{"type":"string","description":"Чего не хватает; пустая строка при blocked=false"}},"required":["plan_json","blocked","blocked_reason"]}'
 
       - name: Публикация плана
         env:
@@ -124,21 +139,78 @@ jobs:
             exit 0
           fi
 
+          printf '%s' "$PLAN" | jq -r '.plan_json' > plan.json
+
+          if ! jq -e . plan.json >/dev/null 2>&1; then
+            echo '::error::Поле plan_json не разбирается как JSON.'
+            exit 1
+          fi
+
+          # Валидатор до публикации и до апрува. Красный результат публикуется
+          # вместе с планом: читать непрошедший план полезно, согласовывать —
+          # нельзя.
+          set +e
+          bash scripts/plan.sh validate plan.json > validation.txt 2>&1
+          validation_status=$?
+          bash scripts/plan.sh render plan.json > rendered.md 2>&1
+          render_status=$?
+          set -e
+
+          if [ "$render_status" -ne 0 ]; then
+            echo '::error::Рендер плана отказал — см. вывод ниже.'
+            cat rendered.md
+            exit 1
+          fi
+
           {
             echo '## План реализации'
             echo
-            printf '%s' "$PLAN" | jq -r '.plan_markdown'
+            cat rendered.md
             echo
             echo '---'
             echo
-            # Кавычки у разделителя обязательны: внутри обратные кавычки
-            # markdown, и без них shell попытается их выполнить.
-            cat <<'FOOTER'
+
+            if [ "$validation_status" -ne 0 ]; then
+              echo '### Валидатор плана не пропустил план'
+              echo
+              echo '```'
+              cat validation.txt
+              echo '```'
+              echo
+              echo 'Метка `plan/proposed` не поставлена: согласовывать план с'
+              echo 'этими расхождениями рано. Правки — новым планом.'
+              echo
+            fi
+
+            echo '<details>'
+            echo '<summary>Машиночитаемая форма плана</summary>'
+            echo
+            echo '```json'
+            cat plan.json
+            echo '```'
+            echo
+            echo '</details>'
+            echo
+
+            if [ "$validation_status" -eq 0 ]; then
+              # Кавычки у разделителя обязательны: внутри обратные кавычки
+              # markdown, и без них shell попытается их выполнить.
+              cat <<'FOOTER'
           Согласны — поставьте метку `plan/approved`, реализация начнётся сама.
           Не согласны — напишите в комментарии, что менять, и снимите
           `plan/proposed`: план будет составлен заново.
           FOOTER
+            fi
           } > body.md
 
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body-file body.md
+
+          if [ "$validation_status" -ne 0 ]; then
+            gh issue edit "$ISSUE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --add-label 'agent/needs-clarification' \
+              --remove-label 'agent/ready'
+            exit 1
+          fi
+
           gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label 'plan/proposed'
