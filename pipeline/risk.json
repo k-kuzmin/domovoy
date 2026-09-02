@@ -1,7 +1,6 @@
 {
   "version": 1,
-  "about": "Таблица сигналов риск-скора (фаза 2 ТЗ советника). Единственный экземпляр: скрипт scripts/risk-score.sh не содержит ни одного пути, слова и порога. Формат JSON, а не pipeline/risk.yaml из буквы ТЗ — обоснование в docs/decisions/0019-risk-config-json-not-yaml.md.",
-  "levels": ["low", "medium", "high"],
+  "about": "Таблица сигналов риск-скора (фаза 2 ТЗ советника). Единственный экземпляр: скрипт scripts/risk-score.sh не содержит ни одного пути, слова и порога. Формат JSON, а не pipeline/risk.yaml из буквы ТЗ — обоснование в docs/decisions/0019-risk-config-json-not-yaml.md. Набор уровней low|medium|high полем конфига не задаётся: он зашит в скрипт, и поле levels здесь стояло, ничего не меняя, — обещание настройки, которой нет, хуже её отсутствия.",
   "thresholds": {
     "diff_lines": 1538,
     "diff_files": 11,

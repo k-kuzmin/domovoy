@@ -443,6 +443,30 @@ fi
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Путь с кириллицей и пробелом доходит до движка обеими половинами сигнала'
+# git по умолчанию (core.quotepath=true) отдаёт не-ASCII путь как
+# «"src/Domovoy.Ha/\320\235…"»: ни глоб зоны, ни область keyword_paths такую
+# строку не опознают — ложное молчание сигнала уровня high. Пробел в имени —
+# вторая половина того же: заголовок «+++ b/путь с пробелом» обрезался по
+# первому пробелу, и строка «слово:» называла путь, которого нет.
+new_repo
+put 'src/Domovoy.Ha/Настройки файла.cs' \
+    'public sealed class НастройкиФайла' \
+    '{' \
+    '    // Разбор заголовка Authorization остаётся в слое Ha.' \
+    '}'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level high
+expect_signal sensitive-area
+expect_output 'путь: src/Domovoy.Ha/Настройки файла.cs'
+# Путь пинуется целиком: обрезанный по пробелу он всё равно попал бы в область
+# «src/**», строка «слово:» напечаталась бы — и соврала бы про файл.
+expect_output 'слово: Authoriz — src/Domovoy.Ha/Настройки файла.cs'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Настоящие строки без слов чувствительной зоны внутри той же области молчат'
 new_repo
 if put_from_tree 'tests/Domovoy.Tests/MobileLayeringTests.cs' \
@@ -528,6 +552,42 @@ MUT_NO_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then d
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_SCOPE"
 expect_status 2
 expect_output 'keyword_paths'
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Пустой или нестроковый шаблон пути роняет скрипт кодом 2'
+# Проверка непустой области смотрела только на length, и «keyword_paths: [""]»
+# её проходил: длина 1. Дальше пустой элемент выбрасывается сборкой регулярки,
+# альтернатива выходит пустой, и половина сигнала выключается молча — код 0, ни
+# строки «слово:», ни жалобы. Тот же класс, что порог, переставший быть числом.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_BLANK_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keyword_paths = [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_SCOPE"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+MUT_BLANK_PATH="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .paths = ["src/**", ""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_PATH"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+MUT_NUMBER_PATH="$(mutate_config '.signals |= map(if .id == "db-migration" then .paths = [42] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NUMBER_PATH"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+# Строка вместо массива роняет саму программу проверки — и это законный отказ,
+# лишь бы не код 0: разбор, который не состоялся, не считается «нарушений нет».
+MUT_STRING_PATHS="$(mutate_config '.signals |= map(if .id == "db-migration" then .paths = "src/**" else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_STRING_PATHS"
+expect_status 2
 expect_no_output 'Уровень:'
 end_case
 
@@ -940,6 +1000,38 @@ MUT_NO_THRESHOLDS="$(mutate_config 'del(.thresholds)')"
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_THRESHOLDS"
 expect_status 0
 expect_output 'Порог размера в конфиге не задан'
+expect_level low
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Нечисловой процентиль и незнакомый метод процентиля роняют скрипт кодом 2'
+# Те же два поля читаются тем же read, что и пороги. Нечисловой процентиль
+# уезжает в «awk -v p=…»: p/100 даёт 0, индекс зажимается в 1, и первый проход
+# history печатает минимум корпуса под подписью p75 — то есть порог, на котором
+# держится единственный сработавший в истории сигнал, берётся с потолка молча.
+# Метод, которым не считали, — то же по последствиям: nearest-rank зашит в
+# percentile(), значение «linear» поменяло бы подпись отчёта, а не расчёт.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_PCT_TEXT="$(mutate_config '.thresholds.percentile = "семьдесят пять"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_TEXT"
+expect_status 2
+expect_output 'Процентиль в конфиге не число'
+expect_no_output 'Уровень:'
+
+MUT_PCT_METHOD="$(mutate_config '.thresholds.percentile_method = "linear"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_METHOD"
+expect_status 2
+expect_output 'nearest-rank'
+expect_no_output 'Уровень:'
+
+# Обоих полей нет вовсе — законно: значения по умолчанию совпадают с тем, чем
+# скрипт считает, и отчёт остаётся правдой.
+MUT_PCT_ABSENT="$(mutate_config 'del(.thresholds.percentile) | del(.thresholds.percentile_method)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_ABSENT"
+expect_status 0
 expect_level low
 end_case
 
