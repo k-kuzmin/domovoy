@@ -18,6 +18,11 @@
 #
 #   src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs — путь и
 #       содержимое зоны авторизации;
+#   src/Domovoy.Ha/ConfiguredEntityAllowList.cs, src/Domovoy.Ha/HaRestClient.cs,
+#   src/Domovoy.Core/Abstractions/IEntityAllowList.cs,
+#   src/Domovoy.Core/Prompts/SystemPromptComposer.cs — пути трёх зон правил
+#       безопасности: allow-list entity_id, белый список call_service, ответы
+#       HA как данные;
 #   tests/Domovoy.Tests/ConfigurationExampleTests.cs:22-27 — настоящие строки с
 #       именами секретных настроек внутри области keyword_paths;
 #   tests/Domovoy.Tests/MobileLayeringTests.cs и
@@ -295,6 +300,13 @@ make_plan() {
 
 FLAGS_NONE='{"allow_protected":false,"allow_contract":false,"destructive_migration":false,"new_dependency":false,"new_dependency_reason":""}'
 
+# Зоны, которым таблица фазы 2 ТЗ фиксирует high — миграции, контракт API,
+# чувствительная область, — ожидают уровень буквально, а не через config_level:
+# сверка уровня из конфига с уровнем из конфига выполняется при любом значении
+# поля, и понижение зоны до low оставило бы сценарий «даёт high» зелёным.
+# Чтение из конфига остаётся там, где уровень зоны не зафиксирован снаружи и
+# может законно меняться: platform-code и прочие medium.
+
 # ------------------------------------------------------------------
 begin_case 'Материал дерева на месте: пины сценариев разрешаются'
 for material in \
@@ -326,7 +338,7 @@ put 'src/Domovoy.Data/DomovoyDbContext.cs' 'public sealed class DomovoyDbContext
 commit_repo 'правка'
 run_score diff HEAD~1 HEAD --repo "$REPO"
 expect_status 0
-expect_level "$(config_level db-migration)"
+expect_level high
 expect_signal db-migration
 expect_output 'путь: src/Domovoy.Data/Migrations/20260101000000_Init.cs'
 expect_no_output 'путь: src/Domovoy.Data/DomovoyDbContext.cs'
@@ -341,7 +353,7 @@ put 'README.md' 'строка документации'
 commit_repo 'правка'
 run_score diff HEAD~1 HEAD --repo "$REPO"
 expect_status 0
-expect_level "$(config_level api-contract)"
+expect_level high
 expect_signal api-contract
 expect_output 'путь: contracts/openapi.yaml'
 expect_output 'путь: src/Domovoy.Mobile.Core/Generated/ApiClient.cs'
@@ -358,7 +370,7 @@ if put_from_tree 'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' 
     commit_repo 'правка'
     run_score diff HEAD~1 HEAD --repo "$REPO"
     expect_status 0
-    expect_level "$(config_level sensitive-area)"
+    expect_level high
     expect_signal sensitive-area
     expect_output 'путь: src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs'
     expect_no_output 'путь: src/Domovoy.Core/Models/HaEntityState.cs'
@@ -369,10 +381,41 @@ if put_from_tree 'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' 
         'src/Domovoy.Core/Models/HaEntityState.cs')"
     run_score plan "$PLAN_AUTH"
     expect_status 0
-    expect_level "$(config_level sensitive-area)"
+    expect_level high
     expect_signal sensitive-area
     expect_output 'путь: src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs'
 fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Три первых зоны правил безопасности опознаются путём на настоящих файлах дерева'
+# Зоны из docs/rules/review-security.md: allow-list entity_id (правило 5,
+# FR-HA-4), белый список call_service (правило 6) и ответы HA как данные, а не
+# инструкции (правило 4, NFR-SEC-6). Каждая — отдельным репозиторием: сработать
+# должна путевая половина, и видно это по строке «путь: …», а не по уровню,
+# который мог бы прийти от слова в том же файле.
+for zone_file in \
+    'src/Domovoy.Ha/ConfiguredEntityAllowList.cs' \
+    'src/Domovoy.Core/Abstractions/IEntityAllowList.cs' \
+    'src/Domovoy.Ha/HaRestClient.cs' \
+    'src/Domovoy.Core/Prompts/SystemPromptComposer.cs'; do
+    new_repo
+    if put_from_tree "$zone_file" "$zone_file"; then
+        commit_repo 'правка'
+        run_score diff HEAD~1 HEAD --repo "$REPO"
+        expect_status 0
+        expect_level high
+        expect_signal sensitive-area
+        expect_output "путь: $zone_file"
+
+        # Тот же путь в режиме plan: до первой строки кода зона уже видна.
+        PLAN_ZONE_FILE="$(make_plan "$FLAGS_NONE" "$zone_file")"
+        run_score plan "$PLAN_ZONE_FILE"
+        expect_status 0
+        expect_level high
+        expect_output "путь: $zone_file"
+    fi
+done
 end_case
 
 # ------------------------------------------------------------------
@@ -387,7 +430,7 @@ if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
     commit_repo 'правка'
     run_score diff HEAD~1 HEAD --repo "$REPO"
     expect_status 0
-    expect_level "$(config_level sensitive-area)"
+    expect_level high
     expect_signal sensitive-area
     expect_output 'слово:'
     expect_output 'tests/Domovoy.Tests/SecretPathsMaterial.cs'
@@ -457,6 +500,11 @@ if put_from_tree 'pipeline/risk.json' 'pipeline/risk.json' \
     expect_status 0
     expect_level_below_high
     expect_signal_silent sensitive-area
+    # Таблица сигналов видна сама себе: правка порогов и уровней даёт medium
+    # конфигурации приложения. Защищённым путём pipeline/** это не делает —
+    # охват гейтом отложен к фазе 7 записью 0019.
+    expect_signal app-configuration
+    expect_output 'путь: pipeline/risk.json'
 fi
 end_case
 
@@ -550,7 +598,9 @@ end_case
 # ------------------------------------------------------------------
 begin_case 'Размер диффа выше порога даёт medium, а на строку ниже порога сигнала нет'
 THRESHOLD_LINES="$(jq -r '.thresholds.diff_lines' "$CONFIG" | tr -d '\r')"
-if [ "$THRESHOLD_LINES" = 'null' ] || [ -z "$THRESHOLD_LINES" ]; then
+THRESHOLD_FILES="$(jq -r '.thresholds.diff_files' "$CONFIG" | tr -d '\r')"
+if [ "$THRESHOLD_LINES" = 'null' ] || [ -z "$THRESHOLD_LINES" ] \
+    || [ "$THRESHOLD_FILES" = 'null' ] || [ -z "$THRESHOLD_FILES" ]; then
     fail_case 'порог размера в pipeline/risk.json не заполнен: прогон history ещё не записал процентиль'
 else
     new_repo
@@ -571,6 +621,45 @@ else
     commit_repo 'правка ниже порога'
     run_score diff HEAD~1 HEAD --repo "$REPO"
     expect_status 0
+    expect_signal_silent diff-size
+    expect_level low
+
+    # Ровно порог сигнала не даёт: сравнение строгое. Точка на границе — не
+    # придирка, а член корпуса: nearest-rank без интерполяции берёт порог из
+    # самой истории, и в таблице прогона PR ровно на пороге уже стоит.
+    new_repo
+    mkdir -p "$REPO/src/Domovoy.Core"
+    seq 1 "$THRESHOLD_LINES" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
+    commit_repo 'правка ровно на пороге строк'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_output "строк изменено $THRESHOLD_LINES"
+    expect_signal_silent diff-size
+    expect_level low
+
+    # Вторая половина сигнала — число файлов. Без неё вся ветка по файлам в
+    # харнессе недостижима: в подслучаях выше файл всегда один, а medium по
+    # числу файлов в корпусе уже случался.
+    new_repo
+    FILES_ABOVE=$((THRESHOLD_FILES + 1))
+    for n in $(seq 1 "$FILES_ABOVE"); do
+        put "src/Domovoy.Core/Bulk$n.cs"
+    done
+    commit_repo 'правка выше порога по файлам'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level "$(config_level diff-size)"
+    expect_signal diff-size
+    expect_output "файлов: $FILES_ABOVE (порог $THRESHOLD_FILES)"
+
+    new_repo
+    for n in $(seq 1 "$THRESHOLD_FILES"); do
+        put "src/Domovoy.Core/Bulk$n.cs"
+    done
+    commit_repo 'правка ровно на пороге файлов'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_output "файлов $THRESHOLD_FILES,"
     expect_signal_silent diff-size
     expect_level low
 fi
@@ -744,21 +833,26 @@ else
         fail_case 'список защищённых путей пуст — сверять нечего'
     else
         PROT_RE="$(protected_regex)"
-        # Ожидаемый уровень берётся из конфига, а не пишется здесь: у зоны
-        # платформенного кода он medium — так эта зона стоит и в таблице фазы 2
-        # ТЗ, — и захардкоженный high проверял бы не сверку списков, а память
-        # автора сценария.
+        # Ожидаемый уровень стоит в третьем поле пары, а не читается из
+        # конфига: сверка уровня из конфига с уровнем из конфига выполнялась бы
+        # при любом значении поля, и понижение зоны миграций или контракта до
+        # low оставило бы сценарий «даёт high» зелёным. У зоны платформенного
+        # кода уровень medium — так она стоит и в таблице фазы 2 ТЗ, — и он
+        # единственный, который законно меняется калибровкой: его сценарий и
+        # читает конфиг.
         for pair in \
-            'src/Domovoy.Data/Migrations/20260101000000_Init.cs|db-migration' \
-            'contracts/openapi.yaml|api-contract' \
-            'src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs|platform-code'; do
+            'src/Domovoy.Data/Migrations/20260101000000_Init.cs|db-migration|high' \
+            'contracts/openapi.yaml|api-contract|high' \
+            "src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs|platform-code|$(config_level platform-code)"; do
             sample="${pair%%|*}"
-            zone_signal="${pair##*|}"
+            zone_rest="${pair#*|}"
+            zone_signal="${zone_rest%%|*}"
+            zone_level="${zone_rest##*|}"
             PLAN_ZONE="$(make_plan "$FLAGS_NONE" "$sample")"
             run_score plan "$PLAN_ZONE"
             expect_status 0
-            if [ "$(first_line)" != "Уровень: $(config_level "$zone_signal")" ]; then
-                fail_case "образец зоны не дал уровень сигнала $zone_signal: $sample"
+            if [ "$(first_line)" != "Уровень: $zone_level" ]; then
+                fail_case "образец зоны не дал уровень $zone_level (сигнал $zone_signal): $sample"
             fi
             expect_signal "$zone_signal"
             if ! printf '%s' "$sample" | grep -qE "$PROT_RE"; then
@@ -804,6 +898,45 @@ expect_no_output 'Уровень: low'
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$SANDBOX/нет-такого-файла.json"
 expect_status 2
 expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Порог не число роняет скрипт кодом 2, а не объявляет крупный дифф низкорисковым'
+# Проверка полей сигналов на thresholds не смотрит, а порог уезжает в
+# арифметику test: «[ 2110 -gt "1538 строк" ]» возвращает 2, оба условия
+# сигнала размера становятся ложными, и дифф любого размера выходит low без
+# единого слова о непрочитанном пороге.
+new_repo
+mkdir -p "$REPO/src/Domovoy.Core"
+# Число берётся от порога, если он прочитался: сценарий убедительнее на диффе,
+# который при живом пороге дал бы medium. Порог не прочитался — об этом уже
+# сообщил случай размера, а здесь хватит любого крупного диффа.
+case "$THRESHOLD_LINES" in
+    '' | *[!0-9]*) BIG_LINES=2000 ;;
+    *) BIG_LINES=$((THRESHOLD_LINES + 1)) ;;
+esac
+seq 1 "$BIG_LINES" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
+commit_repo 'правка выше порога'
+
+MUT_LINES_TEXT="$(mutate_config '.thresholds.diff_lines = "1538 строк"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_LINES_TEXT"
+expect_status 2
+expect_output 'Порог строк в конфиге не число'
+expect_no_output 'Уровень:'
+
+MUT_FILES_TEXT="$(mutate_config '.thresholds.diff_files = "одиннадцать"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_FILES_TEXT"
+expect_status 2
+expect_output 'Порог файлов в конфиге не число'
+expect_no_output 'Уровень:'
+
+# Отсутствие порогов вовсе — законный первый проход, а не поломка: скрипт
+# считает остальные сигналы и говорит, что размер не мерил.
+MUT_NO_THRESHOLDS="$(mutate_config 'del(.thresholds)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_THRESHOLDS"
+expect_status 0
+expect_output 'Порог размера в конфиге не задан'
+expect_level low
 end_case
 
 # ------------------------------------------------------------------

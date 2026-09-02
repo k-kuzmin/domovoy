@@ -191,6 +191,22 @@ IFS="$FS" read -r THRESHOLD_LINES THRESHOLD_FILES PERCENTILE PERCENTILE_METHOD \
         (.thresholds.percentile_method // "nearest-rank")
     ] | join($fs)' "$CONFIG")"
 
+# Пороги — единственные значения конфига, которые уезжают в арифметику test, а
+# `[ 2110 -gt "1538 строк" ]` не ошибка сравнения: test возвращает 2, оба
+# условия сигнала размера становятся ложными, и крупный дифф объявляется low
+# без единой строчки о том, что порог не прочитан. Проверка полей сигналов
+# thresholds не смотрит вовсе, поэтому отбивается здесь — сразу после чтения.
+# «нет» законно: это первый проход, когда порогов ещё не мерили.
+case "$THRESHOLD_LINES" in
+    'нет') ;;
+    '' | *[!0-9]*) die "Порог строк в конфиге не число: «$THRESHOLD_LINES» ($CONFIG)." ;;
+esac
+
+case "$THRESHOLD_FILES" in
+    'нет') ;;
+    '' | *[!0-9]*) die "Порог файлов в конфиге не число: «$THRESHOLD_FILES» ($CONFIG)." ;;
+esac
+
 # ------------------------------------------------------------------
 # Глоб → тело регулярного выражения. Поддержаны * (внутри сегмента) и **
 # (любая глубина) — те же две формы, что у границ плана в scripts/plan.sh.
@@ -385,16 +401,23 @@ collect_diff_facts() {
     FACT_FLAGS=()
     FACT_ADDED=''
 
-    FACT_PATHS="$(git -C "$REPO" diff --name-only --no-ext-diff "$base" "$head")"
+    # Упавший git отдал бы пустой список путей и ноль строк — то есть «сигналов
+    # нет» на диффе, который не прочитан. Здесь стоит `set -uo pipefail` без
+    # `-e`, поэтому код возврата проверяется руками, как у сборщика плана.
+    if ! FACT_PATHS="$(git -C "$REPO" diff --name-only --no-ext-diff "$base" "$head")"; then
+        die "Дифф не прочитан: git diff --name-only $base $head в $REPO — счёт не состоялся."
+    fi
     FACT_FILES="$(count_nonempty "$FACT_PATHS")"
-    FACT_LINES="$(git -C "$REPO" diff --numstat --no-ext-diff "$base" "$head" | awk '
+    if ! FACT_LINES="$(git -C "$REPO" diff --numstat --no-ext-diff "$base" "$head" | awk '
         {
             added = ($1 == "-") ? 0 : $1
             removed = ($2 == "-") ? 0 : $2
             total += added + removed
         }
         END { printf "%d", total + 0 }
-    ')"
+    ')"; then
+        die "Размер диффа не посчитан: git diff --numstat $base $head в $REPO — счёт не состоялся."
+    fi
 
     # Добавленные строки нужны только словарной половине сигналов. Если ни один
     # изменённый путь не попадает в её область, дорогой дифф не запускается
@@ -411,7 +434,9 @@ collect_diff_facts() {
     fi
 
     if [ "$scope_needed" -eq 1 ]; then
-        FACT_ADDED="$(git -C "$REPO" diff -U0 --no-color --no-ext-diff "$base" "$head" | awk '
+        # Тот же отказ, что выше, и та же цена: пустые добавленные строки — это
+        # молчание словарной половины на диффе, который не прочитан.
+        if ! FACT_ADDED="$(git -C "$REPO" diff -U0 --no-color --no-ext-diff "$base" "$head" | awk '
             /^\+\+\+ /{
                 p = $2
                 sub(/^b\//, "", p)
@@ -422,7 +447,9 @@ collect_diff_facts() {
                     print p "\t" substr($0, 2)
                 }
             }
-        ')"
+        ')"; then
+            die "Добавленные строки не прочитаны: git diff -U0 $base $head в $REPO — счёт не состоялся."
+        fi
     fi
 }
 
