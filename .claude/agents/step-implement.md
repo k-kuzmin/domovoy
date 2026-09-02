@@ -21,6 +21,8 @@ hooks:
             'bash scripts/test-count-invariant.test.sh'
             'bash scripts/plan.sh' 'bash scripts/plan.test.sh'
             'bash scripts/risk-score.sh' 'bash scripts/risk-score.test.sh'
+            'bash scripts/plan-review-round.sh'
+            'bash scripts/plan-review-round.test.sh'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.
