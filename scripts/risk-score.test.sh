@@ -469,7 +469,7 @@ commit_repo 'правка'
 MUT_EMPTY_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keyword_paths = [] else . end)')"
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_EMPTY_SCOPE"
 expect_status 2
-expect_output 'область'
+expect_output 'пустой области keyword_paths'
 expect_no_output 'Уровень:'
 
 MUT_NO_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then del(.keyword_paths) else . end)')"
@@ -502,6 +502,8 @@ run_score diff HEAD~1 HEAD --repo "$REPO"
 expect_status 0
 expect_level low
 expect_output 'ни один не сработал'
+expect_signal_silent di-composition
+expect_signal_silent app-configuration
 end_case
 
 # ------------------------------------------------------------------
@@ -608,6 +610,13 @@ if put_from_tree 'tests/Domovoy.Tests/MobileLayeringTests.cs' \
     expect_status 0
     expect_level low
     expect_output 'ни один не сработал'
+    # Молчание каждого путевого сигнала на честном диффе — вторая половина
+    # пары. Соседний путь в своём сценарии показывает то же точечно, но
+    # перечень для сверки с конфигом собирается здесь.
+    expect_signal_silent db-migration
+    expect_signal_silent api-contract
+    expect_signal_silent platform-code
+    expect_signal_silent sensitive-area
 fi
 end_case
 
@@ -725,7 +734,7 @@ fi
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Зоны high, названные в обоих списках, опознаются и как защищённые'
+begin_case 'Зоны, названные в обоих списках, опознаются и как защищённые'
 if [ ! -f "$PROTECTED" ]; then
     fail_case "нет источника защищённых путей: $PROTECTED"
 else
@@ -735,17 +744,25 @@ else
         fail_case 'список защищённых путей пуст — сверять нечего'
     else
         PROT_RE="$(protected_regex)"
-        for sample in \
-            'src/Domovoy.Data/Migrations/20260101000000_Init.cs' \
-            'contracts/openapi.yaml' \
-            'src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs'; do
+        # Ожидаемый уровень берётся из конфига, а не пишется здесь: у зоны
+        # платформенного кода он medium — так эта зона стоит и в таблице фазы 2
+        # ТЗ, — и захардкоженный high проверял бы не сверку списков, а память
+        # автора сценария.
+        for pair in \
+            'src/Domovoy.Data/Migrations/20260101000000_Init.cs|db-migration' \
+            'contracts/openapi.yaml|api-contract' \
+            'src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs|platform-code'; do
+            sample="${pair%%|*}"
+            zone_signal="${pair##*|}"
             PLAN_ZONE="$(make_plan "$FLAGS_NONE" "$sample")"
             run_score plan "$PLAN_ZONE"
-            if [ "$(first_line)" != 'Уровень: high' ]; then
-                fail_case "образец зоны high не даёт high: $sample"
+            expect_status 0
+            if [ "$(first_line)" != "Уровень: $(config_level "$zone_signal")" ]; then
+                fail_case "образец зоны не дал уровень сигнала $zone_signal: $sample"
             fi
+            expect_signal "$zone_signal"
             if ! printf '%s' "$sample" | grep -qE "$PROT_RE"; then
-                fail_case "путь зоны high не покрыт protected_regex: $sample — списки разъехались"
+                fail_case "путь зоны не покрыт protected_regex: $sample — списки разъехались"
             fi
         done
 
@@ -786,6 +803,36 @@ expect_no_output 'Уровень: low'
 
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$SANDBOX/нет-такого-файла.json"
 expect_status 2
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Отказ разбора конфига роняет скрипт, а не зеленит его молча'
+# Проверка конфига идёт одним запросом jq, и её отказ обязан ронять счёт.
+# Первая версия запроса падала на каждом конфиге, а вывод уезжал в /dev/null:
+# скрипт печатал «Уровень: low» и ни одного нарушения на конфиге, у которого
+# сигнал с ключевыми словами не имел области. Подставной jq отказывает ровно на
+# запросе проверки — по имени переменной $required в программе, — поэтому форма
+# разбирается настоящим, а падает именно проверка.
+SHIM_DIR="$SANDBOX/bin"
+mkdir -p "$SHIM_DIR"
+JQ_REAL="$(command -v jq)"
+cat > "$SHIM_DIR/jq" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    case "\$arg" in
+        *required*) exit 3 ;;
+    esac
+done
+exec "$JQ_REAL" "\$@"
+SHIM
+chmod +x "$SHIM_DIR/jq"
+
+PLAN_SHIM="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Core/Models/Thing.cs')"
+OUTPUT="$(PATH="$SHIM_DIR:$PATH" bash "$SCRIPT" plan "$PLAN_SHIM" 2>&1)"
+STATUS=$?
+expect_status 2
+expect_output 'не отработал'
 expect_no_output 'Уровень:'
 end_case
 
