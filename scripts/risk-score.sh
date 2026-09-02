@@ -145,21 +145,23 @@ if ! jq empty "$CONFIG" >/dev/null 2>&1; then
     die "Конфиг сигналов не разбирается как JSON: $CONFIG"
 fi
 
-CONFIG_ERRORS="$(jq_r '
+# Отказ разбора здесь не глушится и не сходит за «нарушений нет»: проверка,
+# которая молча не состоялась, зеленит любой конфиг. Ровно на этом первая
+# версия запроса и попалась — `has(.)` внутри конвейера получает не имя поля, а
+# сам объект сигнала, запрос падал, а вывод уезжал в /dev/null.
+if ! CONFIG_ERRORS="$(jq_r '
     ["id","title","level","enabled","kind","paths","plan_flags","keywords","keyword_paths","note"] as $required
     | if (.signals | type) != "array" then
           "в конфиге нет массива signals"
       elif (.signals | length) == 0 then
           "в конфиге пустой массив signals"
       else
-          .signals
-          | to_entries[]
-          | .key as $i
-          | .value as $s
-          | ($s.id // "№\($i)") as $name
-          | [
-              ($required[] | select(($s | has(.)) | not)
-                  | "сигнал \($name): нет обязательного поля \(.)"),
+          (.signals | to_entries[]) as $e
+          | $e.value as $s
+          | ($s.id // "№\($e.key)") as $name
+          | (
+              ($required[] as $field | select(($s | has($field)) | not)
+                  | "сигнал \($name): нет обязательного поля \($field)"),
               (select(["low","medium","high"] | index($s.level // "") | not)
                   | "сигнал \($name): уровень «\($s.level)» не из low|medium|high"),
               (select(["match","size","metric"] | index($s.kind // "") | not)
@@ -169,9 +171,11 @@ CONFIG_ERRORS="$(jq_r '
               (select((($s.keywords // []) | length) > 0
                       and (($s.keyword_paths // []) | length) == 0)
                   | "сигнал \($name): непустой keywords при пустой области keyword_paths. Область действия ключевых слов обязательна: без неё сигнал срабатывает на тексте правил, журналов и самого конфига")
-            ][]
+            )
       end
-' "$CONFIG" 2>/dev/null)"
+' "$CONFIG")"; then
+    die "Разбор конфига сигналов не отработал: $CONFIG — проверка не состоялась."
+fi
 
 if [ -n "$CONFIG_ERRORS" ]; then
     printf 'Конфиг сигналов не сходится:\n' >&2
@@ -344,15 +348,24 @@ collect_plan_facts() {
     jq empty "$plan" >/dev/null 2>&1 || die "План не разбирается как JSON: $plan"
 
     FACT_KIND='plan'
-    FACT_PATHS="$(jq_r '[.files[]?.path] | map(select(. != null)) | .[]' "$plan")"
+    # Умерший jq отдал бы пустой список путей — то есть «сигналов нет» на
+    # плане, который никто не читал. Отказ разбора роняет счёт.
+    if ! FACT_PATHS="$(jq_r '[.files[]?.path] | map(select(. != null)) | .[]' "$plan")"; then
+        die "Разбор плана не отработал: $plan — счёт не состоялся."
+    fi
     FACT_ADDED=''
     FACT_LINES=0
     FACT_FILES="$(count_nonempty "$FACT_PATHS")"
 
+    local flags_raw
+    if ! flags_raw="$(jq_r '(.flags // {}) | to_entries[] | select(.value == true) | .key' "$plan")"; then
+        die "Разбор флагов плана не отработал: $plan — счёт не состоялся."
+    fi
+
     FACT_FLAGS=()
     while IFS= read -r flag; do
         [ -n "$flag" ] && FACT_FLAGS["$flag"]=1
-    done <<< "$(jq_r '(.flags // {}) | to_entries[] | select(.value == true) | .key' "$plan")"
+    done <<< "$flags_raw"
 }
 
 collect_diff_facts() {
