@@ -1,0 +1,1180 @@
+#!/usr/bin/env bash
+#
+# Домовой — проверочные сценарии риск-скора scripts/risk-score.sh.
+#
+# ЗАЧЕМ
+#
+# Уровень риска — это утверждение о задаче, и проверять его надо с двух сторон.
+# Скрипт, который только зеленеет, доказывал бы ровно ничего: он зеленел бы и с
+# пустой таблицей сигналов. Поэтому у каждого включённого сигнала конфига здесь
+# пара сценариев — срабатывание и молчание, — а перечень сигналов берётся из
+# pipeline/risk.json, а не из списка в этом файле: сигнал, добавленный в конфиг
+# без пары сценариев, роняет харнесс.
+#
+# МАТЕРИАЛ ДЕРЕВА
+#
+# Половина сценариев работает не на выдуманных путях и не на строках, которые
+# харнесс сам же и напечатал, а на настоящих файлах репозитория:
+#
+#   src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs — путь и
+#       содержимое зоны авторизации;
+#   src/Domovoy.Ha/ConfiguredEntityAllowList.cs, src/Domovoy.Ha/HaRestClient.cs,
+#   src/Domovoy.Core/Abstractions/IEntityAllowList.cs,
+#   src/Domovoy.Core/Prompts/SystemPromptComposer.cs — пути трёх зон правил
+#       безопасности: allow-list entity_id, белый список call_service, ответы
+#       HA как данные;
+#   tests/Domovoy.Tests/ConfigurationExampleTests.cs:22-27 — настоящие строки с
+#       именами секретных настроек внутри области keyword_paths; строки 22-23
+#       того же файла — отдельно, как пин границы слова: совпасть в них может
+#       только регулярка с \b;
+#   tests/Domovoy.Tests/MobileLayeringTests.cs и
+#   src/Domovoy.Core/Models/HaEntityState.cs — молчаливая пара к ним: внутри той
+#       же области, без единого слова чувствительной зоны.
+#
+# ЧТО ДЕЛАТЬ, ЕСЛИ СЦЕНАРИЙ УПАЛ НА МАТЕРИАЛЕ
+#
+# Исчезнувший или переписанный файл-источник роняет сценарий, а не пропускает
+# его — по образцу пинов scripts/plan.test.sh. Починка — обновить материал под
+# новое дерево: взять другой настоящий файл той же зоны. Ослаблять сценарий или
+# заменять материал строкой, напечатанной здесь же, нельзя: тогда сценарий
+# доказывает лишь то, что регулярка совпала с текстом, который сам и написал.
+#
+# ОТДЕЛЬНО
+#
+# Режимы diff и history проверяются на репозитории, собранном во временном
+# каталоге, а не на истории этого репозитория: сценарий, зависящий от того, что
+# вчера смерджили, краснеет по чужой причине.
+#
+# КАК ЗАПУСКАТЬ
+#
+#   bash scripts/risk-score.test.sh
+#
+# Код возврата: 0 — все сценарии прошли, 1 — есть провалившиеся, 2 — запуск не
+# состоялся (нет скрипта, нет jq, нет git).
+#
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT="$SCRIPT_DIR/risk-score.sh"
+CONFIG="$ROOT/pipeline/risk.json"
+PROTECTED="$SCRIPT_DIR/protected-paths.sh"
+FIXTURES="$SCRIPT_DIR/fixtures/plans"
+
+if [ ! -f "$SCRIPT" ]; then
+    printf 'Не найден %s\n' "$SCRIPT" >&2
+    exit 2
+fi
+
+if [ ! -f "$CONFIG" ]; then
+    printf 'Не найден конфиг сигналов: %s\n' "$CONFIG" >&2
+    exit 2
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+    printf 'Не найден jq: сценарии портят конфиг точечными мутациями через него.\n' >&2
+    exit 2
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+    printf 'Не найден git: режимы diff и history считают факты по репозиторию.\n' >&2
+    exit 2
+fi
+
+SANDBOX="$(mktemp -d)"
+if [ ! -d "$SANDBOX" ]; then
+    printf 'Не удалось создать временный каталог — сценарии не запускались.\n' >&2
+    exit 2
+fi
+trap 'rm -rf "$SANDBOX"' EXIT
+
+PASSED=0
+FAILED=0
+FAILED_NAMES=()
+
+CASE_NAME=''
+CASE_OK=1
+OUTPUT=''
+STATUS=0
+
+# Перечень сигналов, у которых сценарии предъявили срабатывание и молчание.
+# Сверяется с конфигом последним сценарием.
+FIRED_IDS=''
+SILENT_IDS=''
+
+REPO=''
+REPO_N=0
+
+begin_case() {
+    CASE_NAME="$1"
+    CASE_OK=1
+    OUTPUT=''
+    STATUS=0
+    printf '\n[ ... ] %s\n' "$CASE_NAME"
+}
+
+fail_case() {
+    CASE_OK=0
+    printf '        ! %s\n' "$1"
+}
+
+end_case() {
+    if [ "$CASE_OK" -eq 1 ]; then
+        PASSED=$((PASSED + 1))
+        printf '[ ok  ] %s\n' "$CASE_NAME"
+    else
+        FAILED=$((FAILED + 1))
+        FAILED_NAMES+=("$CASE_NAME")
+        printf '[ FAIL] %s\n' "$CASE_NAME"
+        printf '        вывод:\n%s\n' "$OUTPUT" | sed 's/^/        /'
+    fi
+}
+
+run_score() {
+    OUTPUT="$(bash "$SCRIPT" "$@" 2>&1)"
+    STATUS=$?
+}
+
+expect_status() {
+    if [ "$STATUS" -ne "$1" ]; then
+        fail_case "код возврата $STATUS, ожидался $1"
+    fi
+}
+
+expect_output() {
+    # Ключ -- обязателен: искомое может начинаться с дефиса.
+    if ! printf '%s\n' "$OUTPUT" | grep -qF -- "$1"; then
+        fail_case "в выводе нет: $1"
+    fi
+}
+
+expect_no_output() {
+    if printf '%s\n' "$OUTPUT" | grep -qF -- "$1"; then
+        fail_case "в выводе не должно быть: $1"
+    fi
+}
+
+first_line() {
+    printf '%s\n' "$OUTPUT" | head -n 1
+}
+
+expect_level() {
+    local got
+    got="$(first_line)"
+    if [ "$got" != "Уровень: $1" ]; then
+        fail_case "первая строка «$got», ожидалась «Уровень: $1»"
+    fi
+}
+
+expect_level_below_high() {
+    local got
+    got="$(first_line)"
+    case "$got" in
+        'Уровень: low' | 'Уровень: medium') ;;
+        *) fail_case "ожидался уровень ниже high, получено «$got»" ;;
+    esac
+}
+
+# Сработавший сигнал печатается строкой «  [<уровень>] <id> — <заголовок>».
+# Выключенный — «  [выключен] <id> — …», и под этот шаблон он не подпадает:
+# иначе «сигнал молчит» и «сигнал выключен» были бы одним утверждением.
+signal_line() {
+    printf '^  \\[(low|medium|high)\\] %s —' "$1"
+}
+
+expect_signal() {
+    FIRED_IDS="$FIRED_IDS$1"$'\n'
+    if ! printf '%s\n' "$OUTPUT" | grep -qE "$(signal_line "$1")"; then
+        fail_case "в выводе нет сработавшего сигнала: $1"
+    fi
+}
+
+expect_signal_silent() {
+    SILENT_IDS="$SILENT_IDS$1"$'\n'
+    if printf '%s\n' "$OUTPUT" | grep -qE "$(signal_line "$1")"; then
+        fail_case "сигнал сработал, а должен был молчать: $1"
+    fi
+}
+
+signal_ids() {
+    printf '%s\n' "$1" \
+        | grep -oE '^  \[(low|medium|high)\] [a-z0-9-]+' \
+        | grep -oE '[a-z0-9-]+$' \
+        | sort -u
+}
+
+# jq под Windows пишет CRLF, и возврат каретки уезжает внутрь значения:
+# ожидание сценария перестаёт равняться уровню из конфига. Тот же tr стоит в
+# самом скрипте и по той же причине.
+config_level() {
+    jq -r --arg id "$1" '.signals[] | select(.id == $id) | .level' "$CONFIG" | tr -d '\r'
+}
+
+# Точечная мутация конфига: портится ровно одно, остальное настоящее.
+mutate_config() {
+    local out="$SANDBOX/config-$RANDOM$RANDOM.json"
+    if ! jq "$1" "$CONFIG" > "$out"; then
+        printf 'Мутация конфига не собралась: %s\n' "$1" >&2
+        exit 2
+    fi
+    printf '%s' "$out"
+}
+
+# ------------------------------------------------------------------
+# Временный репозиторий: один коммит базы, один коммит правок.
+# ------------------------------------------------------------------
+new_repo() {
+    REPO_N=$((REPO_N + 1))
+    REPO="$SANDBOX/repo-$REPO_N"
+    mkdir -p "$REPO"
+    if ! git -C "$REPO" init -q -b main >/dev/null 2>&1; then
+        git -C "$REPO" init -q >/dev/null 2>&1
+        git -C "$REPO" checkout -q -b main >/dev/null 2>&1
+    fi
+    printf 'база\n' > "$REPO/README.md"
+    commit_repo 'база'
+}
+
+commit_repo() {
+    git -C "$REPO" add -A >/dev/null 2>&1
+    # Личность задаётся ключами: на раннере глобальной может не быть, и коммит
+    # отказал бы там, где локально проходит.
+    git -C "$REPO" \
+        -c user.email='harness@example.invalid' \
+        -c user.name='risk-score harness' \
+        -c commit.gpgsign=false \
+        commit -q -m "$1" >/dev/null 2>&1
+}
+
+put() {
+    local path="$REPO/$1"
+    shift
+    mkdir -p "$(dirname "$path")"
+    if [ "$#" -eq 0 ]; then
+        printf 'строка без единого слова чувствительной зоны\n' > "$path"
+    else
+        printf '%s\n' "$@" > "$path"
+    fi
+}
+
+# Копия настоящего файла дерева целиком. Исчез — сценарий провален.
+put_from_tree() {
+    local dest="$REPO/$1" src="$ROOT/$2"
+    if [ ! -f "$src" ]; then
+        fail_case "материал дерева исчез: $2 — сценарий провален, а не пропущен"
+        return 1
+    fi
+    mkdir -p "$(dirname "$dest")"
+    cat "$src" > "$dest"
+    return 0
+}
+
+# Копия диапазона строк настоящего файла дерева.
+put_lines_from_tree() {
+    local dest="$REPO/$1" src="$ROOT/$2" from="$3" to="$4"
+    if [ ! -f "$src" ]; then
+        fail_case "материал дерева исчез: $2 — сценарий провален, а не пропущен"
+        return 1
+    fi
+    mkdir -p "$(dirname "$dest")"
+    sed -n "${from},${to}p" "$src" > "$dest"
+    if [ ! -s "$dest" ]; then
+        fail_case "материал дерева пуст: $2, строки $from-$to"
+        return 1
+    fi
+    return 0
+}
+
+# Минимальный план: риск-скору нужны files[].path и flags, остальные разделы
+# согласованного плана на уровень не влияют.
+make_plan() {
+    local out="$SANDBOX/plan-$RANDOM$RANDOM.json"
+    local flags="$1"
+    shift
+    local paths='[]'
+    if [ "$#" -gt 0 ]; then
+        paths="$(printf '%s\n' "$@" | jq -R . | jq -s 'map({path: .})')"
+    fi
+    jq -n --argjson files "$paths" --argjson flags "$flags" \
+        '{issue: 4242, files: $files, flags: $flags}' > "$out"
+    printf '%s' "$out"
+}
+
+FLAGS_NONE='{"allow_protected":false,"allow_contract":false,"destructive_migration":false,"new_dependency":false,"new_dependency_reason":""}'
+
+# Зоны, которым таблица фазы 2 ТЗ фиксирует high — миграции, контракт API,
+# чувствительная область, — ожидают уровень буквально, а не через config_level:
+# сверка уровня из конфига с уровнем из конфига выполняется при любом значении
+# поля, и понижение зоны до low оставило бы сценарий «даёт high» зелёным.
+# Чтение из конфига остаётся там, где уровень зоны не зафиксирован снаружи и
+# может законно меняться: platform-code и прочие medium.
+
+# ------------------------------------------------------------------
+begin_case 'Материал дерева на месте: пины сценариев разрешаются'
+for material in \
+    'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
+    'tests/Domovoy.Tests/ConfigurationExampleTests.cs' \
+    'tests/Domovoy.Tests/MobileLayeringTests.cs' \
+    'src/Domovoy.Core/Models/HaEntityState.cs'; do
+    if [ ! -f "$ROOT/$material" ]; then
+        fail_case "материал дерева исчез: $material"
+    fi
+done
+# Строки 22-27 первого файла — тот самый массив имён секретных настроек.
+# Уехал по файлу — сценарий краснеет здесь, а не даёт ложное молчание ниже.
+if ! sed -n '22,27p' "$ROOT/tests/Domovoy.Tests/ConfigurationExampleTests.cs" \
+    | grep -qF 'SecretSettingPaths'; then
+    fail_case 'строки 22-27 ConfigurationExampleTests.cs больше не тот массив: материал уехал'
+fi
+if ! grep -qF 'Authorization' "$ROOT/src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs"; then
+    fail_case 'в обработчике аутентификации больше нет разбора заголовка: материал уехал'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Затронутая миграция даёт high, соседний файл проекта данных молчит'
+new_repo
+put 'src/Domovoy.Data/Migrations/20260101000000_Init.cs' \
+    'public sealed partial class Init' '{' '}'
+put 'src/Domovoy.Data/DomovoyDbContext.cs' 'public sealed class DomovoyDbContext' '{' '}'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level high
+expect_signal db-migration
+expect_output 'путь: src/Domovoy.Data/Migrations/20260101000000_Init.cs'
+expect_no_output 'путь: src/Domovoy.Data/DomovoyDbContext.cs'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Публичный контракт API даёт high, документация рядом молчит'
+new_repo
+put 'contracts/openapi.yaml' 'openapi: 3.0.3' 'paths: {}'
+put 'src/Domovoy.Mobile.Core/Generated/ApiClient.cs' 'public sealed class ApiClient' '{' '}'
+put 'README.md' 'строка документации'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level high
+expect_signal api-contract
+expect_output 'путь: contracts/openapi.yaml'
+expect_output 'путь: src/Domovoy.Mobile.Core/Generated/ApiClient.cs'
+expect_no_output 'путь: README.md'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Путевая половина зоны авторизации проверяется настоящим файлом дерева'
+new_repo
+if put_from_tree 'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
+    'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
+    && put_from_tree 'src/Domovoy.Core/Models/HaEntityState.cs' \
+        'src/Domovoy.Core/Models/HaEntityState.cs'; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'путь: src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs'
+    expect_no_output 'путь: src/Domovoy.Core/Models/HaEntityState.cs'
+
+    # Режим plan отделяет путевую половину от словарной: строк он не читает.
+    PLAN_AUTH="$(make_plan "$FLAGS_NONE" \
+        'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
+        'src/Domovoy.Core/Models/HaEntityState.cs')"
+    run_score plan "$PLAN_AUTH"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'путь: src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Три первых зоны правил безопасности опознаются путём на настоящих файлах дерева'
+# Зоны из docs/rules/review-security.md: allow-list entity_id (правило 5,
+# FR-HA-4), белый список call_service (правило 6) и ответы HA как данные, а не
+# инструкции (правило 4, NFR-SEC-6). Каждая — отдельным репозиторием.
+#
+# Доказывает путевую половину прогон в режиме plan: строк он не читает вовсе,
+# поэтому high там может прийти только от пути. Без этой половины сценарий
+# держался бы на том, что в файле однажды попалось слово чувствительной зоны, —
+# сегодня ни в одном из четырёх его нет, а завтра появится заголовок
+# авторизации, и снятые из конфига пути остались бы незамеченными.
+for zone_file in \
+    'src/Domovoy.Ha/ConfiguredEntityAllowList.cs' \
+    'src/Domovoy.Core/Abstractions/IEntityAllowList.cs' \
+    'src/Domovoy.Ha/HaRestClient.cs' \
+    'src/Domovoy.Core/Prompts/SystemPromptComposer.cs'; do
+    new_repo
+    if put_from_tree "$zone_file" "$zone_file"; then
+        commit_repo 'правка'
+        run_score diff HEAD~1 HEAD --repo "$REPO"
+        expect_status 0
+        expect_level high
+        expect_signal sensitive-area
+        expect_output "путь: $zone_file"
+
+        # Тот же путь в режиме plan: до первой строки кода зона уже видна.
+        PLAN_ZONE_FILE="$(make_plan "$FLAGS_NONE" "$zone_file")"
+        run_score plan "$PLAN_ZONE_FILE"
+        expect_status 0
+        expect_level high
+        expect_output "путь: $zone_file"
+    fi
+done
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Включённая половина keyword_paths проверяется настоящими строками из tests и src'
+new_repo
+# Настоящие строки, положенные путями вне списка paths сигнала: срабатывает
+# ровно словарная половина, а не путевая.
+if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
+    'tests/Domovoy.Tests/ConfigurationExampleTests.cs' 22 27 \
+    && put_lines_from_tree 'src/Domovoy.Api/Wiring.cs' \
+        'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' 29 45; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово:'
+    expect_output 'tests/Domovoy.Tests/SecretPathsMaterial.cs'
+    expect_output 'src/Domovoy.Api/Wiring.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Граница слова \b в словарной половине совпадает и печатается как причина'
+# Движок ищет grep -iE, и в GNU grep \b — граница слова. Держится на этом
+# больше половины набора слов чувствительной зоны (\bsecret, \bpassword,
+# \bbearer\b, \bjwt\b), а пинилось до сих пор только «Authoriz», у которого
+# границы нет: потеря поддержки \b — другой grep в слим-образе, «исправление»
+# регулярки в JSON, где \b даёт символ 0x08, — оставила бы сценарии зелёными
+# при замолчавшей словарной половине.
+#
+# Материал — строки 22-23 настоящего файла дерева: в них нет ни одного слова
+# набора, кроме «Secret», и совпасть оно может только регуляркой с \b. Слов
+# без границы (authenti, authoriz, api[_-]?key) в них нет вовсе, поэтому
+# молчание \b здесь не подменяется чужим совпадением, а роняет сценарий.
+new_repo
+if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
+    'tests/Domovoy.Tests/ConfigurationExampleTests.cs' 22 23; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    # Причина печатается целиком: совпавшее слово, а не только факт сигнала.
+    expect_output 'слово: Secret — tests/Domovoy.Tests/SecretPathsMaterial.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Путь с кириллицей и пробелом доходит до движка обеими половинами сигнала'
+# git по умолчанию (core.quotepath=true) отдаёт не-ASCII путь как
+# «"src/Domovoy.Ha/\320\235…"»: ни глоб зоны, ни область keyword_paths такую
+# строку не опознают — ложное молчание сигнала уровня high. Пробел в имени —
+# вторая половина того же: заголовок «+++ b/путь с пробелом» обрезался по
+# первому пробелу, и строка «слово:» называла путь, которого нет.
+new_repo
+put 'src/Domovoy.Ha/Настройки файла.cs' \
+    'public sealed class НастройкиФайла' \
+    '{' \
+    '    // Разбор заголовка Authorization остаётся в слое Ha.' \
+    '}'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level high
+expect_signal sensitive-area
+expect_output 'путь: src/Domovoy.Ha/Настройки файла.cs'
+# Путь пинуется целиком: обрезанный по пробелу он всё равно попал бы в область
+# «src/**», строка «слово:» напечаталась бы — и соврала бы про файл.
+expect_output 'слово: Authoriz — src/Domovoy.Ha/Настройки файла.cs'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Настоящие строки без слов чувствительной зоны внутри той же области молчат'
+new_repo
+if put_from_tree 'tests/Domovoy.Tests/MobileLayeringTests.cs' \
+    'tests/Domovoy.Tests/MobileLayeringTests.cs' \
+    && put_from_tree 'src/Domovoy.Core/Models/HaEntityState.cs' \
+        'src/Domovoy.Core/Models/HaEntityState.cs'; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Слово чувствительной области вне keyword_paths уровня не поднимает'
+new_repo
+# Те же настоящие строки — но в правилах, скриптах и самом конфиге. Плюс копия
+# pipeline/risk.json: регулярки чувствительной зоны лежат в нём текстом.
+if put_lines_from_tree 'docs/rules/выдержка.md' \
+    'tests/Domovoy.Tests/ConfigurationExampleTests.cs' 22 27 \
+    && put_lines_from_tree 'scripts/выдержка.sh' \
+        'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' 29 45 \
+    && put_from_tree 'pipeline/risk.json' 'pipeline/risk.json'; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Дифф самой этой задачи не получает high'
+new_repo
+# Набор путей ровно тот, которым едет PR задачи #103: ни одного файла под
+# src/** или tests/**, зато конфиг с регулярками и журнал с их пересказом.
+if put_from_tree 'pipeline/risk.json' 'pipeline/risk.json' \
+    && put_from_tree 'scripts/risk-score.test.sh' 'scripts/risk-score.test.sh'; then
+    if [ -f "$ROOT/scripts/risk-score.sh" ]; then
+        put_from_tree 'scripts/risk-score.sh' 'scripts/risk-score.sh'
+    fi
+    if [ -f "$ROOT/docs/tasks/103.md" ]; then
+        put_from_tree 'docs/tasks/103.md' 'docs/tasks/103.md'
+    fi
+    if [ -f "$ROOT/docs/decisions/0019-risk-config-json-not-yaml.md" ]; then
+        put_from_tree 'docs/decisions/0019-risk-config-json-not-yaml.md' \
+            'docs/decisions/0019-risk-config-json-not-yaml.md'
+    fi
+    # Правки, а не создание: в PR это несколько добавленных строк.
+    put '.github/workflows/ci-fast.yml' \
+        '      - name: Сценарии риск-скора' \
+        '        run: bash scripts/risk-score.test.sh'
+    put 'docs/pipeline.md' \
+        '| Поведение риск-скора | — | `scripts/risk-score.test.sh` |'
+    put 'docs/decisions/README.md' '| 0019 | конфиг риск-скора в JSON |'
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level_below_high
+    expect_signal_silent sensitive-area
+    # Таблица сигналов видна сама себе: правка порогов и уровней даёт medium
+    # конфигурации приложения. Защищённым путём pipeline/** это не делает —
+    # охват гейтом отложен к фазе 7 записью 0019.
+    expect_signal app-configuration
+    expect_output 'путь: pipeline/risk.json'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сигнал с ключевыми словами и пустой областью роняет скрипт кодом 2'
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_EMPTY_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keyword_paths = [] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_EMPTY_SCOPE"
+expect_status 2
+expect_output 'пустой области keyword_paths'
+expect_no_output 'Уровень:'
+
+MUT_NO_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then del(.keyword_paths) else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_SCOPE"
+expect_status 2
+expect_output 'keyword_paths'
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Пустой или нестроковый шаблон пути роняет скрипт кодом 2'
+# Проверка непустой области смотрела только на length, и «keyword_paths: [""]»
+# её проходил: длина 1. Дальше пустой элемент выбрасывается сборкой регулярки,
+# альтернатива выходит пустой, и половина сигнала выключается молча — код 0, ни
+# строки «слово:», ни жалобы. Тот же класс, что порог, переставший быть числом.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_BLANK_SCOPE="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keyword_paths = [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_SCOPE"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+MUT_BLANK_PATH="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .paths = ["src/**", ""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_PATH"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+MUT_NUMBER_PATH="$(mutate_config '.signals |= map(if .id == "db-migration" then .paths = [42] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NUMBER_PATH"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути'
+expect_no_output 'Уровень:'
+
+# Строка вместо массива роняет саму программу проверки — и это законный отказ,
+# лишь бы не код 0: разбор, который не состоялся, не считается «нарушений нет».
+MUT_STRING_PATHS="$(mutate_config '.signals |= map(if .id == "db-migration" then .paths = "src/**" else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_STRING_PATHS"
+expect_status 2
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Пустое или нестроковое ключевое слово роняет скрипт кодом 2'
+# Третий список того же запроса проверки. Слова склеиваются в альтернативу как
+# есть (SIG_KW_RE), и пустой элемент ведёт себя хуже пустого шаблона пути: он
+# даёт висячую черту «…|authenti|», совпадающую с любой строкой области, —
+# ложный high с пустым совпадением в качестве причины. Единственный пустой
+# элемент даёт обратное: альтернатива выходит пустой, и половина выключается
+# молча. Оба исхода — код 0 на конфиге, который никто не проверил.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_BLANK_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords += [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
+expect_no_output 'Уровень:'
+
+MUT_ONLY_BLANK_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords = [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_ONLY_BLANK_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
+expect_no_output 'Уровень:'
+
+# null склеивается join'ом в ту же пустую альтернативу, что и «""», поэтому
+# нестроковый элемент отбивается тем же условием, а не отдельным.
+MUT_NULL_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords += [null] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NULL_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'DI-композиция и конфигурация приложения дают medium, правка скрипта пайплайна не даёт ничего'
+new_repo
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+put 'src/Domovoy.Api/appsettings.json' '{' '  "Serilog": {}' '}'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level "$(config_level di-composition)"
+expect_signal di-composition
+expect_signal app-configuration
+expect_output 'путь: src/Domovoy.Api/Program.cs'
+expect_output 'путь: src/Domovoy.Api/appsettings.json'
+
+new_repo
+put 'scripts/что-нибудь.sh' '#!/usr/bin/env bash' 'printf "ok\\n"'
+put '.github/workflows/что-нибудь.yml' 'name: что-нибудь'
+put 'docs/rules/implement.md' 'строка правил'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level low
+expect_output 'ни один не сработал'
+expect_signal_silent di-composition
+expect_signal_silent app-configuration
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Платформенный код даёт medium, а Mobile.Core остаётся молчаливым'
+new_repo
+put 'src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs' 'public sealed class MainActivity;'
+put 'src/Domovoy.Mobile.Core/ViewModels/HomeViewModel.cs' 'public sealed class HomeViewModel;'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level "$(config_level platform-code)"
+expect_signal platform-code
+expect_output 'путь: src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs'
+expect_no_output 'путь: src/Domovoy.Mobile.Core/ViewModels/HomeViewModel.cs'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Новая внешняя зависимость видна и по пути пакетов, и по флагу плана'
+new_repo
+put 'Directory.Packages.props' '<Project>' '</Project>'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level "$(config_level new-dependency)"
+expect_signal new-dependency
+expect_output 'путь: Directory.Packages.props'
+
+PLAN_DEP="$(make_plan \
+    '{"allow_protected":false,"allow_contract":false,"destructive_migration":false,"new_dependency":true,"new_dependency_reason":"разбор cron, обоснование в комментарии #4242"}' \
+    'src/Domovoy.Core/Ports/IScheduler.cs')"
+run_score plan "$PLAN_DEP"
+expect_status 0
+expect_level "$(config_level new-dependency)"
+expect_signal new-dependency
+expect_output 'флаг плана: new_dependency'
+
+PLAN_PLAIN="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Core/Ports/IScheduler.cs')"
+run_score plan "$PLAN_PLAIN"
+expect_status 0
+expect_signal_silent new-dependency
+expect_level low
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Размер диффа выше порога даёт medium, а на строку ниже порога сигнала нет'
+THRESHOLD_LINES="$(jq -r '.thresholds.diff_lines' "$CONFIG" | tr -d '\r')"
+THRESHOLD_FILES="$(jq -r '.thresholds.diff_files' "$CONFIG" | tr -d '\r')"
+if [ "$THRESHOLD_LINES" = 'null' ] || [ -z "$THRESHOLD_LINES" ] \
+    || [ "$THRESHOLD_FILES" = 'null' ] || [ -z "$THRESHOLD_FILES" ]; then
+    fail_case 'порог размера в pipeline/risk.json не заполнен: прогон history ещё не записал процентиль'
+else
+    new_repo
+    ABOVE=$((THRESHOLD_LINES + 1))
+    BELOW=$((THRESHOLD_LINES - 1))
+    seq 1 "$ABOVE" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs" 2>/dev/null \
+        || { mkdir -p "$REPO/src/Domovoy.Core"; seq 1 "$ABOVE" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"; }
+    commit_repo 'правка выше порога'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level "$(config_level diff-size)"
+    expect_signal diff-size
+    expect_output "строк: $ABOVE"
+
+    new_repo
+    mkdir -p "$REPO/src/Domovoy.Core"
+    seq 1 "$BELOW" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
+    commit_repo 'правка ниже порога'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent diff-size
+    expect_level low
+
+    # Ровно порог сигнала не даёт: сравнение строгое. Точка на границе — не
+    # придирка, а член корпуса: nearest-rank без интерполяции берёт порог из
+    # самой истории, и в таблице прогона PR ровно на пороге уже стоит.
+    new_repo
+    mkdir -p "$REPO/src/Domovoy.Core"
+    seq 1 "$THRESHOLD_LINES" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
+    commit_repo 'правка ровно на пороге строк'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_output "строк изменено $THRESHOLD_LINES"
+    expect_signal_silent diff-size
+    expect_level low
+
+    # Вторая половина сигнала — число файлов. Без неё вся ветка по файлам в
+    # харнессе недостижима: в подслучаях выше файл всегда один, а medium по
+    # числу файлов в корпусе уже случался.
+    new_repo
+    FILES_ABOVE=$((THRESHOLD_FILES + 1))
+    for n in $(seq 1 "$FILES_ABOVE"); do
+        put "src/Domovoy.Core/Bulk$n.cs"
+    done
+    commit_repo 'правка выше порога по файлам'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level "$(config_level diff-size)"
+    expect_signal diff-size
+    expect_output "файлов: $FILES_ABOVE (порог $THRESHOLD_FILES)"
+
+    new_repo
+    for n in $(seq 1 "$THRESHOLD_FILES"); do
+        put "src/Domovoy.Core/Bulk$n.cs"
+    done
+    commit_repo 'правка ровно на пороге файлов'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_output "файлов $THRESHOLD_FILES,"
+    expect_signal_silent diff-size
+    expect_level low
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Выключенный сигнал покрытия печатается выключенным и на уровень не влияет'
+new_repo
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+WITH_COVERAGE="$(first_line)"
+if ! printf '%s\n' "$OUTPUT" | grep -qE '^  \[выключен\] coverage-drop —'; then
+    fail_case 'выключенный сигнал покрытия не напечатан строкой «[выключен] coverage-drop»'
+fi
+expect_output 'фазы 3'
+
+MUT_NO_COVERAGE="$(mutate_config '.signals |= map(select(.id != "coverage-drop"))')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_COVERAGE"
+expect_status 0
+if [ "$(first_line)" != "$WITH_COVERAGE" ]; then
+    fail_case "уровень изменился при удалении выключенного сигнала: «$WITH_COVERAGE» против «$(first_line)»"
+fi
+expect_no_output 'coverage-drop'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Дифф только в тестах и изолированной логике даёт low без единого сигнала'
+new_repo
+if put_from_tree 'tests/Domovoy.Tests/MobileLayeringTests.cs' \
+    'tests/Domovoy.Tests/MobileLayeringTests.cs' \
+    && put_from_tree 'src/Domovoy.Core/Models/HaEntityState.cs' \
+        'src/Domovoy.Core/Models/HaEntityState.cs'; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level low
+    expect_output 'ни один не сработал'
+    # Молчание каждого путевого сигнала на честном диффе — вторая половина
+    # пары. Соседний путь в своём сценарии показывает то же точечно, но
+    # перечень для сверки с конфигом собирается здесь.
+    expect_signal_silent db-migration
+    expect_signal_silent api-contract
+    expect_signal_silent platform-code
+    expect_signal_silent sensitive-area
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Уровень равен максимуму сработавших, а список печатается целиком'
+new_repo
+put 'src/Domovoy.Data/Migrations/20260101000000_Init.cs' 'public sealed partial class Init;'
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_level high
+expect_signal db-migration
+expect_signal di-composition
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Режим plan называет, чего он не мерил'
+PLAN_ANY="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Core/Models/Thing.cs')"
+run_score plan "$PLAN_ANY"
+expect_status 0
+expect_output 'Не измерялось в режиме plan'
+expect_output 'размер диффа'
+expect_output 'ключевые слова'
+
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_no_output 'Не измерялось в режиме plan'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Режим plan работает на реальных согласованных планах из фикстур'
+FIXTURE_COUNT=0
+if [ ! -d "$FIXTURES" ]; then
+    fail_case "нет каталога фикстур планов: $FIXTURES"
+else
+    for fixture in "$FIXTURES"/*.json; do
+        [ -f "$fixture" ] || continue
+        FIXTURE_COUNT=$((FIXTURE_COUNT + 1))
+        run_score plan "$fixture"
+        expect_status 0
+        if ! first_line | grep -qE '^Уровень: (low|medium|high)$'; then
+            fail_case "на фикстуре $(basename "$fixture") первая строка не «Уровень: …»: $(first_line)"
+        fi
+    done
+    if [ "$FIXTURE_COUNT" -eq 0 ]; then
+        fail_case 'в каталоге фикстур нет ни одного плана — вход режима plan не предъявлен'
+    fi
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Оба входа на одних и тех же фактах дают один уровень'
+new_repo
+put 'src/Domovoy.Data/Migrations/20260101000000_Init.cs' 'public sealed partial class Init;'
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+DIFF_LEVEL="$(first_line)"
+DIFF_IDS="$(signal_ids "$OUTPUT" | grep -v '^diff-size$')"
+
+PLAN_SAME="$(make_plan "$FLAGS_NONE" \
+    'src/Domovoy.Data/Migrations/20260101000000_Init.cs' \
+    'src/Domovoy.Api/Program.cs')"
+run_score plan "$PLAN_SAME"
+expect_status 0
+if [ "$(first_line)" != "$DIFF_LEVEL" ]; then
+    fail_case "уровни входов расходятся: diff «$DIFF_LEVEL», plan «$(first_line)»"
+fi
+PLAN_IDS="$(signal_ids "$OUTPUT" | grep -v '^diff-size$')"
+if [ "$DIFF_IDS" != "$PLAN_IDS" ]; then
+    fail_case "наборы сигналов расходятся: diff «$(printf '%s' "$DIFF_IDS" | tr '\n' ' ')», plan «$(printf '%s' "$PLAN_IDS" | tr '\n' ' ')»"
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Режим history во временном репозитории печатает состав корпуса, распределение и таблицу'
+new_repo
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+commit_repo 'feat: первый смерженный (#11)'
+put 'tests/Domovoy.Tests/Thing.cs' 'public sealed class ThingTests;'
+commit_repo 'docs: коммит без номера PR'
+put 'scripts/что-нибудь.sh' '#!/usr/bin/env bash'
+put 'docs/pipeline.md' 'строка реестра'
+commit_repo 'ci: второй смерженный (#22)'
+put 'src/Domovoy.Data/Migrations/20260101000000_Init.cs' 'public sealed partial class Init;'
+commit_repo 'feat: третий смерженный (#33)'
+put 'README.md' 'ещё строка'
+commit_repo 'docs: снова без номера'
+run_score history --repo "$REPO" --base main
+expect_status 0
+expect_output 'Состав корпуса'
+expect_output 'Отобрано коммитов: 3'
+expect_output 'Правило отбора'
+expect_output 'Распределение размеров'
+expect_output 'Метод процентиля'
+expect_output 'PR → уровень → сигналы'
+expect_output '| #11 |'
+expect_output '| #22 |'
+expect_output '| #33 |'
+ROWS="$(printf '%s\n' "$OUTPUT" | grep -cE '^\| #[0-9]+ \|')"
+if [ "$ROWS" -ne 3 ]; then
+    fail_case "строк таблицы $ROWS, а коммитов с номером PR во временном репозитории три"
+fi
+# Разбивка по верхним каталогам считает настоящие пути временного репозитория.
+expect_output 'src:'
+expect_output 'scripts:'
+if ! printf '%s\n' "$OUTPUT" | grep -qE '^\| #33 \| high \|'; then
+    fail_case 'PR с миграцией не получил high в таблице истории'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Зоны, названные в обоих списках, опознаются и как защищённые'
+if [ ! -f "$PROTECTED" ]; then
+    fail_case "нет источника защищённых путей: $PROTECTED"
+else
+    # shellcheck source=protected-paths.sh
+    . "$PROTECTED"
+    if [ "${#PROTECTED_PATTERNS[@]}" -eq 0 ]; then
+        fail_case 'список защищённых путей пуст — сверять нечего'
+    else
+        PROT_RE="$(protected_regex)"
+        # Ожидаемый уровень стоит в третьем поле пары, а не читается из
+        # конфига: сверка уровня из конфига с уровнем из конфига выполнялась бы
+        # при любом значении поля, и понижение зоны миграций или контракта до
+        # low оставило бы сценарий «даёт high» зелёным. У зоны платформенного
+        # кода уровень medium — так она стоит и в таблице фазы 2 ТЗ, — и он
+        # единственный, который законно меняется калибровкой: его сценарий и
+        # читает конфиг.
+        for pair in \
+            'src/Domovoy.Data/Migrations/20260101000000_Init.cs|db-migration|high' \
+            'contracts/openapi.yaml|api-contract|high' \
+            "src/Domovoy.Mobile.App/Platforms/Android/MainActivity.cs|platform-code|$(config_level platform-code)"; do
+            sample="${pair%%|*}"
+            zone_rest="${pair#*|}"
+            zone_signal="${zone_rest%%|*}"
+            zone_level="${zone_rest##*|}"
+            PLAN_ZONE="$(make_plan "$FLAGS_NONE" "$sample")"
+            run_score plan "$PLAN_ZONE"
+            expect_status 0
+            if [ "$(first_line)" != "Уровень: $zone_level" ]; then
+                fail_case "образец зоны не дал уровень $zone_level (сигнал $zone_signal): $sample"
+            fi
+            expect_signal "$zone_signal"
+            if ! printf '%s' "$sample" | grep -qE "$PROT_RE"; then
+                fail_case "путь зоны не покрыт protected_regex: $sample — списки разъехались"
+            fi
+        done
+
+        # Названный разрыв: зона авторизации сигналом опознаётся, а защищённым
+        # путём не считается. Внесут в CODEOWNERS — сценарий упадёт здесь, и
+        # правка будет осознанной, а не незамеченной.
+        AUTH='src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs'
+        PLAN_AUTH_ZONE="$(make_plan "$FLAGS_NONE" "$AUTH")"
+        run_score plan "$PLAN_AUTH_ZONE"
+        if [ "$(first_line)" != 'Уровень: high' ]; then
+            fail_case "зона авторизации не даёт high: $AUTH"
+        fi
+        if printf '%s' "$AUTH" | grep -qE "$PROT_RE"; then
+            fail_case "зона авторизации теперь под защитой путей: обнови сценарий и запись о разрыве"
+        fi
+    fi
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сломанный конфиг роняет скрипт кодом 2, а не выдаёт low молча'
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+BROKEN="$SANDBOX/broken.json"
+printf '{ "signals": [ ' > "$BROKEN"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$BROKEN"
+expect_status 2
+expect_no_output 'Уровень: low'
+
+NO_SIGNALS="$SANDBOX/no-signals.json"
+printf '{ "thresholds": { "diff_lines": 100, "diff_files": 5 } }\n' > "$NO_SIGNALS"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$NO_SIGNALS"
+expect_status 2
+expect_output 'signals'
+expect_no_output 'Уровень: low'
+
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$SANDBOX/нет-такого-файла.json"
+expect_status 2
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Порог не число роняет скрипт кодом 2, а не объявляет крупный дифф низкорисковым'
+# Проверка полей сигналов на thresholds не смотрит, а порог уезжает в
+# арифметику test: «[ 2110 -gt "1538 строк" ]» возвращает 2, оба условия
+# сигнала размера становятся ложными, и дифф любого размера выходит low без
+# единого слова о непрочитанном пороге.
+new_repo
+mkdir -p "$REPO/src/Domovoy.Core"
+# Число берётся от порога, если он прочитался: сценарий убедительнее на диффе,
+# который при живом пороге дал бы medium. Порог не прочитался — об этом уже
+# сообщил случай размера, а здесь хватит любого крупного диффа.
+case "$THRESHOLD_LINES" in
+    '' | *[!0-9]*) BIG_LINES=2000 ;;
+    *) BIG_LINES=$((THRESHOLD_LINES + 1)) ;;
+esac
+seq 1 "$BIG_LINES" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
+commit_repo 'правка выше порога'
+
+MUT_LINES_TEXT="$(mutate_config '.thresholds.diff_lines = "1538 строк"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_LINES_TEXT"
+expect_status 2
+expect_output 'Порог строк в конфиге не число'
+expect_no_output 'Уровень:'
+
+MUT_FILES_TEXT="$(mutate_config '.thresholds.diff_files = "одиннадцать"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_FILES_TEXT"
+expect_status 2
+expect_output 'Порог файлов в конфиге не число'
+expect_no_output 'Уровень:'
+
+# Отсутствие порогов вовсе — законный первый проход, а не поломка: скрипт
+# считает остальные сигналы и говорит, что размер не мерил.
+MUT_NO_THRESHOLDS="$(mutate_config 'del(.thresholds)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_THRESHOLDS"
+expect_status 0
+expect_output 'Порог размера в конфиге не задан'
+expect_level low
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Нечисловой процентиль и незнакомый метод процентиля роняют скрипт кодом 2'
+# Те же два поля читаются тем же read, что и пороги. Нечисловой процентиль
+# уезжает в «awk -v p=…»: p/100 даёт 0, индекс зажимается в 1, и первый проход
+# history печатает минимум корпуса под подписью p75 — то есть порог, на котором
+# держится единственный сработавший в истории сигнал, берётся с потолка молча.
+# Метод, которым не считали, — то же по последствиям: nearest-rank зашит в
+# percentile(), значение «linear» поменяло бы подпись отчёта, а не расчёт.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_PCT_TEXT="$(mutate_config '.thresholds.percentile = "семьдесят пять"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_TEXT"
+expect_status 2
+expect_output 'Процентиль в конфиге не число'
+expect_no_output 'Уровень:'
+
+MUT_PCT_METHOD="$(mutate_config '.thresholds.percentile_method = "linear"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_METHOD"
+expect_status 2
+expect_output 'nearest-rank'
+expect_no_output 'Уровень:'
+
+# Обоих полей нет вовсе — законно: значения по умолчанию совпадают с тем, чем
+# скрипт считает, и отчёт остаётся правдой.
+MUT_PCT_ABSENT="$(mutate_config 'del(.thresholds.percentile) | del(.thresholds.percentile_method)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_PCT_ABSENT"
+expect_status 0
+expect_level low
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Отказ разбора конфига роняет скрипт, а не зеленит его молча'
+# Проверка конфига идёт одним запросом jq, и её отказ обязан ронять счёт.
+# Первая версия запроса падала на каждом конфиге, а вывод уезжал в /dev/null:
+# скрипт печатал «Уровень: low» и ни одного нарушения на конфиге, у которого
+# сигнал с ключевыми словами не имел области. Подставной jq отказывает ровно на
+# запросе проверки — по имени переменной $required в программе, — поэтому форма
+# разбирается настоящим, а падает именно проверка.
+SHIM_DIR="$SANDBOX/bin"
+mkdir -p "$SHIM_DIR"
+JQ_REAL="$(command -v jq)"
+cat > "$SHIM_DIR/jq" <<SHIM
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    case "\$arg" in
+        *required*) exit 3 ;;
+    esac
+done
+exec "$JQ_REAL" "\$@"
+SHIM
+chmod +x "$SHIM_DIR/jq"
+
+PLAN_SHIM="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Core/Models/Thing.cs')"
+OUTPUT="$(PATH="$SHIM_DIR:$PATH" bash "$SCRIPT" plan "$PLAN_SHIM" 2>&1)"
+STATUS=$?
+expect_status 2
+expect_output 'не отработал'
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка обвязки видит риск-скор освобождённым, а его харнесс вызванным'
+OUTPUT="$(bash "$SCRIPT_DIR/wiring.sh" "$ROOT" 2>&1)"
+STATUS=$?
+expect_status 0
+expect_output 'освобождён: scripts/risk-score.sh'
+expect_no_output 'ни один workflow не вызывает: scripts/risk-score.test.sh'
+if ! grep -qF 'scripts/risk-score.test.sh' "$ROOT/docs/pipeline.md"; then
+    fail_case 'в реестре сверок docs/pipeline.md нет строки харнесса риск-скора'
+fi
+end_case
+
+# ------------------------------------------------------------------
+# Последним: полнота. Перечень берётся из конфига, а не из списка здесь.
+# ------------------------------------------------------------------
+begin_case 'У каждого включённого сигнала конфига есть пара сценариев'
+ENABLED_IDS="$(jq -r '.signals[] | select(.enabled == true) | .id' "$CONFIG" | tr -d '\r')"
+if [ -z "$ENABLED_IDS" ]; then
+    fail_case 'в конфиге нет ни одного включённого сигнала — проверять нечего'
+fi
+while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    if ! printf '%s' "$FIRED_IDS" | grep -qxF "$id"; then
+        fail_case "у сигнала нет сценария срабатывания: $id"
+    fi
+    if ! printf '%s' "$SILENT_IDS" | grep -qxF "$id"; then
+        fail_case "у сигнала нет сценария молчания: $id"
+    fi
+done <<< "$ENABLED_IDS"
+
+# Обратная сторона: сценарий на сигнал, которого в конфиге нет, — опечатка.
+while IFS= read -r id; do
+    [ -z "$id" ] && continue
+    if ! printf '%s' "$ENABLED_IDS" | grep -qxF "$id"; then
+        fail_case "сценарий ссылается на сигнал, которого нет среди включённых: $id"
+    fi
+done <<< "$(printf '%s%s' "$FIRED_IDS" "$SILENT_IDS" | sort -u)"
+end_case
+
+# ------------------------------------------------------------------
+printf '\n'
+printf 'Пройдено: %d, провалено: %d, пропущено: 0\n' "$PASSED" "$FAILED"
+
+if [ "$FAILED" -gt 0 ]; then
+    printf '\nПровалились:\n'
+    for name in "${FAILED_NAMES[@]}"; do
+        printf '  - %s\n' "$name"
+    done
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "about": "Таблица сигналов риск-скора (фаза 2 ТЗ советника). Единственный экземпляр: скрипт scripts/risk-score.sh не содержит ни одного пути, слова и порога. Формат JSON, а не pipeline/risk.yaml из буквы ТЗ — обоснование в docs/decisions/0019-risk-config-json-not-yaml.md. Набор уровней low|medium|high полем конфига не задаётся: он зашит в скрипт, и поле levels здесь стояло, ничего не меняя, — обещание настройки, которой нет, хуже её отсутствия.",
+  "thresholds": {
+    "diff_lines": 1538,
+    "diff_files": 11,
+    "percentile": 75,
+    "percentile_method": "nearest-rank",
+    "source": "75-й процентиль по корпусу из 18 смерженных PR, напечатанному прогоном «bash scripts/risk-score.sh history» 02.09.2026: строк p50 = 568, p75 = 1538, p90 = 2486, максимум = 3568; файлов p50 = 8, p75 = 11, p90 = 22, максимум = 26. Правило отбора корпуса и его состав по каталогам — в docs/tasks/103.md. Числа меняет человек руками: автоматической подстройки порогов по метрикам нет ни на одной фазе."
+  },
+  "signals": [
+    {
+      "id": "sensitive-area",
+      "title": "авторизация, платежи, персональные данные, криптография",
+      "level": "high",
+      "enabled": true,
+      "kind": "match",
+      "paths": [
+        "src/Domovoy.Api/Security/**",
+        "src/**/Security/**",
+        "src/**/Auth/**",
+        "src/**/Crypto/**",
+        "src/Domovoy.Ha/**",
+        "src/**/Prompts/**",
+        "src/**/*AllowList*.cs"
+      ],
+      "plan_flags": [],
+      "keywords": [
+        "authenti",
+        "authoriz",
+        "\\bpassword",
+        "\\bsecret",
+        "api[_-]?key",
+        "\\bcredential",
+        "\\bbearer\\b",
+        "\\bjwt\\b",
+        "encrypt|decrypt",
+        "\\bhmac\\b|\\bsha256\\b|\\bcipher",
+        "\\bpayment|\\bbilling|\\binvoice",
+        "\\bpassport|personal[_ ]?data",
+        "device[_-]?token|access[_-]?token|refresh[_-]?token"
+      ],
+      "keyword_paths": ["src/**", "tests/**"],
+      "note": "Одинокое слово «token» в набор намеренно не входит: в этом проекте им считают токены LLM (потолок 4000 на блок состояний, FR-CORE-4), и сигнал сработал бы на счётчике вместо секрета. Узкие формы (device/access/refresh) со счётчиком не сталкиваются и входят: обработчик токена устройства, вынесенный из каталога Security/**, иначе не давал бы ни одного сигнала. Аутентификация опознаётся ещё и по authenti/authoriz/bearer/jwt. Пути закрывают три зоны, которые docs/rules/review-security.md ставит первыми: allow-list entity_id (правило 5, FR-HA-4) — src/**/*AllowList*.cs и весь src/Domovoy.Ha/**, там же белый список call_service (правило 6); ответы HA как данные, а не инструкции (правило 4, NFR-SEC-6) — src/**/Prompts/**. Область keyword_paths обязательна: без неё сигнал срабатывал бы на тексте правил, журналов и самого этого файла."
+    },
+    {
+      "id": "db-migration",
+      "title": "миграция базы данных затронута",
+      "level": "high",
+      "enabled": true,
+      "kind": "match",
+      "paths": ["src/Domovoy.Data/Migrations/**"],
+      "plan_flags": ["destructive_migration"],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Только факт «миграция затронута» — по путям диффа и по флагу плана. Разбор разрушительного SQL и порядок версий остаются гейту целостности и задаче #96: две машинки на один вопрос дают два разных ответа."
+    },
+    {
+      "id": "api-contract",
+      "title": "публичный контракт API или сгенерированный из него клиент",
+      "level": "high",
+      "enabled": true,
+      "kind": "match",
+      "paths": ["contracts/**", "src/Domovoy.Mobile.Core/Generated/**"],
+      "plan_flags": ["allow_contract"],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Мобильный клиент обновляется не тогда, когда обновился Backend: ломающее изменение контракта живёт месяцами. Раздел «Обратная совместимость API» в .claude/CLAUDE.md."
+    },
+    {
+      "id": "di-composition",
+      "title": "композиция приложения и регистрация зависимостей",
+      "level": "medium",
+      "enabled": true,
+      "kind": "match",
+      "paths": [
+        "src/Domovoy.Api/Program.cs",
+        "src/**/DependencyInjection/**",
+        "src/**/*ServiceCollectionExtensions.cs"
+      ],
+      "plan_flags": [],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Program.cs не входит в защищённые пути, но ошибка в композиции ломает всё приложение целиком и на сборке не видна."
+    },
+    {
+      "id": "app-configuration",
+      "title": "конфигурация приложения и её примеры",
+      "level": "medium",
+      "enabled": true,
+      "kind": "match",
+      "paths": [
+        "appsettings.json",
+        "src/**/appsettings*.json",
+        ".env.example",
+        "docker-compose.yml",
+        "docker-compose.override.example.yml",
+        "pipeline/**"
+      ],
+      "plan_flags": [],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Правка конфигурации не компилируется и не покрывается тестами: расхождение с .example-файлами видно только человеку. pipeline/** — сюда же: иначе правка порогов и уровней в этой самой таблице не давала бы ни одного сигнала. Защищённым путём pipeline/** это не делает — охват гейтом отложен к фазе 7 записью 0019."
+    },
+    {
+      "id": "platform-code",
+      "title": "платформенный код и ресурсы мобильного клиента",
+      "level": "medium",
+      "enabled": true,
+      "kind": "match",
+      "paths": [
+        "src/Domovoy.Mobile.App/Platforms/**",
+        "src/Domovoy.Mobile.App/Resources/**"
+      ],
+      "plan_flags": [],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Собирается только под платформенным TFM и в быстрых проверках не участвует. Mobile.Core вне Generated сигналом не считается — там сборка секунды."
+    },
+    {
+      "id": "new-dependency",
+      "title": "новая внешняя зависимость",
+      "level": "medium",
+      "enabled": true,
+      "kind": "match",
+      "paths": ["Directory.Packages.props"],
+      "plan_flags": ["new_dependency"],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Набор библиотек закрыт, любая новая требует обоснования в комментарии к issue до установки. Виден и по пути центрального управления версиями, и по флагу плана — до первого коммита. Отдельные *.csproj в пути не входят: новая ссылка там появляется и при заведении проекта, а это не новая библиотека."
+    },
+    {
+      "id": "diff-size",
+      "title": "размер диффа выше порога",
+      "level": "medium",
+      "enabled": true,
+      "kind": "size",
+      "paths": [],
+      "plan_flags": [],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Пороги в thresholds считаны по истории, а не взяты с потолка: 75-й процентиль корпуса смерженных PR. В режиме plan не измеряется — диффа ещё нет, и режим это печатает."
+    },
+    {
+      "id": "coverage-drop",
+      "title": "падение покрытия или mutation score",
+      "level": "medium",
+      "enabled": false,
+      "kind": "metric",
+      "paths": [],
+      "plan_flags": [],
+      "keywords": [],
+      "keyword_paths": [],
+      "note": "Выключен: включается в PR фазы 3, вместе с мутационным тестированием. Источника метрики сейчас нет, и сигнал, считающий её отсутствие нулём, давал бы medium каждому PR."
+    }
+  ]
+}
