@@ -24,7 +24,9 @@
 #       безопасности: allow-list entity_id, белый список call_service, ответы
 #       HA как данные;
 #   tests/Domovoy.Tests/ConfigurationExampleTests.cs:22-27 — настоящие строки с
-#       именами секретных настроек внутри области keyword_paths;
+#       именами секретных настроек внутри области keyword_paths; строки 22-23
+#       того же файла — отдельно, как пин границы слова: совпасть в них может
+#       только регулярка с \b;
 #   tests/Domovoy.Tests/MobileLayeringTests.cs и
 #   src/Domovoy.Core/Models/HaEntityState.cs — молчаливая пара к ним: внутри той
 #       же области, без единого слова чувствительной зоны.
@@ -443,6 +445,32 @@ fi
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Граница слова \b в словарной половине совпадает и печатается как причина'
+# Движок ищет grep -iE, и в GNU grep \b — граница слова. Держится на этом
+# больше половины набора слов чувствительной зоны (\bsecret, \bpassword,
+# \bbearer\b, \bjwt\b), а пинилось до сих пор только «Authoriz», у которого
+# границы нет: потеря поддержки \b — другой grep в слим-образе, «исправление»
+# регулярки в JSON, где \b даёт символ 0x08, — оставила бы сценарии зелёными
+# при замолчавшей словарной половине.
+#
+# Материал — строки 22-23 настоящего файла дерева: в них нет ни одного слова
+# набора, кроме «Secret», и совпасть оно может только регуляркой с \b. Слов
+# без границы (authenti, authoriz, api[_-]?key) в них нет вовсе, поэтому
+# молчание \b здесь не подменяется чужим совпадением, а роняет сценарий.
+new_repo
+if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
+    'tests/Domovoy.Tests/ConfigurationExampleTests.cs' 22 23; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    # Причина печатается целиком: совпавшее слово, а не только факт сигнала.
+    expect_output 'слово: Secret — tests/Domovoy.Tests/SecretPathsMaterial.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Путь с кириллицей и пробелом доходит до движка обеими половинами сигнала'
 # git по умолчанию (core.quotepath=true) отдаёт не-ASCII путь как
 # «"src/Domovoy.Ha/\320\235…"»: ни глоб зоны, ни область keyword_paths такую
@@ -588,6 +616,39 @@ expect_no_output 'Уровень:'
 MUT_STRING_PATHS="$(mutate_config '.signals |= map(if .id == "db-migration" then .paths = "src/**" else . end)')"
 run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_STRING_PATHS"
 expect_status 2
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Пустое или нестроковое ключевое слово роняет скрипт кодом 2'
+# Третий список того же запроса проверки. Слова склеиваются в альтернативу как
+# есть (SIG_KW_RE), и пустой элемент ведёт себя хуже пустого шаблона пути: он
+# даёт висячую черту «…|authenti|», совпадающую с любой строкой области, —
+# ложный high с пустым совпадением в качестве причины. Единственный пустой
+# элемент даёт обратное: альтернатива выходит пустой, и половина выключается
+# молча. Оба исхода — код 0 на конфиге, который никто не проверил.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_BLANK_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords += [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BLANK_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
+expect_no_output 'Уровень:'
+
+MUT_ONLY_BLANK_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords = [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_ONLY_BLANK_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
+expect_no_output 'Уровень:'
+
+# null склеивается join'ом в ту же пустую альтернативу, что и «""», поэтому
+# нестроковый элемент отбивается тем же условием, а не отдельным.
+MUT_NULL_KW="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords += [null] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NULL_KW"
+expect_status 2
+expect_output 'пустой или нестроковый элемент keywords'
 expect_no_output 'Уровень:'
 end_case
 
