@@ -524,18 +524,33 @@ end_case
 
 # ------------------------------------------------------------------
 begin_case 'Оба прогона маршрута подключены к работе «Проверки обвязки»'
+# Вызов ищется строкой шага, а не подстрокой файла: закомментированный шаг
+# остаётся в тексте дословно, и поиск подстрокой считал бы его подключённым.
+# Префикс run: необязателен — блочная форма (run: | и вызов строкой ниже)
+# подключена ровно так же. Обязательно другое: до вызова в строке нет ничего,
+# кроме пробелов, то есть строка не комментарий и не рассказ о вызове.
+workflow_runs_call() {
+    local call="$1" file="$2" esc
+    esc="${call//./\\.}"
+    grep -qE "^[[:space:]]*(run:[[:space:]]+)?${esc}([[:space:]]|\$)" "$file"
+}
+
 for call in 'bash scripts/route.sh check' 'bash scripts/route.test.sh'; do
-    if ! grep -qF -- "$call" "$WORKFLOW"; then
-        fail_case "в .github/workflows/ci-fast.yml нет вызова: $call"
+    if ! workflow_runs_call "$call" "$WORKFLOW"; then
+        fail_case "в .github/workflows/ci-fast.yml нет шага, запускающего: $call"
     fi
 done
 
-# Та же проверка на копии с вырезанной строкой обязана не находить вызова:
-# иначе сценарий зеленел бы и при убранном шаге.
-CUT_WORKFLOW="$SANDBOX/ci-fast-без-харнесса.yml"
-grep -vF -- 'bash scripts/route.test.sh' "$WORKFLOW" > "$CUT_WORKFLOW"
-if grep -qF -- 'bash scripts/route.test.sh' "$CUT_WORKFLOW"; then
-    fail_case 'вырезанная строка осталась в копии — сценарий ничего не проверяет'
+# Та же проверка на копии, где шаг харнесса закомментирован на месте. Копия с
+# вырезанной строкой была бы тавтологией — не находилось бы то, что сценарий сам
+# и удалил; закомментированный шаг отличает подключённый вызов от текста о нём.
+CUT_WORKFLOW="$SANDBOX/ci-fast-с-закомментированным-харнессом.yml"
+sed 's|^\([[:space:]]*\)\(run:[[:space:]]*bash scripts/route\.test\.sh\)|\1# \2|' \
+    "$WORKFLOW" > "$CUT_WORKFLOW"
+if cmp -s "$WORKFLOW" "$CUT_WORKFLOW"; then
+    fail_case 'мутация не состоялась: копия совпала с исходником, комментировать оказалось нечего'
+elif workflow_runs_call 'bash scripts/route.test.sh' "$CUT_WORKFLOW"; then
+    fail_case 'закомментированный шаг сошёл за подключённый — проверка не отличает вызов от текста о вызове'
 fi
 
 # И сверка обвязки не считает ни движок, ни харнесс неподключёнными.
