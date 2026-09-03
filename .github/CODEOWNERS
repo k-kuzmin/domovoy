@@ -34,6 +34,7 @@
 /.github/                     @k-kuzmin
 /.githooks/                   @k-kuzmin
 /scripts/                     @k-kuzmin
+/pipeline/                    @k-kuzmin
 
 # --- Правила проекта и принятые решения ---
 /.claude/CLAUDE.md            @k-kuzmin
