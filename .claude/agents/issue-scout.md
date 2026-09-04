@@ -2,7 +2,7 @@
 name: issue-scout
 description: "Выжимка по трекеру перед заведением задачи: есть ли похожая и стоит ли находка отдельной задачи. Ничего не публикует. Оркестратор вызывает агента, передавая одну находку и больше ничего."
 model: haiku
-maxTurns: 20
+maxTurns: 35
 tools: Read, Glob, Grep, Bash
 hooks:
   PreToolUse:
