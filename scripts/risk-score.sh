@@ -30,9 +30,17 @@
 #                          numstat.
 #   history              — по коммитам ветки, заголовок которых оканчивается
 #                          номером PR: состав корпуса по путям, распределение
-#                          размеров с процентилями и таблица «PR → уровень →
-#                          сигналы». Первые два блока от порогов не зависят —
-#                          из них пороги и берутся.
+#                          размеров и подсистем с процентилями, доля
+#                          срабатывания по каждому включённому сигналу,
+#                          распределение уровней и таблица «PR → уровень →
+#                          сигналы». Блоки состава и распределений от порогов
+#                          не зависят — из них пороги и берутся; доля
+#                          срабатывания и распределение уровней зависят, и это
+#                          второй проход.
+#
+# Ширина работы — число затронутых подсистем из списка subsystems конфига —
+# считается из путей, поэтому она есть у обоих входов: и у плана до первой
+# строки кода, и у готового диффа. Размер такой симметрии не имеет.
 #
 # КАК ЗАПУСКАТЬ
 #
@@ -151,7 +159,52 @@ fi
 # сам объект сигнала, запрос падал, а вывод уезжал в /dev/null.
 if ! CONFIG_ERRORS="$(jq_r '
     ["id","title","level","enabled","kind","paths","plan_flags","keywords","keyword_paths","note"] as $required
-    | if (.signals | type) != "array" then
+    | (
+      # ------ подсистемы: список ширины работы ------
+      # Проверяется тем же единственным запросом, что и сигналы. Второй вызов
+      # jq стоил бы процесса на каждый коммит корпуса — и, что важнее, не
+      # ловился бы сценарием «отказ разбора роняет скрипт»: подставной jq в
+      # харнессе отказывает ровно на программе со словом $required.
+      (
+        (((.signals // []) | select(type == "array")
+          | map(select((.enabled == true) and (.kind == "breadth"))) | length) // 0) as $breadth
+        | ((.subsystems // []) as $subs
+          | (select(((.subsystems // null) != null) and (($subs | type) != "array"))
+                | "subsystems в конфиге не массив: список подсистем читается по порядку, первое совпадение выигрывает"),
+            (select($breadth > 0 and ($subs | type) == "array" and ($subs | length) == 0)
+                | "включён сигнал вида breadth, а список subsystems пуст: считать ширину было бы нечем, и сигнал молча не срабатывал бы никогда"),
+            (select($breadth > 0 and ($subs | type) == "array" and ($subs | length) > 0
+                    and (($subs | last | select(type == "object") | .paths // []) | index("**") | not))
+                | "последняя запись subsystems не замыкающая: у неё нет шаблона «**». Без замыкающей записи путь нового верхнего каталога не попадает никуда, ширина занижается молча"),
+            ($subs | select(type == "array") | to_entries[]) as $u
+            | (select(($u.value | type) != "object")
+                  | "подсистема №\($u.key): запись не объект — ожидается {id, paths}"),
+              (select(($u.value | type) == "object")
+                | ($u.value.id // "№\($u.key)") as $uname
+                | (select((($u.value | has("id")) | not)
+                          or (($u.value.id | type) != "string") or ($u.value.id == ""))
+                      | "подсистема \($uname): нет непустого строкового id — по id и считаются различные подсистемы"),
+                  (select((($u.value.paths // []) | type) != "array")
+                      | "подсистема \($uname): paths не массив"),
+                  (select((($u.value.paths // []) | type) == "array" and (($u.value.paths // []) | length) == 0)
+                      | "подсистема \($uname): пустой список paths — запись не совпадёт ни с чем и только сдвинет порядок"),
+                  (select((($u.value.paths // []) | type) == "array"
+                          and (($u.value.paths // []) | any((type != "string") or (. == ""))))
+                      | "подсистема \($uname): пустой или нестроковый шаблон пути в paths. Пустой элемент выбрасывается сборкой регулярки, подсистема перестаёт совпадать молча, и ширина занижается — тот же класс, что пустой шаблон в paths сигнала"),
+                  (select($breadth > 0
+                          and ($u.key < (($subs | length) - 1))
+                          and ((($u.value.paths // []) | index("**")) != null))
+                      | "подсистема \($uname): шаблон «**» стоит не последней записью (№\($u.key + 1) из \($subs | length)). Выигрывает первое совпадение, поэтому все пути уходят в неё, ширина становится единицей при любой работе, и сигнал ширины молча не срабатывает никогда — обратная сторона потерянной замыкающей записи")
+              )
+          )
+      ),
+      (
+        ((.subsystems // []) | select(type == "array") | select(all(type == "object")) | map(.id)) as $uids
+        | select(($uids | length) != ($uids | unique | length))
+        | "в списке subsystems повторяются id: ширина считает различные id, и дубль занизил бы её молча"
+      ),
+      # ------ сигналы ------
+      if (.signals | type) != "array" then
           "в конфиге нет массива signals"
       elif (.signals | length) == 0 then
           "в конфиге пустой массив signals"
@@ -164,8 +217,8 @@ if ! CONFIG_ERRORS="$(jq_r '
                   | "сигнал \($name): нет обязательного поля \($field)"),
               (select(["low","medium","high"] | index($s.level // "") | not)
                   | "сигнал \($name): уровень «\($s.level)» не из low|medium|high"),
-              (select(["match","size","metric"] | index($s.kind // "") | not)
-                  | "сигнал \($name): вид «\($s.kind)» не из match|size|metric"),
+              (select(["match","size","metric","breadth"] | index($s.kind // "") | not)
+                  | "сигнал \($name): вид «\($s.kind)» не из match|size|metric|breadth"),
               (select(($s.enabled | type) != "boolean")
                   | "сигнал \($name): enabled должен быть true или false"),
               (select((($s.keywords // []) | length) > 0
@@ -178,6 +231,7 @@ if ! CONFIG_ERRORS="$(jq_r '
                   | "сигнал \($name): пустой или нестроковый элемент keywords. Слова склеиваются в одну альтернативу как есть, без выбрасывания пустых: висячая черта совпадает с любой строкой области, и сигнал даёт ложное срабатывание с пустым словом в качестве причины. Единственный пустой элемент даёт обратное — альтернатива выходит пустой, и словарная половина выключается молча")
             )
       end
+    )
 ' "$CONFIG")"; then
     die "Разбор конфига сигналов не отработал: $CONFIG — проверка не состоялась."
 fi
@@ -188,10 +242,11 @@ if [ -n "$CONFIG_ERRORS" ]; then
     exit 2
 fi
 
-IFS="$FS" read -r THRESHOLD_LINES THRESHOLD_FILES PERCENTILE PERCENTILE_METHOD \
+IFS="$FS" read -r THRESHOLD_LINES THRESHOLD_FILES THRESHOLD_BREADTH PERCENTILE PERCENTILE_METHOD \
     <<< "$(jq_r --arg fs "$FS" '[
         ((.thresholds.diff_lines // "нет") | tostring),
         ((.thresholds.diff_files // "нет") | tostring),
+        ((.thresholds.breadth_subsystems // "нет") | tostring),
         ((.thresholds.percentile // 75) | tostring),
         (.thresholds.percentile_method // "nearest-rank")
     ] | join($fs)' "$CONFIG")"
@@ -210,6 +265,16 @@ esac
 case "$THRESHOLD_FILES" in
     'нет') ;;
     '' | *[!0-9]*) die "Порог файлов в конфиге не число: «$THRESHOLD_FILES» ($CONFIG)." ;;
+esac
+
+# Порог ширины отбивается тем же guard и по той же причине: он уезжает в
+# `[ "$FACT_SUBSYSTEMS" -gt "$THRESHOLD_BREADTH" ]`, а test на нечисловом
+# правом операнде возвращает 2 — условие становится ложным, и широкая работа
+# объявляется low без единого слова о непрочитанном пороге. «нет» законно: это
+# первый проход, когда порог ещё не мерили по корпусу.
+case "$THRESHOLD_BREADTH" in
+    'нет') ;;
+    '' | *[!0-9]*) die "Порог подсистем в конфиге не число: «$THRESHOLD_BREADTH» ($CONFIG)." ;;
 esac
 
 # Процентиль тем же read читается и так же молча ломает счёт: он уезжает в
@@ -347,6 +412,45 @@ if [ "$SIGNAL_COUNT" != "$CONFIG_SIGNALS" ]; then
     die "Разбор таблицы сигналов разъехался: прочитано $SIGNAL_COUNT записей, в конфиге $CONFIG_SIGNALS сигналов ($CONFIG)."
 fi
 
+# ------------------------------------------------------------------
+# Список подсистем: единица счёта ширины работы. Порядок значим — выигрывает
+# первое совпадение, поэтому «docs/rules/**» обязан стоять выше «docs/**», а
+# замыкающая запись с «**» ловит остаток. Список читается тем же одним запросом
+# и теми же globs_to_re, что пути сигналов: своего разбора глобов здесь нет.
+# ------------------------------------------------------------------
+SUB_ID=()
+SUB_RE=()
+
+while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    IFS="$FS" read -r u_id u_paths <<< "$row"
+    SUB_ID+=("$u_id")
+    globs_to_re "$u_paths"
+    SUB_RE+=("$GLOBS_RE")
+done < <(jq_r --arg fs "$FS" --arg sep "$JOIN" '(.subsystems // [])[] | [
+        .id,
+        (.paths | join($sep))
+    ] | join($fs)' "$CONFIG")
+
+SUBSYSTEM_COUNT="${#SUB_ID[@]}"
+
+# Тот же инвариант, что у сигналов: перевод строки внутри значения разрезал бы
+# запись пополам, поля разъехались бы, и ширина посчиталась бы по мусору.
+CONFIG_SUBSYSTEMS="$(jq_r '(.subsystems // []) | length' "$CONFIG")"
+if [ "$SUBSYSTEM_COUNT" != "$CONFIG_SUBSYSTEMS" ]; then
+    die "Разбор списка подсистем разъехался: прочитано $SUBSYSTEM_COUNT записей, в конфиге $CONFIG_SUBSYSTEMS подсистем ($CONFIG)."
+fi
+
+# Включён ли вообще сигнал ширины: от этого зависит, печатать ли строку о
+# несчитанном пороге. Пустой список при включённом сигнале отбит проверкой
+# конфига выше.
+BREADTH_ENABLED=0
+for ((i = 0; i < SIGNAL_COUNT; i++)); do
+    if [ "${SIG_KIND[$i]}" = 'breadth' ] && [ "${SIG_ENABLED[$i]}" = 'true' ]; then
+        BREADTH_ENABLED=1
+    fi
+done
+
 level_rank() {
     case "$1" in
         high) printf '2' ;;
@@ -372,7 +476,42 @@ FACT_ADDED=''   # добавленные строки в виде «путь<TAB
 FACT_LINES=0
 FACT_FILES=0
 FACT_KIND=''    # plan | diff
+FACT_SUBSYSTEMS=0      # различных подсистем среди изменённых путей
+FACT_SUBSYSTEM_IDS=''  # их перечень через запятую, в порядке первой встречи
 declare -A FACT_FLAGS=()
+
+# Ширина — такой же факт, как число файлов, а не продукт движка: её считают оба
+# сборщика, печатает строка «Факты» в обоих режимах, и накапливает распределение
+# режим history. Внутрь evaluate() за ней лезть не надо.
+count_subsystems() {
+    local path idx re
+    local -A hit=()
+
+    FACT_SUBSYSTEMS=0
+    FACT_SUBSYSTEM_IDS=''
+    [ "$SUBSYSTEM_COUNT" -eq 0 ] && return 0
+
+    while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        for ((idx = 0; idx < SUBSYSTEM_COUNT; idx++)); do
+            [ -z "${SUB_RE[$idx]}" ] && continue
+            re="^(${SUB_RE[$idx]})$"
+            if [[ "$path" =~ $re ]]; then
+                # Первое совпадение выигрывает: путь принадлежит ровно одной
+                # подсистеме, и пересекающиеся глобы («docs/rules/**» и
+                # «docs/**») не считают его дважды.
+                if [ -z "${hit[${SUB_ID[$idx]}]+есть}" ]; then
+                    hit["${SUB_ID[$idx]}"]=1
+                    FACT_SUBSYSTEMS=$((FACT_SUBSYSTEMS + 1))
+                    [ -n "$FACT_SUBSYSTEM_IDS" ] && FACT_SUBSYSTEM_IDS+=', '
+                    FACT_SUBSYSTEM_IDS+="${SUB_ID[$idx]}"
+                fi
+                break
+            fi
+        done
+    done <<< "$FACT_PATHS"
+    return 0
+}
 
 git_repo_check() {
     [ -d "$REPO" ] || die "Не найден каталог репозитория: $REPO"
@@ -417,6 +556,8 @@ collect_plan_facts() {
     while IFS= read -r flag; do
         [ -n "$flag" ] && FACT_FLAGS["$flag"]=1
     done <<< "$flags_raw"
+
+    count_subsystems
 }
 
 collect_diff_facts() {
@@ -484,6 +625,8 @@ collect_diff_facts() {
             die "Добавленные строки не прочитаны: git diff -U0 $base $head в $REPO — счёт не состоялся."
         fi
     fi
+
+    count_subsystems
 }
 
 # ------------------------------------------------------------------
@@ -535,6 +678,20 @@ evaluate() {
                 if [ "$FACT_LINES" -gt "$THRESHOLD_LINES" ] \
                     || [ "$FACT_FILES" -gt "$THRESHOLD_FILES" ]; then
                     reasons+="      размер диффа: строк: $FACT_LINES (порог $THRESHOLD_LINES), файлов: $FACT_FILES (порог $THRESHOLD_FILES)"$'\n'
+                fi
+            fi
+        elif [ "$kind" = 'breadth' ]; then
+            # Своя ветка обязательна: вид, дошедший до общего else, получил бы
+            # пустые paths, plan_flags и keywords — сигнал молча не срабатывал
+            # бы никогда, пройдя при этом проверку конфига.
+            #
+            # Условия на FACT_KIND здесь нет намеренно, в отличие от ветки
+            # размера: подсистемы считаются из путей, а пути есть у обоих
+            # входов. Ширина — единственный признак объёма, который виден до
+            # первой строки кода.
+            if [ "$THRESHOLD_BREADTH" != 'нет' ] && [ "$SUBSYSTEM_COUNT" -gt 0 ]; then
+                if [ "$FACT_SUBSYSTEMS" -gt "$THRESHOLD_BREADTH" ]; then
+                    reasons+="      ширина работы: подсистем $FACT_SUBSYSTEMS (порог $THRESHOLD_BREADTH): $FACT_SUBSYSTEM_IDS"$'\n'
                 fi
             fi
         else
@@ -620,10 +777,19 @@ print_verdict() {
     printf 'Уровень: %s\n' "$EVAL_LEVEL"
     printf '%s\n' "$1"
     printf 'Конфиг: %s\n' "$CONFIG"
+    # Перечень подсистем печатается рядом с числом, а не только в причине
+    # сработавшего сигнала: без него «подсистем 7» — число, которое нечем
+    # проверить, и разъехавшийся список подсистем виден лишь по итогу.
+    local breadth_fact="$FACT_SUBSYSTEMS"
+    if [ -n "$FACT_SUBSYSTEM_IDS" ]; then
+        breadth_fact="$FACT_SUBSYSTEMS ($FACT_SUBSYSTEM_IDS)"
+    fi
+
     if [ "$FACT_KIND" = 'diff' ]; then
-        printf 'Факты: файлов %s, строк изменено %s\n' "$FACT_FILES" "$FACT_LINES"
+        printf 'Факты: файлов %s, строк изменено %s, подсистем %s\n' \
+            "$FACT_FILES" "$FACT_LINES" "$breadth_fact"
     else
-        printf 'Факты: файлов в плане %s\n' "$FACT_FILES"
+        printf 'Факты: файлов в плане %s, подсистем %s\n' "$FACT_FILES" "$breadth_fact"
     fi
 
     if [ -n "$EVAL_REPORT" ]; then
@@ -647,6 +813,15 @@ print_verdict() {
         && { [ "$THRESHOLD_LINES" = 'нет' ] || [ "$THRESHOLD_FILES" = 'нет' ]; }; then
         printf 'Порог размера в конфиге не задан: сигнал размера не считался. '
         printf 'Его печатает первый проход подкомандой history.\n'
+    fi
+
+    # Условия FACT_KIND здесь нет — и это не небрежность, а разница между двумя
+    # признаками: размер мерится только по диффу, ширина — в обоих режимах.
+    # Повторить здесь условие «только diff» значило бы лишить первый проход в
+    # режиме plan единственного признака того, что порог не считался.
+    if [ "$BREADTH_ENABLED" -eq 1 ] && [ "$THRESHOLD_BREADTH" = 'нет' ]; then
+        printf 'Порог ширины в конфиге не задан: подсистемы посчитаны, сигнал ширины не считался. '
+        printf 'Их распределение печатает первый проход подкомандой history.\n'
     fi
 }
 
@@ -724,8 +899,11 @@ case "$MODE" in
         TABLE=''
         LINES_LIST=''
         FILES_LIST=''
+        SUBS_LIST=''
         TOPDIRS=''
         MERGE_COMMITS=0
+        declare -A FIRE_COUNT=()
+        declare -A LEVEL_COUNT=()
 
         while IFS= read -r entry; do
             [ -z "$entry" ] && continue
@@ -760,6 +938,16 @@ case "$MODE" in
 
             LINES_LIST+="$FACT_LINES"$'\n'
             FILES_LIST+="$FACT_FILES"$'\n'
+            SUBS_LIST+="$FACT_SUBSYSTEMS"$'\n'
+
+            # Доля срабатывания считается по каждому сигналу отдельно, а не
+            # суммарной долей medium+: суммарная включает PR, поднятые другими
+            # сигналами, и по ней нельзя решить, работает ли признак.
+            LEVEL_COUNT["$EVAL_LEVEL"]=$(( ${LEVEL_COUNT["$EVAL_LEVEL"]:-0} + 1 ))
+            while IFS= read -r fired_id; do
+                [ -z "$fired_id" ] && continue
+                FIRE_COUNT["$fired_id"]=$(( ${FIRE_COUNT["$fired_id"]:-0} + 1 ))
+            done <<< "$EVAL_IDS"
 
             while IFS= read -r path; do
                 [ -z "$path" ] && continue
@@ -769,7 +957,7 @@ case "$MODE" in
                 esac
             done <<< "$FACT_PATHS"
 
-            TABLE+="| #$number | $EVAL_LEVEL | $(fired_ids_inline) | $FACT_LINES | $FACT_FILES |"$'\n'
+            TABLE+="| #$number | $EVAL_LEVEL | $(fired_ids_inline) | $FACT_LINES | $FACT_FILES | $FACT_SUBSYSTEMS |"$'\n'
         done <<< "$SELECTED"
 
         printf 'Состав корпуса\n'
@@ -795,17 +983,57 @@ case "$MODE" in
             "$PERCENTILE" "$(percentile "$PERCENTILE" "$FILES_LIST")" \
             "$(percentile 90 "$FILES_LIST")" \
             "$(percentile 100 "$FILES_LIST")"
-        printf '  Порог в конфиге сейчас: строк %s, файлов %s\n' \
-            "$THRESHOLD_LINES" "$THRESHOLD_FILES"
+        printf '  Подсистем на PR: p50 = %s, p%s = %s, p90 = %s, максимум = %s\n' \
+            "$(percentile 50 "$SUBS_LIST")" \
+            "$PERCENTILE" "$(percentile "$PERCENTILE" "$SUBS_LIST")" \
+            "$(percentile 90 "$SUBS_LIST")" \
+            "$(percentile 100 "$SUBS_LIST")"
+        printf '  Порог в конфиге сейчас: строк %s, файлов %s, подсистем %s\n' \
+            "$THRESHOLD_LINES" "$THRESHOLD_FILES" "$THRESHOLD_BREADTH"
+
+        # Доля срабатывания — по каждому включённому сигналу отдельно, включая
+        # те, что не сработали ни разу: строка «0 %» и отсутствие строки — не
+        # одно и то же, а признак, срабатывающий на всём корпусе, виден только
+        # своим числом.
+        printf '\nДоля срабатывания по сигналам\n'
+        for ((i = 0; i < SIGNAL_COUNT; i++)); do
+            [ "${SIG_ENABLED[$i]}" = 'true' ] || continue
+            printf '  %s — сработал на %s из %s PR (%s %%)\n' \
+                "${SIG_ID[$i]}" \
+                "${FIRE_COUNT[${SIG_ID[$i]}]:-0}" \
+                "$SELECTED_COUNT" \
+                "$(awk -v n="${FIRE_COUNT[${SIG_ID[$i]}]:-0}" -v m="$SELECTED_COUNT" \
+                    'BEGIN { printf "%.0f", (m == 0 ? 0 : n * 100 / m) }')"
+        done
+
+        printf '\nРаспределение уровней по корпусу\n'
+        for hist_level in high medium low; do
+            printf '  %s: %s из %s (%s %%)\n' \
+                "$hist_level" \
+                "${LEVEL_COUNT[$hist_level]:-0}" \
+                "$SELECTED_COUNT" \
+                "$(awk -v n="${LEVEL_COUNT[$hist_level]:-0}" -v m="$SELECTED_COUNT" \
+                    'BEGIN { printf "%.0f", (m == 0 ? 0 : n * 100 / m) }')"
+        done
+        MEDIUM_PLUS=$(( ${LEVEL_COUNT[high]:-0} + ${LEVEL_COUNT[medium]:-0} ))
+        printf '  medium и выше: %s из %s (%s %%)\n' \
+            "$MEDIUM_PLUS" "$SELECTED_COUNT" \
+            "$(awk -v n="$MEDIUM_PLUS" -v m="$SELECTED_COUNT" \
+                'BEGIN { printf "%.0f", (m == 0 ? 0 : n * 100 / m) }')"
 
         printf '\nPR → уровень → сигналы\n'
-        printf '| PR | Уровень | Сигналы | Строк | Файлов |\n'
-        printf '|---|---|---|---|---|\n'
+        printf '| PR | Уровень | Сигналы | Строк | Файлов | Подсистем |\n'
+        printf '|---|---|---|---|---|---|\n'
         printf '%s' "$TABLE"
 
         if [ "$THRESHOLD_LINES" = 'нет' ] || [ "$THRESHOLD_FILES" = 'нет' ]; then
             printf '\nПорог размера в конфиге не задан: сигнал размера в таблице не считался.\n'
             printf 'Это первый проход — процентиль из блока выше идёт в pipeline/risk.json.\n'
+        fi
+
+        if [ "$BREADTH_ENABLED" -eq 1 ] && [ "$THRESHOLD_BREADTH" = 'нет' ]; then
+            printf '\nПорог ширины в конфиге не задан: сигнал ширины в таблице не считался.\n'
+            printf 'Это первый проход — распределение подсистем из блока выше идёт в pipeline/risk.json.\n'
         fi
         exit 0
         ;;

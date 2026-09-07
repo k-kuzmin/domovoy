@@ -1129,6 +1129,309 @@ expect_no_output 'Уровень:'
 end_case
 
 # ------------------------------------------------------------------
+# Ширина работы: число затронутых подсистем. Признак считается из путей, и
+# поэтому он единственный признак объёма, который есть у обоих входов.
+# ------------------------------------------------------------------
+BREADTH="$(jq -r '.thresholds.breadth_subsystems // "нет"' "$CONFIG" | tr -d '\r')"
+
+# Глоб подсистемы → конкретный путь того же вида. Образцы берутся из конфига, а
+# не перечисляются здесь: список подсистем меняется, и захардкоженная копия
+# разъехалась бы с ним молча.
+sample_path() {
+    case "$1" in
+        '**') printf 'файл-в-корне-без-подсистемы.txt' ;;
+        *'/**') printf '%s/образец.md' "${1%/**}" ;;
+        *'*'*) printf 'образец-глоба.txt' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# ------------------------------------------------------------------
+begin_case 'Ширина работы: план #84 из фикстуры выше low, работа масштаба #110 остаётся low'
+# Контрольная пара задачи #117: утверждение о разнице, и порознь стороны его не
+# доказывают. Высокая половина — настоящий согласованный план #84, десять файлов
+# в семи подсистемах; низкая — состав путей настоящей работы #110, два файла в
+# двух подсистемах.
+if [ "$BREADTH" = 'нет' ]; then
+    fail_case 'порог подсистем в pipeline/risk.json не заполнен: прогон history ещё не записал распределение'
+elif [ ! -f "$FIXTURES/84.json" ]; then
+    fail_case "нет фикстуры контрольной пары: $FIXTURES/84.json"
+else
+    run_score plan "$FIXTURES/84.json"
+    expect_status 0
+    expect_signal work-breadth
+    expect_output 'подсистем 7'
+    expect_output "ширина работы: подсистем 7 (порог $BREADTH)"
+    if [ "$(first_line)" = 'Уровень: low' ]; then
+        fail_case 'план #84 из фикстуры остался low — контрольная пара не разведена'
+    fi
+
+    PLAN_110="$(make_plan "$FLAGS_NONE" \
+        '.claude/agents/step-review-correctness.md' \
+        'docs/tasks/110.md')"
+    run_score plan "$PLAN_110"
+    expect_status 0
+    expect_output 'подсистем 2 (.claude/agents, docs/tasks)'
+    expect_signal_silent work-breadth
+    expect_level low
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Подсистем выше порога — сигнал ширины в обоих режимах, ровно порог — молчание'
+# Образцы отбираются прогоном: подсистема, чей образец сам по себе поднимает
+# уровень (pipeline/**, contracts/**, src/Domovoy.Ha/**), в набор не годится —
+# сценарий доказывал бы чужой сигнал вместо ширины.
+if [ "$BREADTH" = 'нет' ]; then
+    fail_case 'порог подсистем в pipeline/risk.json не заполнен'
+else
+    SAFE_SAMPLES=()
+    NEED=$((BREADTH + 1))
+    while IFS= read -r sub_glob; do
+        [ -z "$sub_glob" ] && continue
+        [ "${#SAFE_SAMPLES[@]}" -ge "$NEED" ] && break
+        SAMPLE="$(sample_path "$sub_glob")"
+        PLAN_ONE="$(make_plan "$FLAGS_NONE" "$SAMPLE")"
+        run_score plan "$PLAN_ONE"
+        if [ "$STATUS" -eq 0 ] && [ "$(first_line)" = 'Уровень: low' ]; then
+            SAFE_SAMPLES+=("$SAMPLE")
+        fi
+    done <<< "$(jq -r '.subsystems[] | .paths[0]' "$CONFIG" | tr -d '\r')"
+
+    if [ "${#SAFE_SAMPLES[@]}" -lt "$NEED" ]; then
+        fail_case "подсистем без собственного сигнала меньше, чем нужно: ${#SAFE_SAMPLES[@]} против $NEED"
+    else
+        ABOVE_PATHS=("${SAFE_SAMPLES[@]:0:$NEED}")
+        EXACT_PATHS=("${SAFE_SAMPLES[@]:0:$BREADTH}")
+
+        new_repo
+        for p in "${ABOVE_PATHS[@]}"; do put "$p"; done
+        commit_repo 'правка шире порога'
+        run_score diff HEAD~1 HEAD --repo "$REPO"
+        expect_status 0
+        expect_level "$(config_level work-breadth)"
+        expect_signal work-breadth
+        expect_output "ширина работы: подсистем $NEED (порог $BREADTH)"
+
+        PLAN_ABOVE="$(make_plan "$FLAGS_NONE" "${ABOVE_PATHS[@]}")"
+        run_score plan "$PLAN_ABOVE"
+        expect_status 0
+        # Тот же уровень от другого входа на тех же путях: признак считается из
+        # путей, а не из режима, — в отличие от размера.
+        expect_level "$(config_level work-breadth)"
+        expect_signal work-breadth
+        expect_output "ширина работы: подсистем $NEED (порог $BREADTH)"
+
+        # Ровно порог сигнала не даёт: сравнение строгое, как у diff-size.
+        new_repo
+        for p in "${EXACT_PATHS[@]}"; do put "$p"; done
+        commit_repo 'правка ровно на пороге подсистем'
+        run_score diff HEAD~1 HEAD --repo "$REPO"
+        expect_status 0
+        expect_output "подсистем $BREADTH"
+        expect_signal_silent work-breadth
+        expect_level low
+
+        PLAN_EXACT="$(make_plan "$FLAGS_NONE" "${EXACT_PATHS[@]}")"
+        run_score plan "$PLAN_EXACT"
+        expect_status 0
+        expect_output "подсистем $BREADTH"
+        expect_signal_silent work-breadth
+        expect_level low
+    fi
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Нечисловой порог подсистем и сломанный список подсистем роняют скрипт кодом 2'
+# Тот же класс отказа, что у порогов размера: порог уезжает в арифметику test,
+# и нечисловое значение делает оба условия ложными молча. Список подсистем —
+# вторая половина: пустой список при включённом сигнале ширины, пустой шаблон
+# внутри записи и потерянная замыкающая запись ведут к занижению ширины без
+# единого слова о том, что считать было нечем.
+new_repo
+put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+commit_repo 'правка'
+
+MUT_BREADTH_TEXT="$(mutate_config '.thresholds.breadth_subsystems = "семь"')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_BREADTH_TEXT"
+expect_status 2
+expect_output 'Порог подсистем в конфиге не число'
+expect_no_output 'Уровень:'
+
+MUT_SUBS_EMPTY="$(mutate_config '.subsystems = []')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_SUBS_EMPTY"
+expect_status 2
+expect_output 'список subsystems пуст'
+expect_no_output 'Уровень:'
+
+MUT_SUBS_BLANK="$(mutate_config '.subsystems |= map(if .id == "scripts" then .paths += [""] else . end)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_SUBS_BLANK"
+expect_status 2
+expect_output 'пустой или нестроковый шаблон пути в paths'
+expect_no_output 'Уровень:'
+
+MUT_SUBS_NO_TAIL="$(mutate_config '.subsystems |= .[0:-1]')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_SUBS_NO_TAIL"
+expect_status 2
+expect_output 'не замыкающая'
+expect_no_output 'Уровень:'
+
+MUT_SUBS_DUP="$(mutate_config '.subsystems |= map(.id = "одна")')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_SUBS_DUP"
+expect_status 2
+expect_output 'повторяются id'
+expect_no_output 'Уровень:'
+
+# Обратная сторона потерянной замыкающей записи: замыкание на месте, но такой же
+# шаблон стоит выше. Первое совпадение выигрывает, все пути уходят в жадную
+# запись, ширина становится единицей при любой работе — и, в отличие от
+# остальных пяти классов, прежняя проверка этого не видела: последняя запись
+# по-прежнему замыкающая.
+MUT_SUBS_GREEDY="$(mutate_config '.subsystems |= ([{"id": "жадная", "paths": ["**"]}] + .)')"
+run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_SUBS_GREEDY"
+expect_status 2
+expect_output 'стоит не последней записью'
+expect_no_output 'Уровень:'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Порог подсистем не задан — код 0, уровень low и строка о несчитанной ширине в обоих режимах'
+# Законный первый проход, а не поломка. Проверяется в обоих режимах: у строки о
+# пороге размера стоит условие FACT_KIND=diff, и повторение его для ширины
+# лишило бы режим plan единственного признака того, что порог не считался.
+new_repo
+put '.claude/agents/образец.md' 'строка определения'
+put 'docs/rules/образец.md' 'строка правил'
+put 'docs/tasks/образец.md' 'строка журнала'
+put 'scripts/образец.sh' '#!/usr/bin/env bash'
+put 'tests/Domovoy.Tests/Образец.cs' 'public sealed class Образец;'
+commit_repo 'широкая правка'
+
+for mutation in 'del(.thresholds.breadth_subsystems)' '.thresholds.breadth_subsystems = "нет"'; do
+    MUT_NO_BREADTH="$(mutate_config "$mutation")"
+    run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_BREADTH"
+    expect_status 0
+    expect_output 'Порог ширины в конфиге не задан'
+    expect_output 'подсистем 5'
+    expect_signal_silent work-breadth
+    expect_level low
+
+    PLAN_NO_BREADTH="$(make_plan "$FLAGS_NONE" \
+        '.claude/agents/образец.md' \
+        'docs/rules/образец.md' \
+        'docs/tasks/образец.md' \
+        'scripts/образец.sh' \
+        'tests/Domovoy.Tests/Образец.cs')"
+    run_score plan "$PLAN_NO_BREADTH" --config "$MUT_NO_BREADTH"
+    expect_status 0
+    expect_output 'Порог ширины в конфиге не задан'
+    expect_output 'подсистем 5'
+    expect_level low
+done
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Каждый путь дерева попадает ровно в одну подсистему списка'
+# Материал — настоящие файлы дерева, взятые там, где глобы подсистем
+# пересекаются: docs/rules против docs, .claude/agents против .claude. Ровно
+# одна подсистема на путь доказывает, что выигрывает первое совпадение, а не
+# что списки не пересекаются.
+for pair in \
+    '.claude/agents/step-implement.md|.claude/agents' \
+    '.claude/CLAUDE.md|.claude' \
+    'docs/rules/implement.md|docs/rules' \
+    'docs/decisions/README.md|docs/decisions' \
+    'docs/tasks/TEMPLATE.md|docs/tasks' \
+    'docs/pipeline.md|docs' \
+    'pipeline/risk.json|pipeline' \
+    'scripts/risk-score.sh|scripts'; do
+    tree_path="${pair%%|*}"
+    want_sub="${pair##*|}"
+    if [ ! -f "$ROOT/$tree_path" ]; then
+        fail_case "материал дерева исчез: $tree_path — сценарий провален, а не пропущен"
+        continue
+    fi
+    PLAN_TREE="$(make_plan "$FLAGS_NONE" "$tree_path")"
+    run_score plan "$PLAN_TREE"
+    expect_status 0
+    expect_output "подсистем 1 ($want_sub)"
+done
+
+# Непокрытых путей не остаётся: новый верхний каталог ловит замыкающая запись,
+# а не тишина. Без неё ширина занижалась бы молча.
+PLAN_UNKNOWN="$(make_plan "$FLAGS_NONE" 'совсем-новый-каталог/файл.md' 'файл-в-корне.txt')"
+run_score plan "$PLAN_UNKNOWN"
+expect_status 0
+expect_output 'подсистем 1 (прочее)'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'history печатает долю срабатывания по каждому сигналу, распределение подсистем и распределение уровней'
+new_repo
+put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
+commit_repo 'feat: первый смерженный (#11)'
+put 'scripts/что-нибудь.sh' '#!/usr/bin/env bash'
+put 'docs/pipeline.md' 'строка реестра'
+put 'docs/rules/implement.md' 'строка правил'
+put 'docs/tasks/44.md' 'строка журнала'
+put '.claude/agents/step-что-нибудь.md' 'строка определения'
+commit_repo 'ci: второй смерженный (#22)'
+put 'src/Domovoy.Data/Migrations/20260101000000_Init.cs' 'public sealed partial class Init;'
+commit_repo 'feat: третий смерженный (#33)'
+run_score history --repo "$REPO" --base main
+expect_status 0
+expect_output 'Доля срабатывания по сигналам'
+expect_output 'Подсистем на PR: p50 ='
+expect_output 'Распределение уровней по корпусу'
+expect_output 'medium и выше:'
+
+HIST_ROWS="$(printf '%s\n' "$OUTPUT" | grep -cE '^\| #[0-9]+ \|')"
+if [ "$HIST_ROWS" -ne 3 ]; then
+    fail_case "строк таблицы $HIST_ROWS, а коммитов с номером PR во временном репозитории три"
+fi
+
+# Доля срабатывания сходится с таблицей: N — число строк, в которых сигнал
+# перечислен, M — число строк таблицы. Блок, который печатает своё число, а не
+# считает по корпусу, здесь и краснеет.
+while IFS= read -r share_id; do
+    [ -z "$share_id" ] && continue
+    SHARE_LINE="$(printf '%s\n' "$OUTPUT" | grep -E "^  $share_id — сработал на ")"
+    if [ -z "$SHARE_LINE" ]; then
+        fail_case "в history нет строки доли срабатывания сигнала: $share_id"
+        continue
+    fi
+    SHARE_REST="${SHARE_LINE#*сработал на }"
+    SHARE_N="${SHARE_REST%% *}"
+    SHARE_REST="${SHARE_REST#* из }"
+    SHARE_M="${SHARE_REST%% *}"
+    ROWS_WITH="$(printf '%s\n' "$OUTPUT" | grep -E '^\| #[0-9]+ \|' | grep -cF -- "$share_id")"
+    if [ "$SHARE_M" != "$HIST_ROWS" ]; then
+        fail_case "у сигнала $share_id корпус в доле $SHARE_M, а строк таблицы $HIST_ROWS"
+    fi
+    if [ "$SHARE_N" != "$ROWS_WITH" ]; then
+        fail_case "у сигнала $share_id доля $SHARE_N, а в таблице он перечислен в $ROWS_WITH строках"
+    fi
+done <<< "$(jq -r '.signals[] | select(.enabled == true) | .id' "$CONFIG" | tr -d '\r')"
+
+# Сумма штук распределения уровней равна числу строк таблицы: уровень, не
+# попавший ни в одну корзину, — потерянный PR.
+LEVEL_SUM=0
+for hist_level in high medium low; do
+    LEVEL_LINE="$(printf '%s\n' "$OUTPUT" | grep -E "^  $hist_level: ")"
+    if [ -z "$LEVEL_LINE" ]; then
+        fail_case "в history нет строки распределения уровня: $hist_level"
+        continue
+    fi
+    LEVEL_REST="${LEVEL_LINE#*: }"
+    LEVEL_SUM=$((LEVEL_SUM + ${LEVEL_REST%% *}))
+done
+if [ "$LEVEL_SUM" -ne "$HIST_ROWS" ]; then
+    fail_case "сумма распределения уровней $LEVEL_SUM, а строк таблицы $HIST_ROWS"
+fi
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Сверка обвязки видит риск-скор освобождённым, а его харнесс вызванным'
 OUTPUT="$(bash "$SCRIPT_DIR/wiring.sh" "$ROOT" 2>&1)"
 STATUS=$?
