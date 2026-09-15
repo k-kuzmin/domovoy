@@ -24,6 +24,7 @@ hooks:
             'bash scripts/plan-review-round.sh'
             'bash scripts/plan-review-round.test.sh'
             'bash scripts/review-comments.sh'
+            'bash scripts/review-comments.test.sh'
 ---
 
 Ты чинишь красную проверку или замечания ревью на открытом PR.
