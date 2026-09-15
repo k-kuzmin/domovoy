@@ -603,6 +603,45 @@ expect_status 0
 expect_deny
 end_case
 
+# ------------------------------------------------------------------
+# Сценарий 27. Построчные замечания ревью: поимённый сценарий выдан,
+# сам `gh api` — нет.
+#
+# Эндпоинт `repos/{owner}/{repo}/pulls/<номер>/comments` — единственный
+# источник построчных замечаний, и соблазн выдать шагу `gh api` прямой. Выдать
+# его нельзя: у команды есть `-X`, `--method` и `--input`, а разбор аргументов
+# здесь дальше поимённых флагов не идёт — запрет записан строкой «Новая
+# команда, нужная шагу» в .claude/CLAUDE.md. Поэтому граница остаётся
+# поимённой: `gh api` живёт внутри scripts/review-comments.sh, а наружу выдана
+# одна строка.
+#
+# Обе половины нужны вместе. Без отказа запрет держался бы на том, что команду
+# просто не вписали в список; без молчания поимённая выдача выглядела бы
+# работающей, оставаясь мёртвой записью, — и шаг узнал бы об этом на первом же
+# PR с замечаниями.
+# ------------------------------------------------------------------
+FIX=('gh pr view' 'gh pr diff' 'gh pr checks' 'gh pr comment' 'gh run view'
+    'bash scripts/review-comments.sh')
+
+begin_case 'gh api на шаге починки — отказ'
+call_hook 'gh api repos/{owner}/{repo}/pulls/122/comments' "${FIX[@]}"
+expect_status 0
+expect_deny
+expect_output 'gh api repos/{owner}/{repo}/pulls/122/comments'
+end_case
+
+begin_case 'gh api с методом записи на шаге починки — отказ'
+call_hook 'gh api --method POST repos/{owner}/{repo}/issues/123/comments' "${FIX[@]}"
+expect_status 0
+expect_deny
+end_case
+
+begin_case 'поимённый сценарий чтения замечаний — молчание'
+call_hook 'bash scripts/review-comments.sh 122' "${FIX[@]}"
+expect_status 0
+expect_silence
+end_case
+
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
 

@@ -23,6 +23,7 @@ hooks:
             'bash scripts/risk-score.sh' 'bash scripts/risk-score.test.sh'
             'bash scripts/plan-review-round.sh'
             'bash scripts/plan-review-round.test.sh'
+            'bash scripts/review-comments.test.sh'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.
