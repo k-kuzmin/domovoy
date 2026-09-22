@@ -902,6 +902,136 @@ expect_no_output 'Проверка 8'
 end_case
 
 # ------------------------------------------------------------------
+# Проверка 9. Разрушительный и неидемпотентный SQL в миграции.
+#
+# Материал целиком синтетический: миграций в дереве ноль, и формы, которые
+# даст настоящий генератор EF, могут отличаться. Фикстуры повторяют формы
+# сгенерированного кода — migrationBuilder.Sql, table.Column, b.Property.
+#
+# Каждый сценарий под Migrations/ идёт с GUARD_ALLOW_PROTECTED=1: иначе код 1
+# пришёл бы от проверки 1, и сценарий оставался бы зелёным при выключенной
+# проверке 9. Положительные ждут раздел «Проверка 9» и имя правила, а не код.
+# ------------------------------------------------------------------
+put_migration() {
+    local target="$1" name="$2" line
+    shift 2
+    mkdir -p "$target/src/Domovoy.Data/Migrations"
+    {
+        printf 'namespace Domovoy.Data.Migrations;\n\n'
+        printf 'public partial class %s\n{\n' "$name"
+        printf '    protected override void Up(MigrationBuilder migrationBuilder)\n    {\n'
+        for line in "$@"; do
+            printf '        %s\n' "$line"
+        done
+        printf '    }\n}\n'
+    } > "$target/src/Domovoy.Data/Migrations/20260901120000_$name.cs"
+}
+
+migration_line() {
+    local target="$1" name="$2" needle="$3"
+    grep -nF -- "$needle" "$target/src/Domovoy.Data/Migrations/20260901120000_$name.cs" \
+        | head -n 1 | cut -d: -f1
+}
+
+begin_case 'проверка 9: каждое из пяти правил B.4 ловится на добавленной строке и называет себя'
+for rule in \
+    'DeleteRows|DELETE FROM или TRUNCATE|migrationBuilder.Sql("DELETE FROM \"Conversations\" WHERE \"Archived\";");|migrationBuilder.Sql("TRUNCATE TABLE \"Messages\";");' \
+    'DropTable|DROP без IF EXISTS|migrationBuilder.Sql("DROP TABLE \"Legacy\";");|' \
+    'LockTable|ACCESS EXCLUSIVE|migrationBuilder.Sql("LOCK TABLE \"Conversations\" IN ACCESS EXCLUSIVE MODE;");|' \
+    'PrimaryKey|ADD CONSTRAINT … PRIMARY KEY|migrationBuilder.Sql("ALTER TABLE \"Messages\" ADD CONSTRAINT \"PK_Messages\" PRIMARY KEY (\"Id\");");|' \
+    'NotIdempotent|CREATE TABLE или ADD COLUMN без IF NOT EXISTS|migrationBuilder.Sql("CREATE TABLE \"Notes\" (\"Id\" integer);");|migrationBuilder.Sql("ALTER TABLE \"Notes\" ADD COLUMN \"Text\" text;");'; do
+    IFS='|' read -r mig_name rule_name first_sql second_sql <<< "$rule"
+    new_fixture
+    if [ -n "$second_sql" ]; then
+        put_migration "$repo" "$mig_name" "$first_sql" "$second_sql"
+    else
+        put_migration "$repo" "$mig_name" "$first_sql"
+    fi
+    commit_all "$repo" "feat: миграция $mig_name"
+    run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+    expect_status 1
+    expect_output 'Проверка 9'
+    expect_output "правило «$rule_name»"
+    mig_path="src/Domovoy.Data/Migrations/20260901120000_$mig_name.cs"
+    expect_output "::error file=$mig_path,line=$(migration_line "$repo" "$mig_name" "$first_sql")::"
+    if [ -n "$second_sql" ]; then
+        expect_output "::error file=$mig_path,line=$(migration_line "$repo" "$mig_name" "$second_sql")::"
+    fi
+done
+end_case
+
+begin_case 'проверка 9: SQL в смешанном регистре ловится так же'
+# Шаблоны правил записаны в нижнем регистре, и совпасть со строкой
+# «Truncate Table» они могут только сравнением без учёта регистра.
+new_fixture
+put_migration "$repo" 'MixedCase' 'migrationBuilder.Sql("Truncate Table \"Messages\";");'
+commit_all "$repo" 'feat: миграция в смешанном регистре'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 1
+expect_output 'Проверка 9'
+expect_output 'правило «DELETE FROM или TRUNCATE»'
+end_case
+
+begin_case 'проверка 9: идемпотентные IF NOT EXISTS и DROP … IF EXISTS не срабатывают'
+new_fixture
+put_migration "$repo" 'Idempotent' \
+    'migrationBuilder.Sql("ALTER TABLE \"Notes\" ADD COLUMN IF NOT EXISTS \"Text\" text;");' \
+    'migrationBuilder.Sql("CREATE TABLE IF NOT EXISTS \"Notes\" (\"Id\" integer);");' \
+    'migrationBuilder.Sql("CREATE INDEX IF NOT EXISTS \"IX_Notes_Text\" ON \"Notes\" (\"Text\");");' \
+    'migrationBuilder.Sql("DROP INDEX IF EXISTS \"IX_Notes_Old\";");'
+commit_all "$repo" 'feat: идемпотентная миграция'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_no_output 'Проверка 9'
+end_case
+
+begin_case 'проверка 9: идентификаторы EF со словом Truncate не срабатывают'
+# Однословное truncate без границ совпало бы с именами сгенерированного кода.
+# Материал держит обе границы: shouldTruncate с пробелом после — ведущую,
+# TruncateAfter и .Truncate( — замыкающую.
+new_fixture
+put_migration "$repo" 'TruncatedFlag' \
+    'migrationBuilder.AddColumn<bool>(name: "IsTruncated", table: "Messages", nullable: false);' \
+    'var shouldTruncate = false;' \
+    'var preview = text.Truncate(80);'
+cat > "$repo/src/Domovoy.Data/Migrations/20260901120000_TruncatedFlag.Designer.cs" <<'EOF'
+namespace Domovoy.Data.Migrations;
+
+partial class TruncatedFlag
+{
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity("Domovoy.Data.Message", b =>
+        {
+            b.Property<bool>("IsTruncated");
+            b.Property<int>("TruncateAfter");
+        });
+    }
+}
+EOF
+commit_all "$repo" 'feat: флаг усечения сообщения'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_no_output 'Проверка 9'
+end_case
+
+begin_case 'проверка 9: разрушительный SQL с меткой agent/allow-destructive-migration — гейт пропускает'
+# DELETE FROM в миграции переноса данных законен, и решение за человеком —
+# та же метка, что у проверки 4. Раздел проверки называет, что разрешено.
+new_fixture
+put_migration "$repo" 'MoveData' \
+    'migrationBuilder.Sql("DELETE FROM \"Conversations\" WHERE \"Archived\";");'
+commit_all "$repo" 'feat: перенос данных'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_output 'Проверка 9'
+expect_output "разрешено: src/Domovoy.Data/Migrations/20260901120000_MoveData.cs:$(migration_line "$repo" 'MoveData' 'DELETE FROM')"
+end_case
+
+# ------------------------------------------------------------------
 # Сценарий «запуск». Ошибка запуска: неизвестная база.
 # ------------------------------------------------------------------
 begin_case 'запуск: неизвестная база — код 2 и понятное сообщение'
