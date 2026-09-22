@@ -427,9 +427,22 @@ fi
 # Каталога миграций может не существовать (первая миграция появится позже) —
 # проверка работает по диффу, поэтому его отсутствие не ошибка, а пустой
 # результат.
+#
+# Имя API EF допускается в список по одному из трёх признаков: данные
+# теряются (DropColumn, DropTable); переименование или смена типа
+# (RenameColumn, RenameTable, AlterColumn); перестройка живой таблицы под
+# блокировкой (AddPrimaryKey — аналог правила «ADD CONSTRAINT … PRIMARY KEY»
+# проверки 9). Паритета с проверкой 9 нет намеренно: неидемпотентное создание
+# таблицы (CreateTable) данных не теряет, и проверка 4 его не ловит. Первичный
+# ключ, объявленный внутри CreateTable (table.PrimaryKey) или в снимке модели
+# (b.HasKey), под имя AddPrimaryKey не подпадает.
+#
+# Проверка смотрит добавленные строки файла, а не метод: AddPrimaryKey в Down()
+# миграции, которая в Up() снимает ключ, тоже нарушение — та же граница, что у
+# DropTable в Down() миграции с CreateTable. Обход — метка человека.
 # ------------------------------------------------------------------
 MIGRATION_FILE_RE='^src/Domovoy\.Data/Migrations/'
-DESTRUCTIVE_RE='(DropColumn|DropTable|RenameColumn|RenameTable|AlterColumn)'
+DESTRUCTIVE_RE='(DropColumn|DropTable|RenameColumn|RenameTable|AlterColumn|AddPrimaryKey)'
 
 DESTRUCTIVE_HIT="$WORK/destructive.tsv"
 select_lines '+' "$DESTRUCTIVE_RE" "$MIGRATION_FILE_RE" > "$DESTRUCTIVE_HIT"
@@ -439,7 +452,7 @@ if [ -s "$DESTRUCTIVE_HIT" ] && [ "$ALLOW_DESTRUCTIVE" -eq 0 ]; then
     while IFS=$'\t' read -r file line text; do
         [ -n "$file" ] || continue
         annotate "$file" "$line" \
-            "Деструктивная операция в миграции: $file. Удаление и переименование столбцов и таблиц необратимо теряет данные и ломает работающий экземпляр при откате. Нужна метка agent/allow-destructive-migration на PR — её ставит человек, убедившись, что данные не нужны или есть план переноса."
+            "Деструктивная операция в миграции: $file. Удаление и переименование столбцов и таблиц необратимо теряет данные и ломает работающий экземпляр при откате. Добавление первичного ключа (AddPrimaryKey) на живой таблице перестраивает её под блокировкой и падает на дублях. Нужна метка agent/allow-destructive-migration на PR — её ставит человек, убедившись, что данные не нужны или есть план переноса."
         quote_line "$file" "$line" "$text"
     done < "$DESTRUCTIVE_HIT"
 elif [ -s "$DESTRUCTIVE_HIT" ]; then
@@ -695,7 +708,11 @@ fi
 #     B.4 буквально, вызов API EF DropTable ловит проверка 4;
 #   - живость таблицы не видна: ADD CONSTRAINT … PRIMARY KEY срабатывает и на
 #     таблице, созданной в той же миграции;
-#   - вызов API EF AddPrimaryKey не ловится ни здесь, ни в проверке 4;
+#   - вызов API EF AddPrimaryKey здесь не ловится — его ловит проверка 4;
+#     вызовы DropIndex, DropForeignKey, DropPrimaryKey, DropUniqueConstraint
+#     не ловятся ни здесь, ни в проверке 4, хотя сырые DROP INDEX и DROP
+#     CONSTRAINT ловит правило «DROP без IF EXISTS»: под критерий допуска
+#     проверки 4 они не подходят;
 #   - ведущая граница у delete, drop, access, add, create стоит ради
 #     единообразия, но сценарием не проверена: проверены обе границы
 #     truncate.

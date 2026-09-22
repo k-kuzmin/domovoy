@@ -1032,6 +1032,66 @@ expect_output "разрешено: src/Domovoy.Data/Migrations/20260901120000_Mo
 end_case
 
 # ------------------------------------------------------------------
+# Проверка 4: AddPrimaryKey — аналог правила «ADD CONSTRAINT … PRIMARY KEY»
+# проверки 9 на API EF. Сценарии стоят здесь, а не рядом с 4а-4в: им нужны
+# put_migration и migration_line. Каждый идёт с GUARD_ALLOW_PROTECTED=1 по той
+# же причине, что сценарии проверки 9.
+# ------------------------------------------------------------------
+begin_case 'проверка 4: вызов migrationBuilder.AddPrimaryKey — гейт падает и называет вызов'
+new_fixture
+put_migration "$repo" 'MessagesKey' \
+    'migrationBuilder.AddPrimaryKey(name: "PK_Messages", table: "Messages", column: "Id");'
+commit_all "$repo" 'feat: первичный ключ сообщений'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 1
+expect_output 'Проверка 4: деструктивная миграция'
+expect_output "::error file=src/Domovoy.Data/Migrations/20260901120000_MessagesKey.cs,line=$(migration_line "$repo" 'MessagesKey' 'AddPrimaryKey')::"
+expect_output 'первичного ключа'
+expect_output 'migrationBuilder.AddPrimaryKey(name: "PK_Messages"'
+expect_no_output 'Проверка 9'
+end_case
+
+begin_case 'проверка 4: AddPrimaryKey с меткой agent/allow-destructive-migration — гейт пропускает'
+# Та же миграция, что в предыдущем сценарии: репозиторий не пересоздаётся.
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_output 'Проверка 4: деструктивная миграция разрешена меткой agent/allow-destructive-migration'
+expect_output 'разрешено: src/Domovoy.Data/Migrations/20260901120000_MessagesKey.cs'
+end_case
+
+begin_case 'проверка 4: первичный ключ внутри CreateTable и HasKey снимка модели — гейт молчит'
+# Ключ, объявленный вместе с таблицей, живую таблицу не перестраивает. Материал
+# держит границу альтернативы: table.PrimaryKey и b.HasKey совпали бы с
+# шаблоном PrimaryKey без Add.
+new_fixture
+put_migration "$repo" 'Notes' \
+    'migrationBuilder.CreateTable(name: "Notes", columns: null,' \
+    '    constraints: table => { table.PrimaryKey("PK_Notes", x => x.Id); });'
+cat > "$repo/src/Domovoy.Data/Migrations/20260901120000_Notes.Designer.cs" <<'EOF'
+namespace Domovoy.Data.Migrations;
+
+partial class Notes
+{
+    protected override void BuildTargetModel(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity("Domovoy.Data.Note", b =>
+        {
+            b.HasKey("Id");
+            b.ToTable("Notes");
+        });
+    }
+}
+EOF
+commit_all "$repo" 'feat: таблица заметок'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_no_output 'Проверка 4'
+expect_no_output 'Проверка 9'
+end_case
+
+# ------------------------------------------------------------------
 # Сценарий «запуск». Ошибка запуска: неизвестная база.
 # ------------------------------------------------------------------
 begin_case 'запуск: неизвестная база — код 2 и понятное сообщение'
