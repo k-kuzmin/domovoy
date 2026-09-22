@@ -341,6 +341,19 @@ expect_output '.claude/agents/step-fix.md'
 expect_output 'agent/allow-protected'
 end_case
 
+begin_case 'проверка 1: защищённый файл, переименованный наружу, — гейт падает'
+# У --name-only при переименовании только новый путь: работа, переехавшая из
+# .github/ в docs/, выпадала из защиты молча. Проверка 1 читает оба пути.
+new_fixture
+mkdir -p "$repo/docs/old"
+git -C "$repo" mv '.github/workflows/build.yml' 'docs/old/build.yml'
+git -C "$repo" commit -qm 'docs: перенос'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 1'
+expect_output '::error file=.github/workflows/build.yml'
+end_case
+
 begin_case 'проверка 1: определение субагента с меткой — гейт пропускает'
 new_fixture
 mkdir -p "$repo/.claude/agents"
@@ -445,6 +458,19 @@ run_guard "$repo"
 expect_status 1
 expect_output 'Файл с тестами удалён'
 expect_output 'tests/Domovoy.Tests/HealthEndpointTests.cs'
+end_case
+
+begin_case 'проверка 3: файл с тестами, переименованный из tests/ наружу, — гейт падает'
+# Переименование без правки содержимого: строк в диффе нет, счёт атрибутов
+# молчит, а при -M это R, а не D. Тесты вне tests/ не прогоняются.
+new_fixture
+mkdir -p "$repo/docs/old"
+git -C "$repo" mv 'tests/Domovoy.Tests/HealthEndpointTests.cs' 'docs/old/HealthEndpointTests.cs'
+git -C "$repo" commit -qm 'docs: пример тестов'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 3'
+expect_output 'Файл с тестами удалён или вынесен из tests/: tests/Domovoy.Tests/HealthEndpointTests.cs'
 end_case
 
 # ------------------------------------------------------------------
@@ -901,6 +927,45 @@ expect_output 'нарушений нет'
 expect_no_output 'Проверка 8'
 end_case
 
+begin_case 'проверка 8: изменённый ранее закоммиченный отчёт — гейт падает'
+# Отчёт уже лежит в main, PR переписывает его содержимое: сумма executed
+# меняется так же, как от нового файла. Сценарий краснеет при сужении
+# --diff-filter до добавленных.
+new_fixture
+seed_report_gitignore "$repo"
+put_report "$repo" 'TestResults/old.trx'
+commit_all "$repo" 'test: отчёт, закоммиченный по ошибке'
+git -C "$repo" branch -f base HEAD
+sed 's/executed="5"/executed="42"/' "$repo/TestResults/old.trx" > "$repo/TestResults/old.trx.new"
+mv "$repo/TestResults/old.trx.new" "$repo/TestResults/old.trx"
+git -C "$repo" add -f 'TestResults/old.trx'
+commit_all "$repo" 'test: отчёт обновлён'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/old.trx'
+expect_output 'Отчёт о прогоне тестов закоммичен'
+end_case
+
+begin_case 'проверка 8: файл, переименованный под каталог результатов, — гейт падает'
+# git mv обычного файла под TestResults/ — переименование, а не добавление:
+# сценарий краснеет, если --diff-filter перестаёт пропускать R.
+new_fixture
+seed_report_gitignore "$repo"
+mkdir -p "$repo/notes"
+printf '<summary executed="5" />\n' > "$repo/notes/summary.xml"
+commit_all "$repo" 'docs: сводка'
+git -C "$repo" branch -f base HEAD
+mkdir -p "$repo/TestResults"
+git -C "$repo" mv 'notes/summary.xml' 'TestResults/summary.xml'
+git -C "$repo" commit -qm 'test: сводка переехала к результатам'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/summary.xml'
+expect_output 'Файл под каталогом результатов прогона закоммичен'
+end_case
+
 # ------------------------------------------------------------------
 # Проверка 9. Разрушительный и неидемпотентный SQL в миграции.
 #
@@ -978,12 +1043,35 @@ put_migration "$repo" 'Idempotent' \
     'migrationBuilder.Sql("ALTER TABLE \"Notes\" ADD COLUMN IF NOT EXISTS \"Text\" text;");' \
     'migrationBuilder.Sql("CREATE TABLE IF NOT EXISTS \"Notes\" (\"Id\" integer);");' \
     'migrationBuilder.Sql("CREATE INDEX IF NOT EXISTS \"IX_Notes_Text\" ON \"Notes\" (\"Text\");");' \
-    'migrationBuilder.Sql("DROP INDEX IF EXISTS \"IX_Notes_Old\";");'
+    'migrationBuilder.Sql("DROP INDEX IF EXISTS \"IX_Notes_Old\";");' \
+    'migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS \"IX_Notes_Older\";");' \
+    'migrationBuilder.Sql("ALTER TABLE \"Notes\" DROP COLUMN IF EXISTS \"Old\", DROP CONSTRAINT IF EXISTS \"FK_Old\";");'
 commit_all "$repo" 'feat: идемпотентная миграция'
 run_guard "$repo" GUARD_ALLOW_PROTECTED=1
 expect_status 0
 expect_output 'нарушений нет'
 expect_no_output 'Проверка 9'
+end_case
+
+begin_case 'проверка 9: IF [NOT] EXISTS снимает срабатывание только со своего оператора'
+# Исключение привязано к ключевому слову, а не к строке: идемпотентная форма
+# соседнего оператора, комментарий или хвост C# после литерала неидемпотентный
+# оператор не прячут.
+for rule in \
+    'TwoDrops|DROP без IF EXISTS|migrationBuilder.Sql("DROP TABLE \"A\"; DROP TABLE IF EXISTS \"B\";");' \
+    'DropComment|DROP без IF EXISTS|migrationBuilder.Sql("DROP TABLE \"X\"; -- if exists");' \
+    'CreateThenAdd|CREATE TABLE или ADD COLUMN без IF NOT EXISTS|migrationBuilder.Sql("CREATE TABLE \"A\" (\"Id\" integer); ALTER TABLE \"B\" ADD COLUMN IF NOT EXISTS \"C\" integer;");' \
+    'CsharpTail|DROP без IF EXISTS|migrationBuilder.Sql("DROP TABLE \"Users\";"); // IF EXISTS'; do
+    IFS='|' read -r mig_name rule_name sql <<< "$rule"
+    new_fixture
+    put_migration "$repo" "$mig_name" "$sql"
+    commit_all "$repo" "feat: миграция $mig_name"
+    run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+    expect_status 1
+    expect_output 'Проверка 9'
+    expect_output "правило «$rule_name»"
+    expect_output "::error file=src/Domovoy.Data/Migrations/20260901120000_$mig_name.cs,line=$(migration_line "$repo" "$mig_name" "$sql")::"
+done
 end_case
 
 begin_case 'проверка 9: идентификаторы EF со словом Truncate не срабатывают'
@@ -1089,6 +1177,152 @@ expect_status 0
 expect_output 'нарушений нет'
 expect_no_output 'Проверка 4'
 expect_no_output 'Проверка 9'
+end_case
+
+# ------------------------------------------------------------------
+# Разбор диффа: заголовок файла — только в зоне заголовка.
+#
+# В -U0 добавленная строка «++ x» выглядит как «+++ x». Шаблон заголовка на
+# любой строке принимал её за имя файла, и следующие строки уходили мимо
+# каталога миграций. Строка стоит в колонке 0, поэтому файл пишется heredoc'ом,
+# а не put_migration: тот отступает каждую строку.
+# ------------------------------------------------------------------
+begin_case 'разбор диффа: строка «++ …» в содержимом не подменяет путь файла'
+new_fixture
+mkdir -p "$repo/src/Domovoy.Data/Migrations"
+cat > "$repo/src/Domovoy.Data/Migrations/20260901120000_Plus.cs" <<'EOF'
+namespace Domovoy.Data.Migrations;
+++ x
+migrationBuilder.Sql("DROP TABLE \"Legacy\";");
+EOF
+commit_all "$repo" 'feat: миграция с плюсами'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 1
+expect_output 'Проверка 9'
+expect_output '::error file=src/Domovoy.Data/Migrations/20260901120000_Plus.cs,line=3::'
+end_case
+
+begin_case 'разбор диффа: удалённая строка «-- …» не подменяет путь файла'
+# Зеркальный случай: удалённая «-- x» выглядит как «--- x», и удалённый следом
+# [Fact] уходил бы в файл «x» вне tests/ — проверка 3 его не считала.
+new_fixture
+cat > "$repo/tests/Domovoy.Tests/MinusTests.cs" <<'EOF'
+namespace Domovoy.Tests;
+-- x
+[Fact(DisplayName = "Пример")]
+public void Example() { }
+EOF
+commit_all "$repo" 'test: пример'
+git -C "$repo" branch -f base HEAD
+printf 'namespace Domovoy.Tests;\npublic void Example() { }\n' > "$repo/tests/Domovoy.Tests/MinusTests.cs"
+commit_all "$repo" 'test: пример короче'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 3'
+expect_output '::error file=tests/Domovoy.Tests/MinusTests.cs,line=3::'
+end_case
+
+begin_case 'разбор диффа: имя с кириллицей и пробелом — номер строки из файла, кавычек нет'
+# Отказ по кавычкам (проверка 10) на таком имени молчит: core.quotepath=false
+# не экранирует кириллицу, а пробел git в кавычки не берёт. Гейт, шумящий на
+# обычном имени файла, перестают читать.
+new_fixture
+cat > "$repo/src/Domovoy.Api/Сводка дома.cs" <<'EOF'
+namespace Domovoy.Api;
+
+#pragma warning disable CS8618
+EOF
+commit_all "$repo" 'feat: сводка дома'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 2'
+expect_output '::error file=src/Domovoy.Api/Сводка дома.cs,line=3::'
+expect_no_output 'git берёт в кавычки'
+end_case
+
+# ------------------------------------------------------------------
+# Проверка 10. Путь, который git берёт в кавычки.
+#
+# Имена с «"» и табуляцией в рабочем дереве Windows не создаются, поэтому
+# записи заводятся прямо в индекс: блоб через hash-object, путь через
+# update-index. commit_all здесь не годится — его git add -A застейджил бы
+# удаление записей, у которых нет файла в рабочем дереве.
+# ------------------------------------------------------------------
+put_index_file() {
+    local target="$1" path="$2" content="$3" blob
+    blob="$(printf '%s\n' "$content" | git -C "$target" hash-object -w --stdin)"
+    git -C "$target" -c core.protectNTFS=false update-index --add \
+        --cacheinfo "100644,$blob,$path"
+}
+
+commit_index() {
+    git -C "$1" -c core.protectNTFS=false commit -qm "$2"
+}
+
+begin_case 'проверка 10: отчёт с кавычкой в имени — гейт падает'
+new_fixture
+put_index_file "$repo" 'TestResults/a"b.trx' '<TestRun />'
+commit_index "$repo" 'test: отчёт прогона'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 10'
+expect_output 'git берёт в кавычки'
+expect_output '"TestResults/a\"b.trx"'
+end_case
+
+begin_case 'проверка 10: отчёт с табуляцией в имени — гейт падает'
+new_fixture
+put_index_file "$repo" $'TestResults/c\tb.trx' '<TestRun />'
+commit_index "$repo" 'test: отчёт прогона'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 10'
+expect_output '"TestResults/c\tb.trx"'
+end_case
+
+begin_case 'проверка 10: миграция с кавычкой в имени и DROP TABLE — гейт падает'
+new_fixture
+put_index_file "$repo" 'src/Domovoy.Data/Migrations/a"b.cs' 'migrationBuilder.Sql("DROP TABLE \"Legacy\";");'
+commit_index "$repo" 'feat: миграция'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+expect_status 1
+expect_output 'Проверка 10'
+expect_output '"src/Domovoy.Data/Migrations/a\"b.cs"'
+end_case
+
+begin_case 'проверка 10: защищённый путь с кавычкой в имени без метки — гейт падает'
+# Без метки: до отказа по кавычкам этот PR проходил проверку 1 с кодом 0.
+new_fixture
+put_index_file "$repo" '.github/workflows/a"b.yml' 'name: build'
+commit_index "$repo" 'ci: работа'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 10'
+expect_output '".github/workflows/a\"b.yml"'
+end_case
+
+begin_case 'проверка 10: путь в кавычках не снимается ни одной меткой'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_CONTRACT=1 \
+    GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+expect_status 1
+expect_output 'Проверка 10'
+expect_output 'Метки, снимающей эту проверку, нет'
+end_case
+
+begin_case 'проверка 10: старый путь переименования в кавычках — гейт падает'
+# У --name-only при переименовании только новый путь; старый, под tests/,
+# прячет удалённые [Fact] от проверки 3 через заголовок «--- ».
+new_fixture
+put_index_file "$repo" 'tests/Domovoy.Tests/a"b.cs' '[Fact(DisplayName = "Пример")]'
+commit_index "$repo" 'test: пример'
+git -C "$repo" branch -f base HEAD
+git -C "$repo" -c core.protectNTFS=false update-index --force-remove 'tests/Domovoy.Tests/a"b.cs'
+put_index_file "$repo" 'tests/Domovoy.Tests/Ab.cs' '[Fact(DisplayName = "Пример")]'
+commit_index "$repo" 'test: имя без кавычки'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 10'
+expect_output '"tests/Domovoy.Tests/a\"b.cs"'
 end_case
 
 # ------------------------------------------------------------------

@@ -55,6 +55,9 @@
 #      диффе — вход инварианта и порога покрытия. Обхода меткой нет.
 #   9. Разрушительный или неидемпотентный SQL в миграции (правила B.4) —
 #      что проверка не ловит, названо у неё в блоке.
+#  10. Путь, который git берёт в кавычки. Выполняется первой, до проверки 1:
+#      остальные сверяют пути с шаблонами и такой путь не видят. Обхода
+#      меткой нет.
 #
 # ПЕРЕЧЕНЬ И ИНВАРИАНТ — РАЗНЫЕ ПОСТАНОВКИ
 #
@@ -164,10 +167,17 @@ git -c core.quotepath=false diff --no-color --no-ext-diff -U0 -M \
             if (p ~ /^[ab]\//) return substr(p, 3)
             return p
         }
-        /^diff --git / { oldf = ""; newf = ""; next }
-        substr($0, 1, 4) == "--- " { oldf = strip(substr($0, 5)); next }
-        substr($0, 1, 4) == "+++ " { newf = strip(substr($0, 5)); next }
+        # Заголовки «--- »/«+++ » разбираются только в зоне заголовка файла —
+        # от «diff --git» до первого «@@». В -U0 добавленная строка «++ …»
+        # выглядит как «+++ …», удалённая «-- …» — как «--- …»: шаблон на любой
+        # строке принимал содержимое за имя файла, и следующие строки уходили
+        # мимо путевых фильтров проверок 2, 3, 4 и 9. Тот же разбор, что в
+        # scripts/risk-score.sh.
+        /^diff --git / { in_header = 1; oldf = ""; newf = ""; next }
+        in_header && substr($0, 1, 4) == "--- " { oldf = strip(substr($0, 5)); next }
+        in_header && substr($0, 1, 4) == "+++ " { newf = strip(substr($0, 5)); next }
         substr($0, 1, 2) == "@@" {
+            in_header = 0
             # $2 = -a[,b]   $3 = +c[,d]
             split(substr($2, 2), o, ",")
             split(substr($3, 2), n, ",")
@@ -175,6 +185,7 @@ git -c core.quotepath=false diff --no-color --no-ext-diff -U0 -M \
             newln = n[1] + 0
             next
         }
+        in_header { next }
         substr($0, 1, 1) == "+" {
             text = substr($0, 2); sub(/\r$/, "", text)
             if (newf != "") print "+\t" newf "\t" newln "\t" text
@@ -202,13 +213,64 @@ if [ "${DIFF_STATUS[0]:-0}" -ne 0 ] || [ "${DIFF_STATUS[1]:-0}" -ne 0 ]; then
     exit 2
 fi
 
-# Список изменённых файлов (с учётом удалений и переименований).
-CHANGED_FILES="$WORK/changed.txt"
-if ! git -c core.quotepath=false diff --name-only -M \
-    "$BASE_SHA" "$HEAD_SHA" > "$CHANGED_FILES"; then
+# ------------------------------------------------------------------
+# Проверка 10. Путь, который git берёт в кавычки
+#
+# core.quotepath=false снимает экранирование только с байтов выше 0x80. Имя с
+# «"», «\», табуляцией или управляющим символом git всё равно отдаёт в
+# C-кавычках: "TestResults/a\"b.trx". Все остальные проверки сверяют путь с
+# шаблоном, привязанным к началу или к концу — ^\.github/, ^tests/,
+# ^src/Domovoy\.Data/Migrations/, \.trx$, — и путь в кавычках не совпадает ни
+# с одним: такой файл проходил бы мимо защиты путей, каталога миграций,
+# удалённых тестов и отчётов прогона разом. Инвариант числа тестов при этом
+# находит его через find и засчитывает.
+#
+# Поэтому отказ стоит один и до всех проверок, а не в каждой: раскодировать
+# кавычки в каждой проверке — по копии одного разбора на каждую, и копия,
+# забытая при следующей правке, вернёт обход. Список — --name-status, а не
+# --name-only: у переименования там оба пути, и старый путь в кавычках под
+# tests/ прятал бы удалённые [Fact] от проверки 3 через заголовок «--- ».
+# Признак — поле пути, начинающееся с «"»: имя, которое само начинается с
+# кавычки, git тоже берёт в кавычки.
+#
+# МЕТКИ-ОБХОДА У ЭТОЙ ПРОВЕРКИ НЕТ: ни одна проверка гейта такой путь не
+# прочитала, и метка разрешила бы то, чего человек в выводе гейта не видел.
+# Выход — переименовать файл.
+# ------------------------------------------------------------------
+NAME_STATUS="$WORK/name-status.txt"
+if ! git -c core.quotepath=false diff --name-status -M \
+    "$BASE_SHA" "$HEAD_SHA" > "$NAME_STATUS"; then
     printf '::error::Не удалось получить список изменённых файлов %s..%s.\n' \
         "$BASE_SHA" "$HEAD_SHA" >&2
     exit 2
+fi
+
+# Список изменённых файлов для проверок 1 и 5 — каждый путь диффа, у
+# переименования оба. --name-only отдаёт у переименования только новый путь:
+# защищённый файл, переименованный наружу (.github/workflows/x.yml →
+# docs/x.yml), из защищённой области пропадал, а проверка 1 молчала.
+CHANGED_FILES="$WORK/changed.txt"
+: > "$CHANGED_FILES"
+
+QUOTED_HIT="$WORK/quoted.txt"
+: > "$QUOTED_HIT"
+while IFS=$'\t' read -r status first second; do
+    [ -n "$status" ] || continue
+    for path in "$first" "${second:-}"; do
+        [ -n "$path" ] || continue
+        printf '%s\n' "$path" >> "$CHANGED_FILES"
+        if [ "${path:0:1}" = '"' ]; then
+            printf '%s\n' "$path" >> "$QUOTED_HIT"
+        fi
+    done
+done < "$NAME_STATUS"
+
+if [ -s "$QUOTED_HIT" ]; then
+    section 'Проверка 10: путь, который git берёт в кавычки'
+    while IFS= read -r path; do
+        annotate "$path" '1' \
+            "Путь, который git берёт в кавычки: $path. Кавычки git ставит на имя с кавычкой, обратной косой, табуляцией или управляющим символом, и такой путь не совпадает ни с одним шаблоном проверок гейта: защищённые пути, каталог миграций, удалённые тесты и отчёты прогона его не видят. Метки, снимающей эту проверку, нет: гейт этот файл не прочитал, и метка разрешила бы непроверенное. Переименуйте файл."
+    done < "$QUOTED_HIT"
 fi
 
 # Первая изменённая строка файла — чтобы аннотация вела в осмысленное место,
@@ -388,9 +450,14 @@ fi
 TEST_ATTR_RE='\[(Fact|Theory)(\]|\()'
 TEST_FILE_RE='^tests/'
 
+# Удалённый файл под tests/ и файл, переименованный из tests/ наружу: у
+# переименования без правки содержимого строк в диффе нет, и счёт атрибутов
+# его не видит, а --diff-filter=D при -M его не отдаёт — он R, а не D.
 DELETED_TESTS="$WORK/deleted-tests.txt"
-git -c core.quotepath=false diff --name-only --diff-filter=D -M \
-    "$BASE_SHA" "$HEAD_SHA" -- 'tests/' > "$DELETED_TESTS"
+awk -F'\t' '
+    $1 == "D" && $2 ~ /^tests\// { print $2 }
+    $1 ~ /^R/ && $2 ~ /^tests\// && $3 !~ /^tests\// { print $2 }
+' "$NAME_STATUS" > "$DELETED_TESTS"
 
 ADDED_ATTRS="$WORK/added-attrs.tsv"
 REMOVED_ATTRS="$WORK/removed-attrs.tsv"
@@ -406,7 +473,7 @@ if [ -s "$DELETED_TESTS" ] || [ "$REMOVED_ATTR_COUNT" -gt "$ADDED_ATTR_COUNT" ];
     while IFS= read -r file; do
         [ -n "$file" ] || continue
         annotate "$file" '1' \
-            "Файл с тестами удалён: $file. Удаление теста — не способ сделать сборку зелёной. Если тест устарел вместе с поведением, которое он проверял, — объясните это в описании PR и в сообщении коммита; если он мешает — почините код, а не тест."
+            "Файл с тестами удалён или вынесен из tests/: $file. Удаление теста — не способ сделать сборку зелёной. Если тест устарел вместе с поведением, которое он проверял, — объясните это в описании PR и в сообщении коммита; если он мешает — почините код, а не тест."
     done < "$DELETED_TESTS"
 
     if [ "$REMOVED_ATTR_COUNT" -gt "$ADDED_ATTR_COUNT" ]; then
@@ -623,7 +690,9 @@ fi
 # *.trx в одиночку оставил бы открытым coverage.cobertura.xml.
 #
 # Смотрятся пути добавленные, изменённые и переименованные; удаление ранее
-# закоммиченного отчёта — починка, а не нарушение. Шаблон каталога совпадёт и
+# закоммиченного отчёта — починка, а не нарушение. Переименование ловится и
+# без -M: оно распадается на удаление и добавление, а добавление в фильтре
+# есть, — поэтому сценарий переименования держит фильтр, а не -M. Шаблон каталога совпадёт и
 # с каталогом вроде TestResultFormatter/ — это то же множество, что скрывает
 # .gitignore, и файл туда без git add -f не попадает.
 #
@@ -680,14 +749,16 @@ fi
 # Пять правил, у каждого своё имя в сообщении:
 #
 #   DELETE FROM или TRUNCATE — данные удаляются необратимо;
-#   DROP без IF EXISTS — DROP TABLE|COLUMN|INDEX|CONSTRAINT без IF EXISTS на
-#     той же строке;
+#   DROP без IF EXISTS — DROP TABLE|COLUMN|INDEX|CONSTRAINT, за которым не
+#     стоит IF EXISTS (у DROP INDEX — и после CONCURRENTLY);
 #   ACCESS EXCLUSIVE — блокировка, останавливающая работающий экземпляр;
 #   ADD CONSTRAINT … PRIMARY KEY — перестройка ключа на живой таблице;
-#   CREATE TABLE или ADD COLUMN без IF NOT EXISTS на той же строке.
+#   CREATE TABLE или ADD COLUMN, за которым не стоит IF NOT EXISTS.
 #
-# Идемпотентные ADD COLUMN IF NOT EXISTS и CREATE INDEX … IF NOT EXISTS
-# корректны и нарушением не считаются. Сравнение без учёта регистра:
+# IF [NOT] EXISTS снимает срабатывание только с того оператора, за ключевым
+# словом которого стоит: соседний оператор на той же строке, комментарий или
+# хвост C# с этими словами его не снимают. Идемпотентные ADD COLUMN IF NOT
+# EXISTS и CREATE INDEX … IF NOT EXISTS корректны и нарушением не считаются. Сравнение без учёта регистра:
 # шаблоны в нижнем регистре, строка приводится к нему же. Слова внутри правила
 # разделены пробельным классом, поэтому имена API EF (CreateTable(,
 # AddColumn<, DropTable) с правилами не совпадают. Однословное truncate
@@ -703,7 +774,8 @@ fi
 #   - ложная тревога на комментарии или строковом литерале, упоминающем
 #     drop table или truncate; адрес — метка человека;
 #   - оператор, разнесённый по строкам (DROP на одной, TABLE на следующей),
-#     не ловится; IF [NOT] EXISTS на соседней строке не снимает срабатывание;
+#     не ловится; IF [NOT] EXISTS, перенесённый на следующую строку, не
+#     снимает срабатывание — ложная тревога, адрес тот же;
 #   - DROP TABLE IF EXISTS проходит, хотя данные теряет: правило взято из
 #     B.4 буквально, вызов API EF DropTable ловит проверка 4;
 #   - живость таблицы не видна: ADD CONSTRAINT … PRIMARY KEY срабатывает и на
@@ -746,14 +818,20 @@ SQL_RULE_PATTERNS=(
     "${SQL_LEAD}(create[[:space:]]+table|add[[:space:]]+column)${SQL_TAIL}"
 )
 
-# Исключение на той же строке: срабатывание снимается, если строка в нижнем
-# регистре совпадает с ним. Пустое — исключения у правила нет.
-SQL_RULE_EXCEPT=(
+# Идемпотентная форма правила — ключевое слово оператора и сразу за ним
+# IF [NOT] EXISTS. Из строки в нижнем регистре вырезается каждое её вхождение,
+# и шаблон правила проверяется на остатке. Привязка к ключевому слову, а не к
+# строке: исключение, сверенное со всей строкой, снимало срабатывание и с
+# соседнего оператора — «DROP TABLE a; DROP TABLE IF EXISTS b;», — и с
+# оператора, за которым IF EXISTS стоит в комментарии или в хвосте C# после
+# литерала. У DROP INDEX между ключевым словом и IF EXISTS допускается
+# CONCURRENTLY. Пустое — идемпотентной формы у правила нет.
+SQL_RULE_IDEMPOTENT=(
     ''
-    'if[[:space:]]+exists'
+    "drop[[:space:]]+(table|column|index|constraint)[[:space:]]+(concurrently[[:space:]]+)?if[[:space:]]+exists"
     ''
     ''
-    'if[[:space:]]+not[[:space:]]+exists'
+    "(create[[:space:]]+table|add[[:space:]]+column)[[:space:]]+if[[:space:]]+not[[:space:]]+exists"
 )
 
 SQL_RULE_REASONS=(
@@ -767,12 +845,18 @@ SQL_RULE_REASONS=(
 SQL_HIT="$WORK/sql.tsv"
 : > "$SQL_HIT"
 for index in "${!SQL_RULE_PATTERNS[@]}"; do
-    except="${SQL_RULE_EXCEPT[$index]}"
+    idempotent="${SQL_RULE_IDEMPOTENT[$index]}"
+    rule_re="${SQL_RULE_PATTERNS[$index]}"
     while IFS=$'\t' read -r file line text; do
         [ -n "$file" ] || continue
-        if [ -n "$except" ]; then
-            lowered="${text,,}"
-            if [[ "$lowered" =~ $except ]]; then
+        if [ -n "$idempotent" ]; then
+            # Каждый проход вырезает найденное вхождение и укорачивает строку,
+            # поэтому цикл конечен.
+            rest="${text,,}"
+            while [[ "$rest" =~ $idempotent ]]; do
+                rest="${rest/"${BASH_REMATCH[0]}"/ }"
+            done
+            if ! [[ "$rest" =~ $rule_re ]]; then
                 continue
             fi
         fi
