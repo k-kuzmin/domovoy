@@ -354,6 +354,22 @@ expect_output 'Проверка 1'
 expect_output '::error file=.github/workflows/build.yml'
 end_case
 
+begin_case 'проверка 1: защищённый файл с пробелом в имени — аннотация на изменённой строке'
+# first_changed_line ищет путь в DIFF_LINES через awk -F'\t', где пустые поля
+# не склеиваются: хвостовая табуляция после имени с пробелом в заголовке
+# «+++ b/…» дала бы строку 1 вместо изменённой.
+new_fixture
+mkdir -p "$repo/docs/rules"
+printf 'первая\nвторая\nтретья\n' > "$repo/docs/rules/a b.md"
+commit_all "$repo" 'docs: правило'
+git -C "$repo" branch -f base HEAD
+printf 'первая\nвторая\nтретья, иначе\n' > "$repo/docs/rules/a b.md"
+commit_all "$repo" 'docs: правило иначе'
+run_guard "$repo"
+expect_status 1
+expect_output '::error file=docs/rules/a b.md,line=3::'
+end_case
+
 begin_case 'проверка 1: определение субагента с меткой — гейт пропускает'
 new_fixture
 mkdir -p "$repo/.claude/agents"

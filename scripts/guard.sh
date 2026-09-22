@@ -162,7 +162,10 @@ DIFF_LINES="$WORK/diff-lines.tsv"
 git -c core.quotepath=false diff --no-color --no-ext-diff -U0 -M \
     "$BASE_SHA" "$HEAD_SHA" |
     awk '
+        # Хвостовая табуляция, которую git ставит после имени с пробелом,
+        # оставалась в пути и сдвигала поле номера строки.
         function strip(p) {
+            sub(/\t$/, "", p)
             if (p == "/dev/null") return ""
             if (p ~ /^[ab]\//) return substr(p, 3)
             return p
