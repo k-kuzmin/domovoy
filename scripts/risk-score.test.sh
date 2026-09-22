@@ -857,6 +857,63 @@ fi
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Режим plan: файлов в плане больше порога — сигнал размера по файлам, строки не измерялись'
+# Диффа до реализации нет только наполовину: строк ещё нет, а число файлов план
+# объявляет в files[]. Порог тот же, что у диффа, — отдельного числа нет.
+# Пути лежат в одной подсистеме, чтобы medium не пришёл от ширины работы.
+PLAN_FILES_THRESHOLD="$(jq -r '.thresholds.diff_files // "нет"' "$CONFIG" | tr -d '\r')"
+case "$PLAN_FILES_THRESHOLD" in
+    '' | *[!0-9]*)
+        fail_case "порог файлов в pipeline/risk.json не число: «$PLAN_FILES_THRESHOLD»"
+        ;;
+    *)
+        PLAN_FILES_ABOVE=$((PLAN_FILES_THRESHOLD + 1))
+        ABOVE_LIST=()
+        for n in $(seq 1 "$PLAN_FILES_ABOVE"); do
+            ABOVE_LIST+=("src/Domovoy.Core/Models/Bulk$n.cs")
+        done
+        PLAN_BIG="$(make_plan "$FLAGS_NONE" "${ABOVE_LIST[@]}")"
+        run_score plan "$PLAN_BIG"
+        expect_status 0
+        expect_level "$(config_level diff-size)"
+        expect_signal diff-size
+        expect_signal_silent work-breadth
+        expect_output "размер плана: файлов: $PLAN_FILES_ABOVE (порог $PLAN_FILES_THRESHOLD); строки не измерялись — диффа ещё нет"
+
+        # Ровно порог сигнала не даёт: сравнение строгое, как в режиме diff.
+        PLAN_EXACT_FILES="$(make_plan "$FLAGS_NONE" "${ABOVE_LIST[@]:0:$PLAN_FILES_THRESHOLD}")"
+        run_score plan "$PLAN_EXACT_FILES"
+        expect_status 0
+        expect_output "файлов в плане $PLAN_FILES_THRESHOLD,"
+        expect_signal_silent diff-size
+        expect_level low
+
+        # Порог файлов не задан — законный первый проход, а не поломка: код 0,
+        # сигнал размера молчит, и режим говорит это вслух, как режим diff.
+        MUT_NO_FILES="$(mutate_config 'del(.thresholds.diff_files)')"
+        run_score plan "$PLAN_BIG" --config "$MUT_NO_FILES"
+        expect_status 0
+        expect_output 'Порог размера в конфиге не задан'
+        expect_signal_silent diff-size
+        expect_level low
+        ;;
+esac
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Режим plan: план на два файла остаётся low и называет, что строки не измерялись'
+PLAN_TWO="$(make_plan "$FLAGS_NONE" \
+    'src/Domovoy.Core/Models/Thing.cs' \
+    'src/Domovoy.Core/Models/OtherThing.cs')"
+run_score plan "$PLAN_TWO"
+expect_status 0
+expect_level low
+expect_signal_silent diff-size
+expect_output 'Не измерялось в режиме plan'
+expect_output 'по строкам'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Выключенный сигнал покрытия печатается выключенным и на уровень не влияет'
 new_repo
 put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
@@ -921,6 +978,9 @@ expect_status 0
 expect_output 'Не измерялось в режиме plan'
 expect_output 'размер диффа'
 expect_output 'ключевые слова'
+# Половина размера по файлам в plan считается, по строкам — нет, и режим
+# называет именно строки: иначе читатель решил бы, что размер не мерился вовсе.
+expect_output 'по строкам'
 
 new_repo
 put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
@@ -1194,7 +1254,8 @@ end_case
 
 # ------------------------------------------------------------------
 # Ширина работы: число затронутых подсистем. Признак считается из путей, и
-# поэтому он единственный признак объёма, который есть у обоих входов.
+# поэтому он одинаков у обоих входов — в отличие от размера, у которого в
+# режиме plan есть только половина по числу файлов.
 # ------------------------------------------------------------------
 BREADTH="$(jq -r '.thresholds.breadth_subsystems // "нет"' "$CONFIG" | tr -d '\r')"
 
@@ -1281,7 +1342,8 @@ else
         run_score plan "$PLAN_ABOVE"
         expect_status 0
         # Тот же уровень от другого входа на тех же путях: признак считается из
-        # путей, а не из режима, — в отличие от размера.
+        # путей, а не из режима, — в отличие от размера, у которого в режиме
+        # plan нет половины по строкам.
         expect_level "$(config_level work-breadth)"
         expect_signal work-breadth
         expect_output "ширина работы: подсистем $NEED (порог $BREADTH)"
@@ -1362,8 +1424,9 @@ end_case
 # ------------------------------------------------------------------
 begin_case 'Порог подсистем не задан — код 0, уровень low и строка о несчитанной ширине в обоих режимах'
 # Законный первый проход, а не поломка. Проверяется в обоих режимах: у строки о
-# пороге размера стоит условие FACT_KIND=diff, и повторение его для ширины
-# лишило бы режим plan единственного признака того, что порог не считался.
+# пороге размера условия по режимам разные (диффу нужны оба порога, плану —
+# порог файлов), а условие «только diff» для ширины лишило бы режим plan
+# единственного признака того, что порог не считался.
 new_repo
 put '.claude/agents/образец.md' 'строка определения'
 put 'docs/rules/образец.md' 'строка правил'
