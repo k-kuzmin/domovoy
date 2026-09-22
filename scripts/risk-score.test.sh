@@ -331,6 +331,12 @@ if ! sed -n '23,29p' "$ROOT/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs" \
     | grep -qF '.AllowAnonymous()'; then
     fail_case 'строки 23-29 ApiV1Endpoints.cs больше не содержат .AllowAnonymous(): материал уехал'
 fi
+# Строка 21 — группа /api/v1 с .RequireAuthorization(). Уехал вызов по файлу —
+# сценарии снятой защиты краснеют здесь, а не дают ложное молчание ниже.
+if ! sed -n '21p' "$ROOT/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs" \
+    | grep -qF '.RequireAuthorization()'; then
+    fail_case 'строка 21 ApiV1Endpoints.cs больше не содержит .RequireAuthorization(): материал уехал'
+fi
 # Строки 22-27 первого файла — тот самый массив имён секретных настроек.
 # Уехал по файлу — сценарий краснеет здесь, а не даёт ложное молчание ниже.
 if ! sed -n '22,27p' "$ROOT/tests/Domovoy.Tests/ConfigurationExampleTests.cs" \
@@ -526,6 +532,100 @@ if put_lines_from_tree 'docs/rules/выдержка.md' \
     'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29 \
     && put_lines_from_tree 'docs/tasks/4242.md' \
         'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Снятая RequireAuthorization опознаётся словом в удалённой строке настоящего файла дерева'
+# Снятие защиты — такое же событие зоны, как появление анонимности, но слово
+# authoriz при нём остаётся только в удалённой строке. Материал — настоящая
+# строка 21 ApiV1Endpoints.cs тем же путём: каталог эндпоинтов в paths сигнала
+# не входит, поэтому high здесь может прийти только от слова.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'защищённая группа'
+    sed -i 's/\.RequireAuthorization()//' "$REPO/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs"
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово в удалённой строке: Authoriz — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    # Добавленная половина правки слова не содержит: строка «слово:» здесь
+    # была бы чужим совпадением, а не снятой защитой.
+    expect_no_output 'слово: Authoriz'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+
+    # Контрольный прогон: тот же дифф, настоящий конфиг без authoriz. Молчит —
+    # значит high выше держится на слове в удалённой строке.
+    MUT_NO_AUTHZ="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords -= ["authoriz"] else . end)')"
+    run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_AUTHZ"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Удалённый файл со словом чувствительной зоны опознаётся по старому пути'
+# У удалённого файла заголовок «+++ /dev/null»: путь его строк берётся из
+# «--- a/», иначе они ушли бы в никуда вместе с файлом.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'защищённая группа'
+    rm "$REPO/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs"
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово в удалённой строке: Authoriz — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Строки содержимого, начинающиеся с «--» и «++», не принимаются за заголовок диффа'
+# В диффе -U0 удалённая строка «-- …» выглядит как «--- …», добавленная
+# «++ …» — как «+++ …». Разбор заголовка по шаблону на любой строке принимал
+# их за имена файлов: строка пропадала, а путь следующих строк подменялся.
+new_repo
+put 'src/Domovoy.Data/Scripts/notes.txt' '-- bearer проверяется на входе'
+commit_repo 'заметка'
+put 'src/Domovoy.Data/Scripts/notes.txt' '++ jwt не хранится'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_signal sensitive-area
+expect_output 'слово в удалённой строке: bearer — src/Domovoy.Data/Scripts/notes.txt'
+expect_output 'слово: jwt — src/Domovoy.Data/Scripts/notes.txt'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Слово в удалённой строке вне keyword_paths уровня не поднимает'
+# Настоящая строка 21 в правилах, журнале и скриптах — вне keyword_paths.
+# Нейтральный файл под src/** во второй правке нужен, чтобы дифф со строками
+# читался вообще: без него молчание держала бы предварительная проверка
+# области по именам файлов, а не область в движке.
+new_repo
+if put_lines_from_tree 'docs/rules/выдержка.md' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21 \
+    && put_lines_from_tree 'docs/tasks/4242.md' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21 \
+    && put_lines_from_tree 'scripts/выдержка.sh' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'выдержки'
+    put 'docs/rules/выдержка.md'
+    put 'docs/tasks/4242.md'
+    put 'scripts/выдержка.sh'
+    put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
     commit_repo 'правка'
     run_score diff HEAD~1 HEAD --repo "$REPO"
     expect_status 0
@@ -981,6 +1081,8 @@ expect_output 'ключевые слова'
 # Половина размера по файлам в plan считается, по строкам — нет, и режим
 # называет именно строки: иначе читатель решил бы, что размер не мерился вовсе.
 expect_output 'по строкам'
+# Словарная половина читает и удалённые строки: режим называет обе.
+expect_output 'удалённым строкам'
 
 new_repo
 put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
