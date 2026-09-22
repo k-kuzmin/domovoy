@@ -27,6 +27,10 @@
 #       именами секретных настроек внутри области keyword_paths; строки 22-23
 #       того же файла — отдельно, как пин границы слова: совпасть в них может
 #       только регулярка с \b;
+#   src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs:23-29 — настоящий анонимный
+#       эндпоинт: обмен кода привязки с .AllowAnonymous(). Других слов
+#       чувствительной зоны в этих строках нет, поэтому сработать на них может
+#       только слово allowanonymous;
 #   tests/Domovoy.Tests/MobileLayeringTests.cs и
 #   src/Domovoy.Core/Models/HaEntityState.cs — молчаливая пара к ним: внутри той
 #       же области, без единого слова чувствительной зоны.
@@ -315,11 +319,18 @@ for material in \
     'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
     'tests/Domovoy.Tests/ConfigurationExampleTests.cs' \
     'tests/Domovoy.Tests/MobileLayeringTests.cs' \
-    'src/Domovoy.Core/Models/HaEntityState.cs'; do
+    'src/Domovoy.Core/Models/HaEntityState.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'; do
     if [ ! -f "$ROOT/$material" ]; then
         fail_case "материал дерева исчез: $material"
     fi
 done
+# Строки 23-29 эндпоинтов — обмен кода привязки с .AllowAnonymous(). Уехал вызов
+# по файлу — сценарий слова краснеет здесь, а не даёт ложное молчание ниже.
+if ! sed -n '23,29p' "$ROOT/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs" \
+    | grep -qF '.AllowAnonymous()'; then
+    fail_case 'строки 23-29 ApiV1Endpoints.cs больше не содержат .AllowAnonymous(): материал уехал'
+fi
 # Строки 22-27 первого файла — тот самый массив имён секретных настроек.
 # Уехал по файлу — сценарий краснеет здесь, а не даёт ложное молчание ниже.
 if ! sed -n '22,27p' "$ROOT/tests/Domovoy.Tests/ConfigurationExampleTests.cs" \
@@ -467,6 +478,59 @@ if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
     expect_signal sensitive-area
     # Причина печатается целиком: совпавшее слово, а не только факт сигнала.
     expect_output 'слово: Secret — tests/Domovoy.Tests/SecretPathsMaterial.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Анонимный эндпоинт опознаётся словом allowanonymous на настоящих строках дерева'
+# Четвёртая зона правил безопасности — правило 7 .claude/CLAUDE.md: анонимный
+# доступ только записанным решением. Слово authoriz совпадает с
+# RequireAuthorization, но не с .AllowAnonymous(), и эндпоинт, анонимный сразу,
+# не давал ни одного сигнала. Материал — настоящие строки 23-29 ApiV1Endpoints.cs
+# тем же путём: каталог эндпоинтов в paths сигнала не входит, поэтому high здесь
+# может прийти только от слова.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово: AllowAnonymous — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+
+    # Контрольный прогон: тот же дифф, настоящий конфиг без одного слова. Молчит
+    # — значит high выше держится на allowanonymous, а не на чужом совпадении.
+    MUT_NO_ANON="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords -= ["allowanonymous"] else . end)')"
+    run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_ANON"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+
+    # Режим plan строк не читает, а каталог эндпоинтов в paths не входит:
+    # решение записано в note сигнала.
+    PLAN_ANON="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs')"
+    run_score plan "$PLAN_ANON"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Слово allowanonymous в правилах и журнале уровня не поднимает'
+# Те же настоящие строки — в правилах и журнале задачи, вне keyword_paths.
+new_repo
+if put_lines_from_tree 'docs/rules/выдержка.md' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29 \
+    && put_lines_from_tree 'docs/tasks/4242.md' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
 fi
 end_case
 
