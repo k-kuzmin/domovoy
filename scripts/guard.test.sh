@@ -5,7 +5,7 @@
 # ЗАЧЕМ
 #
 # Гейт, который никто не проверял, — это не гейт, а надежда. Здесь для
-# каждой из шести проверок собирается временный git-репозиторий, в нём
+# каждой проверки гейта собирается временный git-репозиторий, в нём
 # воспроизводится ровно то нарушение, ради которого проверка написана, и
 # сверяется код возврата и текст вывода. Отдельно проверяется главное:
 # на нормальном PR гейт молчит. Гейт, который шумит на нормальной работе,
@@ -774,7 +774,135 @@ expect_output 'Снимок числа тестов удалён'
 end_case
 
 # ------------------------------------------------------------------
-# Сценарий 8. Ошибка запуска: неизвестная база.
+# Проверка 8. Отчёт о прогоне в диффе.
+#
+# .gitignore фикстуры повторяет строки настоящего: каталог результатов и
+# *.trx. Файлы добавляются через git add -f — ровно тот обход, от которого
+# .gitignore не защищает, — поэтому сценарии и доказывают, что защищает гейт,
+# а не .gitignore.
+# ------------------------------------------------------------------
+seed_report_gitignore() {
+    local target="$1"
+    cat > "$target/.gitignore" <<'EOF'
+# Результаты тестов и покрытие
+[Tt]est[Rr]esult*/
+*.trx
+EOF
+    commit_all "$target" 'chore: результаты тестов вне git'
+    git -C "$target" branch -f base HEAD
+}
+
+# Отчёт с тем же устройством, что пишет логгер trx: сумму executed по таким
+# файлам и считает scripts/test-count-invariant.sh.
+put_report() {
+    local target="$1" path="$2"
+    mkdir -p "$(dirname "$target/$path")"
+    cat > "$target/$path" <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun>
+  <ResultSummary outcome="Completed">
+    <Counters total="5" executed="5" passed="5" failed="0" />
+  </ResultSummary>
+</TestRun>
+EOF
+    git -C "$target" add -f "$path"
+}
+
+begin_case 'проверка 8: закоммиченный trx-отчёт — гейт падает'
+new_fixture
+seed_report_gitignore "$repo"
+put_report "$repo" 'TestResults/tests.trx'
+commit_all "$repo" 'test: отчёт прогона'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/tests.trx'
+expect_output 'Отчёт о прогоне тестов закоммичен'
+expect_output 'вход инварианта'
+end_case
+
+begin_case 'проверка 8: отчёт прогона не снимается ни одной меткой'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_CONTRACT=1 \
+    GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/tests.trx'
+expect_output 'Метки, снимающей эту проверку, нет'
+end_case
+
+begin_case 'проверка 8: файл под каталогом результатов прогона — гейт падает'
+# Отчёт покрытия лежит под тем же каталогом, что и trx, и порог покрытия в CI
+# суммирует его по глобу: шаблон *.trx в одиночку оставил бы его открытым.
+# Второй путь — каталог результатов на глубине, у тестового проекта.
+new_fixture
+seed_report_gitignore "$repo"
+put_report "$repo" 'TestResults/pad/coverage.cobertura.xml'
+put_report "$repo" 'tests/Domovoy.Tests/TestResults/x.xml'
+commit_all "$repo" 'test: отчёт покрытия'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/pad/coverage.cobertura.xml'
+expect_output '::error file=tests/Domovoy.Tests/TestResults/x.xml'
+expect_output 'Файл под каталогом результатов прогона закоммичен'
+end_case
+
+begin_case 'проверка 8: опустошённый [InlineData] и подложенный отчёт — гейт падает на проверке 8'
+# Обход из #90 целиком: набор [InlineData] у [Theory] опустошён, атрибуты
+# [Fact]/[Theory] не убыли — проверка 3 молчит; строк подавления нет —
+# проверка 2 молчит. Подложенный отчёт добил бы сумму executed до снимка, и
+# инвариант остался бы зелёным. Ловит только проверка 8.
+new_fixture
+seed_report_gitignore "$repo"
+cat > "$repo/tests/Domovoy.Tests/HealthEndpointTests.cs" <<'EOF'
+namespace Domovoy.Tests;
+
+public sealed class HealthEndpointTests
+{
+    [Fact(DisplayName = "Анонимный /health отвечает без деталей")]
+    public void AnonymousHealthAnswers()
+    {
+    }
+
+    [Fact(DisplayName = "Подробный /health требует аутентификации")]
+    public void DetailedHealthRequiresAuth()
+    {
+    }
+
+    [Theory(DisplayName = "Незаполненный секрет даёт «не сконфигурировано»")]
+    public void MissingSecretIsNotConfigured(string value)
+    {
+    }
+}
+EOF
+put_report "$repo" 'TestResults/pad.trx'
+commit_all "$repo" 'test: набор случаев упрощён'
+run_guard "$repo"
+expect_status 1
+expect_output 'Проверка 8'
+expect_output '::error file=TestResults/pad.trx'
+expect_no_output 'Проверка 2'
+expect_no_output 'Проверка 3'
+end_case
+
+begin_case 'проверка 8: удаление ранее закоммиченного отчёта — гейт молчит'
+# Отчёт, попавший в main раньше, убирают из репозитория — это починка, а не
+# нарушение.
+new_fixture
+seed_report_gitignore "$repo"
+put_report "$repo" 'TestResults/old.trx'
+commit_all "$repo" 'test: отчёт, закоммиченный по ошибке'
+git -C "$repo" branch -f base HEAD
+git -C "$repo" rm -q --cached 'TestResults/old.trx'
+commit_all "$repo" 'chore: отчёт убран из репозитория'
+run_guard "$repo"
+expect_status 0
+expect_output 'нарушений нет'
+expect_no_output 'Проверка 8'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий «запуск». Ошибка запуска: неизвестная база.
 # ------------------------------------------------------------------
 begin_case 'запуск: неизвестная база — код 2 и понятное сообщение'
 new_fixture
