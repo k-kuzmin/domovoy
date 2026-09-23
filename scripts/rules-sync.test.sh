@@ -1154,6 +1154,173 @@ expect_output 'служебные агенты: 0'
 expect_output 'сходятся'
 end_case
 
+# ------------------------------------------------------------------
+# Сценарии 44–59. Проверка 3д: значения maxTurns и model в рамке
+# определения.
+#
+# Красные сценарии построены на определениях с tools: Read — у них нет
+# Bash, и за continue по tools и по Bash проверка до них не дошла бы.
+# Проверка, поставленная не туда, эти сценарии не пройдёт.
+#
+# frame_agent пишет определение с дополнительными строками фронтматера;
+# первый аргумент — имя файла без .md, второй — строки через \n.
+# ------------------------------------------------------------------
+frame_agent() {
+    printf -- '---\nname: %s\ntools: Read\n%b\n---\n\nПравила шага — `docs/rules/triage.md`.\nЧтение объёмного вывода — `docs/rules/reading.md`.\n' \
+        "$1" "$2" > "$repo/.claude/agents/$1.md"
+}
+
+begin_case 'проверка 3д: maxTurns не целое число'
+new_fixture
+frame_agent 'step-triage' 'maxTurns: ten'
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'maxTurns: значение «ten» — не целое число'
+end_case
+
+# Кавычки не снимаются: для YAML «"25"» — строка. Реализация, снимающая
+# кавычки перед сравнением, на ten совпала бы с правильной, а здесь — нет.
+begin_case 'проверка 3д: maxTurns в кавычках — не целое'
+new_fixture
+frame_agent 'step-triage' 'maxTurns: "25"'
+run_check
+expect_status 1
+expect_output 'maxTurns: значение «"25"» — не целое число'
+end_case
+
+# Ведущий ноль: в арифметике bash 08 — ошибка, 010 — восьмеричное 8.
+begin_case 'проверка 3д: maxTurns с ведущим нулём — не целое'
+new_fixture
+frame_agent 'step-triage' 'maxTurns: 08'
+run_check
+expect_status 1
+expect_output 'maxTurns: значение «08» — не целое число'
+end_case
+
+begin_case 'проверка 3д: maxTurns ниже нижней границы'
+new_fixture
+frame_agent 'step-triage' 'maxTurns: 4'
+run_check
+expect_status 1
+expect_output 'maxTurns: значение 4 вне границ 5..200'
+end_case
+
+begin_case 'проверка 3д: maxTurns выше верхней границы'
+new_fixture
+frame_agent 'step-triage' 'maxTurns: 201'
+run_check
+expect_status 1
+expect_output 'maxTurns: значение 201 вне границ 5..200'
+end_case
+
+# Значение снесли, ключ остался — это не «поля нет», а сломанная запись.
+begin_case 'проверка 3д: maxTurns без значения'
+new_fixture
+frame_agent 'step-triage' 'maxTurns:'
+run_check
+expect_status 1
+expect_output 'maxTurns: поле есть, значения нет'
+end_case
+
+begin_case 'проверка 3д: model вне закрытого списка'
+new_fixture
+frame_agent 'step-triage' 'model: haku'
+run_check
+expect_status 1
+expect_output '.claude/agents/step-triage.md'
+expect_output 'model: неизвестное значение «haku»'
+expect_output 'haiku, sonnet, opus, fable, inherit'
+end_case
+
+begin_case 'проверка 3д: model claude- без продолжения'
+new_fixture
+frame_agent 'step-triage' 'model: claude-'
+run_check
+expect_status 1
+expect_output 'model: неизвестное значение «claude-»'
+end_case
+
+begin_case 'проверка 3д: model чужого провайдера'
+new_fixture
+frame_agent 'step-triage' 'model: gpt-4'
+run_check
+expect_status 1
+expect_output 'model: неизвестное значение «gpt-4»'
+end_case
+
+begin_case 'проверка 3д: model без значения'
+new_fixture
+frame_agent 'step-triage' 'model:'
+run_check
+expect_status 1
+expect_output 'model: поле есть, значения нет'
+end_case
+
+# Служебный агент: проверка идёт по обоим классам, а не только по шагам.
+begin_case 'проверка 3д: рамки служебного агента проверяются наравне с шагом'
+new_fixture
+printf -- '---\nname: scout\ntools: Read\nmodel: haku\n---\n\nЧтение объёмного вывода — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/scout.md"
+run_check
+expect_status 1
+expect_output '.claude/agents/scout.md'
+expect_output 'model: неизвестное значение «haku»'
+end_case
+
+# Отсутствие обоих полей допустимо: «без потолка» и «модель сессии».
+begin_case 'проверка 3д: полей maxTurns и model нет — сверка молчит'
+new_fixture
+run_check
+expect_status 0
+expect_output 'сходятся'
+expect_absent 'maxTurns'
+expect_absent 'model'
+end_case
+
+begin_case 'проверка 3д: значения на границах — сверка молчит'
+new_fixture
+frame_agent 'step-triage' 'model: haiku\nmaxTurns: 5'
+printf -- '---\nname: scout\ntools: Read\nmodel: "sonnet"\nmaxTurns: 200\n---\n\nЧтение объёмного вывода — `docs/rules/reading.md`.\n' \
+    > "$repo/.claude/agents/scout.md"
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# Вымышленный ID по шаблону: латиница, цифры, дефисы, суффикс в скобках.
+begin_case 'проверка 3д: полный ID модели — сверка молчит'
+new_fixture
+frame_agent 'step-triage' 'model: claude-sonnet-4-5[1m]'
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# Хвостовой CR не превращает целое в не целое, а известную модель — в
+# неизвестную: .gitattributes не задаёт eol=lf для *.md, и на Windows-клоне
+# определения законно приходят с CRLF.
+begin_case 'проверка 3д: CRLF с допустимыми рамками — сверка молчит'
+new_fixture
+printf -- '---\r\nname: step-triage\r\ntools: Read\r\nmodel: haiku\r\nmaxTurns: 10\r\n---\r\n\r\nПравила шага — `docs/rules/triage.md`.\r\nЧтение объёмного вывода — `docs/rules/reading.md`.\r\n' \
+    > "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
+# Контроль ложного красного: на CRLF закрывающая черта «---\r» без
+# нормализации не находится, и тело попадает во фронтматер. Строка
+# model: haku из тела тогда краснела бы как ключ рамки.
+begin_case 'проверка 3д: CRLF, model в теле определения — сверка молчит'
+new_fixture
+printf -- '---\r\nname: step-triage\r\ntools: Read\r\n---\r\n\r\nmodel: haku\r\nПравила шага — `docs/rules/triage.md`.\r\nЧтение объёмного вывода — `docs/rules/reading.md`.\r\n' \
+    > "$repo/.claude/agents/step-triage.md"
+run_check
+expect_status 0
+expect_output 'сходятся'
+end_case
+
 
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
