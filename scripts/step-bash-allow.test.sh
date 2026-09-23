@@ -902,7 +902,8 @@ end_case
 # предписывают, каждая при списке своего шага. Таблица поиска — в журнале
 # docs/tasks/119.md.
 # ------------------------------------------------------------------
-STEP_IMPLEMENT=('gh issue view' 'gh pr create' 'gh pr view' 'gh pr edit' 'grep' 'head' 'tail')
+STEP_IMPLEMENT=('gh issue view' 'gh pr create' 'gh pr view' 'gh pr edit' 'grep' 'head' 'tail'
+    'dotnet restore' 'dotnet build' 'dotnet test' 'dotnet format')
 STEP_REVIEW=('gh pr diff' 'gh pr view' 'gh pr checks' 'gh issue view' 'grep' 'head' 'tail' 'pwd'
     'bash scripts/owner-comments.sh')
 STEP_FIX=('gh pr view' 'gh pr diff' 'gh pr checks' 'gh pr comment' 'gh run view' 'grep' 'head' 'tail'
@@ -912,6 +913,8 @@ begin_case 'команды из правил шагов — молчание'
 silent_in "$ROOT_DIR" 'gh issue view 119 --comments' "${STEP_IMPLEMENT[@]}"
 silent_in "$ROOT_DIR" "gh pr create --draft --title 'feat: #119 — граница' --body-file /tmp/body.md" "${STEP_IMPLEMENT[@]}"
 silent_in "$ROOT_DIR" 'gh pr edit 128 --body-file /tmp/body.md' "${STEP_IMPLEMENT[@]}"
+silent_in "$ROOT_DIR" 'dotnet restore' "${STEP_IMPLEMENT[@]}"
+silent_in "$ROOT_DIR" 'dotnet format --verify-no-changes --no-restore' "${STEP_IMPLEMENT[@]}"
 silent_in "$ROOT_DIR" 'gh issue view 119 --json url' "${STEP_REVIEW[@]}"
 silent_in "$ROOT_DIR" 'gh pr view 128 --comments' "${STEP_REVIEW[@]}"
 silent_in "$ROOT_DIR" 'gh pr diff 128' "${STEP_REVIEW[@]}"
