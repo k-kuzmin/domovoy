@@ -970,6 +970,41 @@ expect_output 'собирает оболочка'
 deny_in "$FAKE" "$(printf 'git commit "--no-veri\\\nfy" -m x')" 'git commit'
 end_case
 
+# Фигурные скобки (ревью #128, круг 2). `}`, которую bash закрывающей не
+# считает, — экранированная, в кавычках или закрывающая вложенную пару, —
+# обрывала поиск запятой на первой сырой `}`. bash раскрывает все три
+# написания в два слова, и второе — флаг. Запятая теперь ищется до последней
+# `}` команды; лишние отказы приняты решением владельца.
+begin_case 'скобки: запятая после ложной закрывающей — отказ'
+deny_in "$FAKE" 'git commit -m {\},--no-verify}' 'git commit'
+deny_in "$FAKE" 'git commit -m {"}",--no-verify}' 'git commit'
+deny_in "$FAKE" 'git commit -m {{a},--no-verify}' 'git commit'
+deny_in "$FAKE" 'gh issue list --json title --search {\},--jq} .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue list --json title --search {"}",--jq} .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue list --json title --search {{a},--jq} .title' "${EXPR_LIST[@]}"
+end_case
+
+# Обратная сторона: скобки без запятой (`{owner}` у gh api) оболочка не
+# трогает, скобки в одиночных кавычках — тоже.
+begin_case 'скобки без запятой и в одиночных кавычках — молчание'
+silent_in "$FAKE" 'gh api repos/{owner}/{repo}/pulls/1/comments' 'gh api'
+silent_in "$FAKE" "gh issue list --search 'label:{a,b}'" "${EXPR_LIST[@]}"
+end_case
+
+# Перевод строки внутри кавычек (ревью #128, круг 2). На части команда по
+# нему не делится — он в кавычках, — а слова части разбора gh читались
+# встроенным read, который останавливается на первой строке. Всё после
+# перевода строки до веток разбора не доходило, а bash отдаёт эти слова gh.
+begin_case 'gh: слова после перевода строки в кавычках — отказ'
+deny_in "$FAKE" "$(printf 'gh search issues --repo %s "слово\n" --jq %s' "$SLUG" "'\$ENV'")" 'gh search issues'
+deny_in "$FAKE" "$(printf 'gh pr comment 1 --body "текст\n" --repo %s' "$FOREIGN")" 'gh pr comment'
+deny_in "$FAKE" "$(printf 'gh search issues --repo %s "слово\nrepo:other-org/other-repo"' "$SLUG")" 'gh search issues'
+end_case
+
+begin_case 'gh: перевод строки в кавычках без запретного — молчание'
+silent_in "$FAKE" "$(printf 'gh pr comment 1 --body "строка\nвторая"')" 'gh pr comment'
+end_case
+
 begin_case 'ANSI-кавычки прячут вторую команду в разрешённой части — отказ'
 deny_in "$FAKE" "git status \$'\\'' ; dotnet ef database drop ; echo '" 'git status' 'echo'
 end_case
