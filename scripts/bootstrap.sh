@@ -90,7 +90,7 @@ labels=(
 
   'agent/allow-protected|b60205|Разрешает агенту править защищённые пути'
   'agent/allow-contract|b60205|Разрешает агенту менять контракт API'
-  'agent/allow-destructive-migration|b60205|Разрешает DropColumn, RenameColumn и смену типа в миграции'
+  'agent/allow-destructive-migration|b60205|Снимает проверки гейта 4, 9 и 11 для миграции'
 
   'plan/proposed|c5def5|План предложен и ждёт разбора владельцем'
   'plan/approved|006b75|План одобрен: можно приступать к коду'
