@@ -1021,6 +1021,37 @@ silent_in "$ROOT_DIR" "grep -nE '\\\$\\{x\\}' README.md" "${STEP_FIX[@]}"
 silent_in "$ROOT_DIR" "git commit -m 'fix: стоит \$5, \${x} и --{jq,x}'" 'git commit'
 end_case
 
+# Комментарий (ревью #128, круг 3). Для bash `#` в начале слова открывает
+# комментарий до конца строки, и кавычка после него ничего не открывает. Разбор
+# видел в `#'` начало одиночной кавычки: строки до парной `#'` уходили в
+# разрешённую часть, а bash исполнял их отдельными командами. Поимённые флаги
+# при этом проверялись по началу части — у `grep` ни `--jq`, ни `--repo`, ни
+# `-n` у `git commit` не сверяются.
+HIDE_LIST=('grep' 'gh issue view' 'git commit')
+begin_case 'комментарий прячет вторую команду в разрешённой части — отказ'
+deny_in "$FAKE" "$(printf "grep x README.md #'\ndotnet ef database drop\n#'")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+deny_in "$FAKE" "$(printf "grep x README.md #'\ngh issue view 1 --json title --jq .title\n#'")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+deny_in "$FAKE" "$(printf "grep x README.md #'\ngh issue view --repo %s 1\n#'" "$FOREIGN")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+deny_in "$FAKE" "$(printf "grep x README.md #'\ngit commit -n -m x\n#'")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+# Сразу после разделителя часть и раньше не проходила — она начиналась с `#`
+# и не совпадала со списком. Отказ обязан называть комментарий, а не список.
+deny_in "$FAKE" "$(printf "grep x README.md;#'\ndotnet ef database drop\n#'")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+deny_in "$FAKE" "$(printf "grep x README.md &&#'\ndotnet ef database drop\n#'")" "${HIDE_LIST[@]}"
+expect_output 'комментарий'
+end_case
+
+begin_case '# в кавычках и после слеша — молчание'
+silent_in "$ROOT_DIR" "grep -n '#' README.md" 'grep'
+silent_in "$ROOT_DIR" 'grep -n "#" README.md' 'grep'
+silent_in "$ROOT_DIR" 'grep -n \# README.md' 'grep'
+silent_in "$ROOT_DIR" 'gh pr view 128 --comments | grep -n "## Решение"' "${STEP_FIX[@]}"
+end_case
+
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
 
