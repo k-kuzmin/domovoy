@@ -159,6 +159,41 @@ public sealed class AnonymousEndpointsRuleTests : IClassFixture<WebApplicationFa
             .WithMessage("*таблица правила 7 не найдена*")
             .WithMessage($"*{AnonymousEndpointsRule.TableHeader}*");
     }
+
+    [Theory(DisplayName = "Строка за заголовком таблицы правила 7 без разделителя — ошибка, а не пропущенная строка данных")]
+    [InlineData("""
+           | Эндпоинт | Зачем | Запись |
+           | `GET /health` | пригодность к работе | [0002](../docs/decisions/0002.md) |
+           | `POST /api/v1/auth/device` | обмен кода привязки | [0025](../docs/decisions/0025.md) |
+        """)]
+    [InlineData("""
+           | Эндпоинт | Зачем | Запись |
+           |---|-x-|---|
+           | `GET /health` | пригодность к работе | [0002](../docs/decisions/0002.md) |
+        """)]
+    [InlineData("""
+           | Эндпоинт | Зачем | Запись |
+        """)]
+    public void MissingSeparatorIsReported(string document)
+    {
+        Action parse = () => AnonymousEndpointsRule.ParseTable(document);
+
+        parse.Should().Throw<InvalidOperationException>()
+            .WithMessage("*нет строки-разделителя*")
+            .WithMessage($"*{AnonymousEndpointsRule.TableHeader}*");
+    }
+
+    [Fact(DisplayName = "Разделитель с выравниванием и пробелами принимается")]
+    public void AlignedSeparatorIsAccepted()
+    {
+        const string document = """
+               | Эндпоинт | Зачем | Запись |
+               | :--- | :---: | ---: |
+               | `GET /health` | пригодность к работе | [0002](../docs/decisions/0002.md) |
+            """;
+
+        AnonymousEndpointsRule.ParseTable(document).Should().Equal(new DocumentedEndpoint("GET", "/health"));
+    }
 }
 
 /// <summary>Анонимный эндпоинт живой маршрутизации. Пустой набор методов — эндпоинт отвечает на любой метод.</summary>
@@ -219,7 +254,17 @@ internal static partial class AnonymousEndpointsRule
 
         if (header >= 0)
         {
-            // Строка сразу за заголовком — разделитель |---|, данные идут после неё.
+            // Строка сразу за заголовком обязана быть разделителем |---|: без
+            // проверки первая строка данных пропускалась бы молча, и сверка
+            // осталась бы зелёной без неё.
+            if (header + 1 >= lines.Length || !SeparatorPattern().IsMatch(lines[header + 1].Trim()))
+            {
+                throw new InvalidOperationException(
+                    $"В {SourceFile} под строкой заголовка таблицы правила 7 «{TableHeader}» нет строки-разделителя " +
+                    "вида `|---|---|---|`: без неё таблица не читается как таблица, а первая строка данных " +
+                    "была бы пропущена. Вернуть разделитель сразу под заголовком.");
+            }
+
             for (int index = header + 2; index < lines.Length; index++)
             {
                 string line = lines[index].Trim();
@@ -320,6 +365,9 @@ internal static partial class AnonymousEndpointsRule
 
     [GeneratedRegex(@"^`(?<method>[A-Z]+) (?<path>/\S*)`$")]
     private static partial Regex FirstCellPattern();
+
+    [GeneratedRegex(@"^\|(?:[ \t]*:?-+:?[ \t]*\|)+$")]
+    private static partial Regex SeparatorPattern();
 
     [GeneratedRegex("/{2,}")]
     private static partial Regex RepeatedSlashes();
