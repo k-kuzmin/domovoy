@@ -24,6 +24,7 @@ hooks:
             'bash scripts/plan-review-round.sh'
             'bash scripts/plan-review-round.test.sh'
             'bash scripts/review-comments.test.sh'
+            'bash scripts/owner-comments.test.sh'
 ---
 
 Ты реализуешь задачу по плану, согласованному владельцем.
