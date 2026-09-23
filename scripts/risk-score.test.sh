@@ -27,6 +27,10 @@
 #       именами секретных настроек внутри области keyword_paths; строки 22-23
 #       того же файла — отдельно, как пин границы слова: совпасть в них может
 #       только регулярка с \b;
+#   src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs:23-29 — настоящий анонимный
+#       эндпоинт: обмен кода привязки с .AllowAnonymous(). Других слов
+#       чувствительной зоны в этих строках нет, поэтому сработать на них может
+#       только слово allowanonymous;
 #   tests/Domovoy.Tests/MobileLayeringTests.cs и
 #   src/Domovoy.Core/Models/HaEntityState.cs — молчаливая пара к ним: внутри той
 #       же области, без единого слова чувствительной зоны.
@@ -315,11 +319,24 @@ for material in \
     'src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs' \
     'tests/Domovoy.Tests/ConfigurationExampleTests.cs' \
     'tests/Domovoy.Tests/MobileLayeringTests.cs' \
-    'src/Domovoy.Core/Models/HaEntityState.cs'; do
+    'src/Domovoy.Core/Models/HaEntityState.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'; do
     if [ ! -f "$ROOT/$material" ]; then
         fail_case "материал дерева исчез: $material"
     fi
 done
+# Строки 23-29 эндпоинтов — обмен кода привязки с .AllowAnonymous(). Уехал вызов
+# по файлу — сценарий слова краснеет здесь, а не даёт ложное молчание ниже.
+if ! sed -n '23,29p' "$ROOT/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs" \
+    | grep -qF '.AllowAnonymous()'; then
+    fail_case 'строки 23-29 ApiV1Endpoints.cs больше не содержат .AllowAnonymous(): материал уехал'
+fi
+# Строка 21 — группа /api/v1 с .RequireAuthorization(). Уехал вызов по файлу —
+# сценарии снятой защиты краснеют здесь, а не дают ложное молчание ниже.
+if ! sed -n '21p' "$ROOT/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs" \
+    | grep -qF '.RequireAuthorization()'; then
+    fail_case 'строка 21 ApiV1Endpoints.cs больше не содержит .RequireAuthorization(): материал уехал'
+fi
 # Строки 22-27 первого файла — тот самый массив имён секретных настроек.
 # Уехал по файлу — сценарий краснеет здесь, а не даёт ложное молчание ниже.
 if ! sed -n '22,27p' "$ROOT/tests/Domovoy.Tests/ConfigurationExampleTests.cs" \
@@ -467,6 +484,153 @@ if put_lines_from_tree 'tests/Domovoy.Tests/SecretPathsMaterial.cs' \
     expect_signal sensitive-area
     # Причина печатается целиком: совпавшее слово, а не только факт сигнала.
     expect_output 'слово: Secret — tests/Domovoy.Tests/SecretPathsMaterial.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Анонимный эндпоинт опознаётся словом allowanonymous на настоящих строках дерева'
+# Четвёртая зона правил безопасности — правило 7 .claude/CLAUDE.md: анонимный
+# доступ только записанным решением. Слово authoriz совпадает с
+# RequireAuthorization, но не с .AllowAnonymous(), и эндпоинт, анонимный сразу,
+# не давал ни одного сигнала. Материал — настоящие строки 23-29 ApiV1Endpoints.cs
+# тем же путём: каталог эндпоинтов в paths сигнала не входит, поэтому high здесь
+# может прийти только от слова.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово: AllowAnonymous — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+
+    # Контрольный прогон: тот же дифф, настоящий конфиг без одного слова. Молчит
+    # — значит high выше держится на allowanonymous, а не на чужом совпадении.
+    MUT_NO_ANON="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords -= ["allowanonymous"] else . end)')"
+    run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_ANON"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+
+    # Режим plan строк не читает, а каталог эндпоинтов в paths не входит:
+    # решение записано в note сигнала.
+    PLAN_ANON="$(make_plan "$FLAGS_NONE" 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs')"
+    run_score plan "$PLAN_ANON"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Слово allowanonymous в правилах и журнале уровня не поднимает'
+# Те же настоящие строки — в правилах и журнале задачи, вне keyword_paths.
+new_repo
+if put_lines_from_tree 'docs/rules/выдержка.md' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29 \
+    && put_lines_from_tree 'docs/tasks/4242.md' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 23 29; then
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Снятая RequireAuthorization опознаётся словом в удалённой строке настоящего файла дерева'
+# Снятие защиты — такое же событие зоны, как появление анонимности, но слово
+# authoriz при нём остаётся только в удалённой строке. Материал — настоящая
+# строка 21 ApiV1Endpoints.cs тем же путём: каталог эндпоинтов в paths сигнала
+# не входит, поэтому high здесь может прийти только от слова.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'защищённая группа'
+    sed -i 's/\.RequireAuthorization()//' "$REPO/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs"
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово в удалённой строке: Authoriz — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    # Добавленная половина правки слова не содержит: строка «слово:» здесь
+    # была бы чужим совпадением, а не снятой защитой.
+    expect_no_output 'слово: Authoriz'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+
+    # Контрольный прогон: тот же дифф, настоящий конфиг без authoriz. Молчит —
+    # значит high выше держится на слове в удалённой строке.
+    MUT_NO_AUTHZ="$(mutate_config '.signals |= map(if .id == "sensitive-area" then .keywords -= ["authoriz"] else . end)')"
+    run_score diff HEAD~1 HEAD --repo "$REPO" --config "$MUT_NO_AUTHZ"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Удалённый файл со словом чувствительной зоны опознаётся по старому пути'
+# У удалённого файла заголовок «+++ /dev/null»: путь его строк берётся из
+# «--- a/», иначе они ушли бы в никуда вместе с файлом.
+new_repo
+if put_lines_from_tree 'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'защищённая группа'
+    rm "$REPO/src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs"
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_level high
+    expect_signal sensitive-area
+    expect_output 'слово в удалённой строке: Authoriz — src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+    expect_no_output 'путь: src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Строки содержимого, начинающиеся с «--» и «++», не принимаются за заголовок диффа'
+# В диффе -U0 удалённая строка «-- …» выглядит как «--- …», добавленная
+# «++ …» — как «+++ …». Разбор заголовка по шаблону на любой строке принимал
+# их за имена файлов: строка пропадала, а путь следующих строк подменялся.
+new_repo
+put 'src/Domovoy.Data/Scripts/notes.txt' '-- bearer проверяется на входе'
+commit_repo 'заметка'
+put 'src/Domovoy.Data/Scripts/notes.txt' '++ jwt не хранится'
+commit_repo 'правка'
+run_score diff HEAD~1 HEAD --repo "$REPO"
+expect_status 0
+expect_signal sensitive-area
+expect_output 'слово в удалённой строке: bearer — src/Domovoy.Data/Scripts/notes.txt'
+expect_output 'слово: jwt — src/Domovoy.Data/Scripts/notes.txt'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Слово в удалённой строке вне keyword_paths уровня не поднимает'
+# Настоящая строка 21 в правилах, журнале и скриптах — вне keyword_paths.
+# Нейтральный файл под src/** во второй правке нужен, чтобы дифф со строками
+# читался вообще: без него молчание держала бы предварительная проверка
+# области по именам файлов, а не область в движке.
+new_repo
+if put_lines_from_tree 'docs/rules/выдержка.md' \
+    'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21 \
+    && put_lines_from_tree 'docs/tasks/4242.md' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21 \
+    && put_lines_from_tree 'scripts/выдержка.sh' \
+        'src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs' 21 21; then
+    commit_repo 'выдержки'
+    put 'docs/rules/выдержка.md'
+    put 'docs/tasks/4242.md'
+    put 'scripts/выдержка.sh'
+    put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
+    commit_repo 'правка'
+    run_score diff HEAD~1 HEAD --repo "$REPO"
+    expect_status 0
+    expect_signal_silent sensitive-area
+    expect_level_below_high
 fi
 end_case
 
@@ -793,6 +957,63 @@ fi
 end_case
 
 # ------------------------------------------------------------------
+begin_case 'Режим plan: файлов в плане больше порога — сигнал размера по файлам, строки не измерялись'
+# Диффа до реализации нет только наполовину: строк ещё нет, а число файлов план
+# объявляет в files[]. Порог тот же, что у диффа, — отдельного числа нет.
+# Пути лежат в одной подсистеме, чтобы medium не пришёл от ширины работы.
+PLAN_FILES_THRESHOLD="$(jq -r '.thresholds.diff_files // "нет"' "$CONFIG" | tr -d '\r')"
+case "$PLAN_FILES_THRESHOLD" in
+    '' | *[!0-9]*)
+        fail_case "порог файлов в pipeline/risk.json не число: «$PLAN_FILES_THRESHOLD»"
+        ;;
+    *)
+        PLAN_FILES_ABOVE=$((PLAN_FILES_THRESHOLD + 1))
+        ABOVE_LIST=()
+        for n in $(seq 1 "$PLAN_FILES_ABOVE"); do
+            ABOVE_LIST+=("src/Domovoy.Core/Models/Bulk$n.cs")
+        done
+        PLAN_BIG="$(make_plan "$FLAGS_NONE" "${ABOVE_LIST[@]}")"
+        run_score plan "$PLAN_BIG"
+        expect_status 0
+        expect_level "$(config_level diff-size)"
+        expect_signal diff-size
+        expect_signal_silent work-breadth
+        expect_output "размер плана: файлов: $PLAN_FILES_ABOVE (порог $PLAN_FILES_THRESHOLD); строки не измерялись — диффа ещё нет"
+
+        # Ровно порог сигнала не даёт: сравнение строгое, как в режиме diff.
+        PLAN_EXACT_FILES="$(make_plan "$FLAGS_NONE" "${ABOVE_LIST[@]:0:$PLAN_FILES_THRESHOLD}")"
+        run_score plan "$PLAN_EXACT_FILES"
+        expect_status 0
+        expect_output "файлов в плане $PLAN_FILES_THRESHOLD,"
+        expect_signal_silent diff-size
+        expect_level low
+
+        # Порог файлов не задан — законный первый проход, а не поломка: код 0,
+        # сигнал размера молчит, и режим говорит это вслух, как режим diff.
+        MUT_NO_FILES="$(mutate_config 'del(.thresholds.diff_files)')"
+        run_score plan "$PLAN_BIG" --config "$MUT_NO_FILES"
+        expect_status 0
+        expect_output 'Порог размера в конфиге не задан'
+        expect_signal_silent diff-size
+        expect_level low
+        ;;
+esac
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Режим plan: план на два файла остаётся low и называет, что строки не измерялись'
+PLAN_TWO="$(make_plan "$FLAGS_NONE" \
+    'src/Domovoy.Core/Models/Thing.cs' \
+    'src/Domovoy.Core/Models/OtherThing.cs')"
+run_score plan "$PLAN_TWO"
+expect_status 0
+expect_level low
+expect_signal_silent diff-size
+expect_output 'Не измерялось в режиме plan'
+expect_output 'по строкам'
+end_case
+
+# ------------------------------------------------------------------
 begin_case 'Выключенный сигнал покрытия печатается выключенным и на уровень не влияет'
 new_repo
 put 'src/Domovoy.Api/Program.cs' 'var builder = WebApplication.CreateBuilder(args);'
@@ -857,6 +1078,11 @@ expect_status 0
 expect_output 'Не измерялось в режиме plan'
 expect_output 'размер диффа'
 expect_output 'ключевые слова'
+# Половина размера по файлам в plan считается, по строкам — нет, и режим
+# называет именно строки: иначе читатель решил бы, что размер не мерился вовсе.
+expect_output 'по строкам'
+# Словарная половина читает и удалённые строки: режим называет обе.
+expect_output 'удалённым строкам'
 
 new_repo
 put 'src/Domovoy.Core/Models/Thing.cs' 'public sealed class Thing;'
@@ -1130,7 +1356,8 @@ end_case
 
 # ------------------------------------------------------------------
 # Ширина работы: число затронутых подсистем. Признак считается из путей, и
-# поэтому он единственный признак объёма, который есть у обоих входов.
+# поэтому он одинаков у обоих входов — в отличие от размера, у которого в
+# режиме plan есть только половина по числу файлов.
 # ------------------------------------------------------------------
 BREADTH="$(jq -r '.thresholds.breadth_subsystems // "нет"' "$CONFIG" | tr -d '\r')"
 
@@ -1217,7 +1444,8 @@ else
         run_score plan "$PLAN_ABOVE"
         expect_status 0
         # Тот же уровень от другого входа на тех же путях: признак считается из
-        # путей, а не из режима, — в отличие от размера.
+        # путей, а не из режима, — в отличие от размера, у которого в режиме
+        # plan нет половины по строкам.
         expect_level "$(config_level work-breadth)"
         expect_signal work-breadth
         expect_output "ширина работы: подсистем $NEED (порог $BREADTH)"
@@ -1298,8 +1526,9 @@ end_case
 # ------------------------------------------------------------------
 begin_case 'Порог подсистем не задан — код 0, уровень low и строка о несчитанной ширине в обоих режимах'
 # Законный первый проход, а не поломка. Проверяется в обоих режимах: у строки о
-# пороге размера стоит условие FACT_KIND=diff, и повторение его для ширины
-# лишило бы режим plan единственного признака того, что порог не считался.
+# пороге размера условия по режимам разные (диффу нужны оба порога, плану —
+# порог файлов), а условие «только diff» для ширины лишило бы режим plan
+# единственного признака того, что порог не считался.
 new_repo
 put '.claude/agents/образец.md' 'строка определения'
 put 'docs/rules/образец.md' 'строка правил'
