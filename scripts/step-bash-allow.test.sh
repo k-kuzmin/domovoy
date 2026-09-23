@@ -944,6 +944,18 @@ deny_in "$FAKE" 'gh issue view 1 --json title $"--jq" .title' "${EXPR_LIST[@]}"
 deny_in "$FAKE" 'gh issue view 1 --json title --jq$@ .title' "${EXPR_LIST[@]}"
 deny_in "$FAKE" 'gh issue view 1 --json title --{jq,x} .title' "${EXPR_LIST[@]}"
 deny_in "$FAKE" "gh issue view --rep\\o $FOREIGN 1" "${EXPR_LIST[@]}"
+# Пробел в кавычках раскрытие скобок не останавливает: bash отдаст
+# `--jq ' env'`, а по словам видны только `{--jq,` и `env}`.
+deny_in "$FAKE" "gh issue view 1 --json title {--jq,' env'}" "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --{jq,"x y"}' "${EXPR_LIST[@]}"
+end_case
+
+# Слеш перед знаком препинания тоже снимается оболочкой, а адрес и
+# квалификатор поиска читаются по `.`, `/` и `:`.
+begin_case 'gh: адрес и квалификатор, собранные слешем, — отказ'
+deny_in "$FAKE" 'gh pr view https:\/\/github.com/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://github\.com/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" "gh search issues --repo $SLUG repo\\:other-org/other-repo" 'gh search issues'
 end_case
 
 begin_case 'git commit: --no-verify, собранный оболочкой, — отказ'
