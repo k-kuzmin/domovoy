@@ -225,6 +225,13 @@ deny_assembled() {
     deny "Слово в команде собирает оболочка: «$COMMAND». Граница сверяет флаги по тексту команды и оболочку не исполняет, а обратный слеш вне кавычек, перенос строки через слеш, подстановка параметра (\$x, \${…}, \$@), ANSI- и локализуемые кавычки (\$'…', \$\"…\") и фигурные скобки с запятой соберут слово, которого проверка не видит. Пиши значение буквально; \$ и \\ в регулярке — внутри одиночных кавычек."
 }
 
+# Строчные буквы — через tr, а не `${…,,}`: подстановка регистра появилась в
+# bash 4, на bash 3.2 она даёт `bad substitution`, и хук выходит без решения,
+# что читается как разрешение.
+to_lower() {
+    printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+}
+
 # Молчание = решения нет, дальше работает обычный порядок разрешений.
 allow_silently() {
     exit 0
@@ -251,7 +258,7 @@ resolve_own_slug() {
     local LC_ALL=C
     local url
     url="$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" remote get-url origin 2>/dev/null)" || url=''
-    url="${url,,}"
+    url="$(to_lower "$url")"
     url="${url%/}"
     url="${url%.git}"
 
@@ -277,7 +284,8 @@ require_own_slug() {
 # регистре ничего не защищал бы.
 is_own_slug() {
     local LC_ALL=C
-    local value="${1,,}"
+    local value
+    value="$(to_lower "$1")"
     [ -n "$OWN_SLUG" ] && [ "$value" = "$OWN_SLUG" ]
 }
 
@@ -327,7 +335,8 @@ gh_repo_value_check() {
 # без схемы, и git@github.com:o/r. Первые два сегмента пути — в ADDR_SLUG.
 github_address_slug() {
     local LC_ALL=C
-    local word="${1,,}"
+    local word
+    word="$(to_lower "$1")"
     local path=''
     local re='^([^/:@]+://)?([^/@]*@)?([^/@:]*\.)?github\.com(:[0-9]*)?/(.*)$'
     local re_scp='^([^/@]*@)?([^/@:]*\.)?github\.com:(.+)$'
@@ -394,7 +403,8 @@ gh_search_word_check() {
         deny "Флаг --owner запрещён у gh search: «$3». Поиск идёт только по своему репозиторию через --repo."
     fi
     local LC_ALL=C
-    local lowered="${1,,}"
+    local lowered
+    lowered="$(to_lower "$1")"
     case "$lowered" in
         repo:* | org:* | user:* | owner:*)
             deny "Квалификатор области в запросе gh search запрещён: «$3». repo:, org:, user: и owner: расширяют поиск на чужие репозитории; область задаёт --repo."
