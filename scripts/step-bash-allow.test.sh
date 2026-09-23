@@ -609,9 +609,10 @@ end_case
 #
 # Эндпоинт `repos/{owner}/{repo}/pulls/<номер>/comments` — единственный
 # источник построчных замечаний, и соблазн выдать шагу `gh api` прямой. Выдать
-# его нельзя: у команды есть `-X`, `--method` и `--input`, а разбор аргументов
-# здесь дальше поимённых флагов не идёт — запрет записан строкой «Новая
-# команда, нужная шагу» в .claude/CLAUDE.md. Поэтому граница остаётся
+# его нельзя: у команды есть `-X`, `--method` и `--input`, а у gh граница
+# разбирает только указатель репозитория, адрес и выражение над ответом
+# (сценарий 28) — метод и тело запроса она не видит. Запрет записан строкой
+# «Новая команда, нужная шагу» в .claude/CLAUDE.md. Поэтому граница остаётся
 # поимённой: `gh api` живёт внутри scripts/review-comments.sh, а наружу выдана
 # одна строка.
 #
@@ -919,6 +920,58 @@ silent_in "$ROOT_DIR" 'bash scripts/owner-comments.sh 119' "${STEP_REVIEW[@]}"
 silent_in "$ROOT_DIR" 'gh run view 123 --log | grep -nE "error|Failed"' "${STEP_FIX[@]}"
 silent_in "$ROOT_DIR" 'bash scripts/review-comments.sh 122' "${STEP_FIX[@]}"
 silent_in "$ROOT_DIR" 'gh pr comment 128 --body-file /tmp/comment.md' "${STEP_FIX[@]}"
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 31. Слова, которые собирает оболочка (ревью #128, круг 1).
+#
+# Поимённые флаги проверяются по нормализованной части: кавычки сняты, но
+# оболочка не исполнена. Слово, которое bash соберёт из обратного слеша,
+# подстановки параметра, ANSI- или локализуемых кавычек, фигурных скобок, до
+# проверки доходит неузнанным — и это касается всех поимённых флагов, а не
+# только gh. ANSI-кавычки к тому же ломают сам разбор на части: `$'\''` — это
+# одна литеральная кавычка для bash, а разбор видел в ней открытую строку и
+# склеивал три команды в одну часть с разрешённым началом.
+#
+# Отказ ставится по признаку сборки, а не по узнанному флагу: угадывать, что
+# соберёт оболочка, — значит исполнять её, а граница этого не делает.
+# ------------------------------------------------------------------
+begin_case 'gh: флаг, собранный оболочкой, — отказ'
+deny_in "$FAKE" 'gh issue view 1 --json title --j\q .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --j${x:-q} .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" "gh issue view 1 --json title \$'--jq' .title" "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title $"--jq" .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --jq$@ .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --{jq,x} .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" "gh issue view --rep\\o $FOREIGN 1" "${EXPR_LIST[@]}"
+end_case
+
+begin_case 'git commit: --no-verify, собранный оболочкой, — отказ'
+deny_in "$FAKE" 'git commit --no-veri\fy -m x' 'git commit'
+deny_in "$FAKE" "git commit \$'--no-verify' -m x" 'git commit'
+deny_in "$FAKE" 'git commit --no-verif${x:-y} -m x' 'git commit'
+deny_in "$FAKE" "$(printf 'git commit --no-veri\\\nfy -m x')" 'git commit'
+# Отказ обязан называть сборку: до правки это написание получало отказ
+# случайно — разбор резал часть на переводе строки, и `fy -m x` просто не
+# было в списке. Со списком, где продолжение разрешено, оно прошло бы.
+expect_output 'собирает оболочка'
+deny_in "$FAKE" "$(printf 'git commit "--no-veri\\\nfy" -m x')" 'git commit'
+end_case
+
+begin_case 'ANSI-кавычки прячут вторую команду в разрешённой части — отказ'
+deny_in "$FAKE" "git status \$'\\'' ; dotnet ef database drop ; echo '" 'git status' 'echo'
+end_case
+
+# Обратная сторона: `$` и `\` в одиночных кавычках, `$` перед закрывающей
+# двойной кавычкой и `\` перед обычной буквой внутри двойных оболочка не
+# трогает. Шагу починки такие регулярки нужны каждый день.
+begin_case 'регулярки с $ и \ в кавычках — молчание'
+silent_in "$ROOT_DIR" "gh run view 123 --log | grep -nE 'error\$'" "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" 'gh run view 123 --log | grep -nE "error$"' "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" 'gh run view 123 --log | grep -nE "error$|Failed"' "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" 'gh run view 123 --log | grep -n "\bслово"' "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" "grep -nE '\\\$\\{x\\}' README.md" "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" "git commit -m 'fix: стоит \$5, \${x} и --{jq,x}'" 'git commit'
 end_case
 
 printf '\n%s\n' '=================================================='
