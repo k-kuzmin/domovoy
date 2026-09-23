@@ -642,6 +642,285 @@ expect_status 0
 expect_silence
 end_case
 
+# ------------------------------------------------------------------
+# Сценарий 28. Разбор аргументов gh (#119): указатель репозитория, адрес
+# github.com, выражение над ответом, поиск без своего репозитория.
+#
+# Свой репозиторий граница выводит из origin каталога CLAUDE_PROJECT_DIR —
+# той же переменной, по которой хук находит себя в бою. Поэтому сценарии
+# собирают временные репозитории с поддельным origin и передают каталог
+# явно, а не полагаются на окружение сессии.
+#
+# Поддельный слаг — ASCII и содержит q и t: слаг GitHub состоит из
+# [A-Za-z0-9._-], а буквы q и t проверяют, что значение после R в сцепке
+# коротких флагов не принимается за -q или -t. Кириллица — только в чужих
+# значениях, которые обязаны получить отказ.
+# ------------------------------------------------------------------
+SLUG='acme-qt/tool-repo'
+SLUG_UPPER='ACME-QT/Tool-Repo'
+FOREIGN='чужой/репо'
+
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPOS="$(mktemp -d)"
+trap 'rm -rf "$REPOS"' EXIT
+
+make_repo() {
+    local dir="$REPOS/$1"
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    if [ -n "${2:-}" ]; then
+        git -C "$dir" remote add origin "$2"
+    fi
+    printf '%s' "$dir"
+}
+
+FAKE="$(make_repo fake "https://github.com/$SLUG.git")"
+# Каталог без origin — именно репозиторий после git init: из просто
+# временного каталога git поднялся бы к родителю и нашёл бы чужой origin.
+NO_ORIGIN="$(make_repo no-origin)"
+OTHER_HOST="$(make_repo other-host "https://gitlab.example.invalid/$SLUG.git")"
+
+call_hook_in() {
+    local dir="$1" cmd="$2"
+    shift 2
+    local payload
+    payload="$(jq -n --arg cmd "$cmd" \
+        '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$cmd}}')"
+    OUTPUT="$(printf '%s' "$payload" | env "CLAUDE_PROJECT_DIR=$dir" bash "$HOOK" "$@" 2>&1)"
+    STATUS=$?
+}
+
+# Внутри одного случая проверяется несколько написаний: каждое называется
+# в сообщении, чтобы провал указывал на форму, а не на случай целиком.
+deny_in() {
+    local dir="$1" cmd="$2"
+    shift 2
+    call_hook_in "$dir" "$cmd" "$@"
+    if [ "$STATUS" -ne 0 ] || ! printf '%s' "$OUTPUT" \
+        | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1; then
+        fail_case "ожидался разбираемый отказ: $cmd"
+    fi
+}
+
+silent_in() {
+    local dir="$1" cmd="$2"
+    shift 2
+    call_hook_in "$dir" "$cmd" "$@"
+    if [ "$STATUS" -ne 0 ] || [ -n "$OUTPUT" ]; then
+        fail_case "ожидалось молчание: $cmd — вывод: $OUTPUT"
+    fi
+}
+
+# --- Указатель репозитория: --repo и -R ---------------------------
+
+begin_case 'gh: чужой --repo — отказ'
+deny_in "$FAKE" "gh issue view --repo $FOREIGN 1" 'gh issue view'
+deny_in "$FAKE" "gh issue view --repo=$FOREIGN 1" 'gh issue view'
+deny_in "$FAKE" "gh issue view -R $FOREIGN 1" 'gh issue view'
+deny_in "$FAKE" "gh issue view -R$FOREIGN 1" 'gh issue view'
+# Однозначное сокращение длинной опции — как у --no-verify.
+deny_in "$FAKE" "gh issue view --rep $FOREIGN 1" 'gh issue view'
+# Значение с хостом слагу не равно: лишний отказ принят планом.
+deny_in "$FAKE" "gh issue view --repo github.com/$SLUG 1" 'gh issue view'
+# Указатель без значения — отказ, а не пропуск.
+deny_in "$FAKE" 'gh issue view 1 --repo' 'gh issue view'
+end_case
+
+begin_case 'gh: свой --repo — молчание'
+silent_in "$FAKE" "gh issue view --repo $SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view --repo=$SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view -R $SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view -R$SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view --repo $SLUG_UPPER 1" 'gh issue view'
+end_case
+
+begin_case 'gh: -R в сцепке с чужим значением — отказ'
+deny_in "$FAKE" "gh issue view -cR $FOREIGN 1" 'gh issue view'
+deny_in "$FAKE" "gh issue view -cR$FOREIGN 1" 'gh issue view'
+deny_in "$FAKE" "gh issue view -R=$FOREIGN 1" 'gh issue view'
+end_case
+
+begin_case 'gh: -R в сцепке со своим значением — молчание'
+silent_in "$FAKE" "gh issue view -cR $SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view -cR$SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view -R=$SLUG 1" 'gh issue view'
+silent_in "$FAKE" "gh issue view -cR $SLUG_UPPER 1" 'gh issue view'
+end_case
+
+# Пришпиленный префикс не освобождает остальные слова: повторный --repo у gh
+# переопределяет предыдущий.
+begin_case 'gh: второй указатель после своего — отказ'
+deny_in "$FAKE" "gh issue view --repo $SLUG --repo $FOREIGN 1" "gh issue view --repo $SLUG"
+deny_in "$FAKE" "gh issue view --repo $SLUG -R $FOREIGN 1" "gh issue view --repo $SLUG"
+end_case
+
+# --- Адрес github.com ---------------------------------------------
+
+begin_case 'gh: чужой адрес github.com — отказ'
+deny_in "$FAKE" "gh pr view https://github.com/$FOREIGN/pull/1" 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://github.com/other-org/other-repo/pull/1' 'gh pr view'
+end_case
+
+begin_case 'gh: чужой адрес github.com в другом написании — отказ'
+deny_in "$FAKE" 'gh pr view HTTPS://GitHub.COM/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://www.github.com/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://github.com:443/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://acme-qt@github.com/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view github.com/other-org/other-repo/pull/1' 'gh pr view'
+deny_in "$FAKE" 'gh pr view git@github.com:other-org/other-repo.git' 'gh pr view'
+end_case
+
+begin_case 'gh: свой адрес github.com — молчание'
+silent_in "$FAKE" "gh pr view https://github.com/$SLUG/pull/1" 'gh pr view'
+silent_in "$FAKE" 'gh pr view HTTPS://GitHub.COM/ACME-QT/Tool-Repo/pull/1' 'gh pr view'
+silent_in "$FAKE" "gh pr view https://www.github.com/$SLUG/pull/1" 'gh pr view'
+silent_in "$FAKE" "gh pr view https://github.com:443/$SLUG/pull/1" 'gh pr view'
+silent_in "$FAKE" "gh pr view https://github.com/$SLUG.git" 'gh pr view'
+end_case
+
+begin_case 'gh: префикс-подделка своего слага в адресе — отказ'
+deny_in "$FAKE" "gh pr view https://github.com/$SLUG-evil/pull/1" 'gh pr view'
+deny_in "$FAKE" 'gh pr view https://github.com/acme-qt-evil/tool-repo/pull/1' 'gh pr view'
+# Адрес без репозитория в пути своим не считается.
+deny_in "$FAKE" 'gh pr view https://github.com/acme-qt' 'gh pr view'
+end_case
+
+begin_case 'gh: адрес другого хоста и слово github.com без пути — молчание'
+silent_in "$FAKE" 'gh issue view 1 --json url' 'gh issue view'
+silent_in "$FAKE" "gh pr comment 1 --body 'см. github.com и example.invalid/a/b'" 'gh pr comment'
+end_case
+
+# --- Выражение над ответом ----------------------------------------
+
+EXPR_LIST=('gh issue view' 'gh issue list' 'gh pr view')
+
+begin_case 'gh: выражение над ответом — отказ'
+deny_in "$FAKE" "gh issue view 1 --json title --jq '\$ENV'" "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --jq=.title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue list --json title -q .[].title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue list --json title -q.[].title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title -cq .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" "gh issue view 1 --json title --template '{{.title}}'" "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title --template={{.title}}' "${EXPR_LIST[@]}"
+# Сокращение: у --jq отличного от него сокращения длиной от четырёх нет,
+# поэтому оно проверяется на --template.
+deny_in "$FAKE" 'gh issue view 1 --json title --templ {{.title}}' "${EXPR_LIST[@]}"
+deny_in "$FAKE" "gh issue view 1 --json title -t '{{.title}}'" "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title -t{{.title}}' "${EXPR_LIST[@]}"
+deny_in "$FAKE" 'gh issue view 1 --json title "--jq" .title' "${EXPR_LIST[@]}"
+deny_in "$FAKE" "$(printf 'gh issue view 1 --json title\t--jq .title')" "${EXPR_LIST[@]}"
+end_case
+
+begin_case 'gh: тот же вызов без выражения над ответом — молчание'
+silent_in "$FAKE" 'gh issue list --json number' "${EXPR_LIST[@]}"
+silent_in "$FAKE" 'gh issue view 1 --json url' "${EXPR_LIST[@]}"
+silent_in "$FAKE" 'gh issue view 1 --json title,body --comments' "${EXPR_LIST[@]}"
+end_case
+
+# --- Поиск ----------------------------------------------------------
+
+begin_case 'gh search без своего --repo — отказ'
+deny_in "$FAKE" 'gh search issues слово' 'gh search issues'
+deny_in "$FAKE" "gh search issues --repo $FOREIGN слово" 'gh search issues'
+deny_in "$FAKE" 'gh search issues --owner acme-qt слово' 'gh search issues'
+deny_in "$FAKE" "gh search issues --repo $SLUG \"repo:$FOREIGN слово\"" 'gh search issues'
+deny_in "$FAKE" "gh search issues --repo $SLUG org:other-org" 'gh search issues'
+deny_in "$FAKE" "gh search issues --repo $SLUG user:other-user" 'gh search issues'
+deny_in "$FAKE" "gh search issues --repo $SLUG REPO:other-org/other-repo" 'gh search issues'
+end_case
+
+begin_case 'gh search со своим --repo — молчание'
+silent_in "$FAKE" "gh search issues --repo $SLUG гейт" 'gh search issues'
+silent_in "$FAKE" "gh search issues --repo $SLUG \"гейт\" --limit 20" 'gh search issues'
+end_case
+
+# --- Слаг не выведен ----------------------------------------------
+
+begin_case 'gh: слаг не выведен — отказ на всё, что требует слага'
+for dir in "$NO_ORIGIN" "$OTHER_HOST"; do
+    deny_in "$dir" "gh issue view --repo $SLUG 1" 'gh issue view'
+    if ! printf '%s' "$OUTPUT" | grep -qF 'слаг не выведен'; then
+        fail_case "в причине нет «слаг не выведен» (${dir##*/})"
+    fi
+    deny_in "$dir" "gh pr view https://github.com/$SLUG/pull/1" 'gh pr view'
+    deny_in "$dir" "gh search issues --repo $SLUG слово" 'gh search issues'
+done
+end_case
+
+begin_case 'gh: слаг не выведен — голая команда проходит'
+silent_in "$NO_ORIGIN" 'gh issue view 1' 'gh issue view'
+silent_in "$OTHER_HOST" 'gh issue view 1 --comments' 'gh issue view'
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 29. Пришпиливание issue-scout — по записям из самого
+# определения, а не из копии в тесте, при настоящем origin в корне
+# (в CI его выставляет actions/checkout).
+# ------------------------------------------------------------------
+SCOUT_DEF="$ROOT_DIR/.claude/agents/issue-scout.md"
+SCOUT=()
+while IFS= read -r entry; do
+    SCOUT+=("$entry")
+done < <(awk 'NR == 1 && /^---[[:space:]]*$/ { inside = 1; next }
+              inside && /^---[[:space:]]*$/ { exit }
+              inside { print }' "$SCOUT_DEF" \
+    | grep -oE "'gh [^']* --repo [^']*'" | tr -d "'")
+
+scout_tail() {
+    case "$1" in
+        'gh issue list'*) printf '%s' ' --state all --limit 300 --json number,title,labels,state' ;;
+        'gh search issues'*) printf '%s' ' "гейт"' ;;
+        'gh issue view'*) printf '%s' ' 91' ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
+begin_case 'issue-scout: пришпиленные команды проходят границу'
+if [ "${#SCOUT[@]}" -ne 3 ]; then
+    fail_case "записей gh … --repo в issue-scout.md: ${#SCOUT[@]}, ожидалось 3"
+fi
+for entry in "${SCOUT[@]}"; do
+    silent_in "$ROOT_DIR" "$entry$(scout_tail "$entry")" "${SCOUT[@]}" 'grep' 'head' 'tail' 'pwd'
+done
+end_case
+
+begin_case 'issue-scout: второй указатель репозитория после пришпиленного — отказ'
+if [ "${#SCOUT[@]}" -ne 3 ]; then
+    fail_case "записей gh … --repo в issue-scout.md: ${#SCOUT[@]}, ожидалось 3"
+fi
+for entry in "${SCOUT[@]}"; do
+    deny_in "$ROOT_DIR" "$entry --repo $FOREIGN 1" "${SCOUT[@]}"
+    deny_in "$ROOT_DIR" "$entry -R $FOREIGN" "${SCOUT[@]}"
+    deny_in "$ROOT_DIR" "$entry https://github.com/$FOREIGN/issues/1" "${SCOUT[@]}"
+done
+end_case
+
+# ------------------------------------------------------------------
+# Сценарий 30. Команды, которые шаги вызывают по своим правилам
+# (docs/rules/**, тела .claude/agents/**), — в той форме, в какой их
+# предписывают, каждая при списке своего шага. Таблица поиска — в журнале
+# docs/tasks/119.md.
+# ------------------------------------------------------------------
+STEP_IMPLEMENT=('gh issue view' 'gh pr create' 'gh pr view' 'gh pr edit' 'grep' 'head' 'tail')
+STEP_REVIEW=('gh pr diff' 'gh pr view' 'gh pr checks' 'gh issue view' 'grep' 'head' 'tail' 'pwd'
+    'bash scripts/owner-comments.sh')
+STEP_FIX=('gh pr view' 'gh pr diff' 'gh pr checks' 'gh pr comment' 'gh run view' 'grep' 'head' 'tail'
+    'bash scripts/review-comments.sh')
+
+begin_case 'команды из правил шагов — молчание'
+silent_in "$ROOT_DIR" 'gh issue view 119 --comments' "${STEP_IMPLEMENT[@]}"
+silent_in "$ROOT_DIR" "gh pr create --draft --title 'feat: #119 — граница' --body-file /tmp/body.md" "${STEP_IMPLEMENT[@]}"
+silent_in "$ROOT_DIR" 'gh pr edit 128 --body-file /tmp/body.md' "${STEP_IMPLEMENT[@]}"
+silent_in "$ROOT_DIR" 'gh issue view 119 --json url' "${STEP_REVIEW[@]}"
+silent_in "$ROOT_DIR" 'gh pr view 128 --comments' "${STEP_REVIEW[@]}"
+silent_in "$ROOT_DIR" 'gh pr diff 128' "${STEP_REVIEW[@]}"
+silent_in "$ROOT_DIR" 'gh pr checks 128' "${STEP_REVIEW[@]}"
+silent_in "$ROOT_DIR" 'bash scripts/owner-comments.sh 119' "${STEP_REVIEW[@]}"
+silent_in "$ROOT_DIR" 'gh run view 123 --log | grep -nE "error|Failed"' "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" 'bash scripts/review-comments.sh 122' "${STEP_FIX[@]}"
+silent_in "$ROOT_DIR" 'gh pr comment 128 --body-file /tmp/comment.md' "${STEP_FIX[@]}"
+end_case
+
 printf '\n%s\n' '=================================================='
 printf 'Сценариев пройдено: %d, провалено: %d\n' "$PASSED" "$FAILED"
 
