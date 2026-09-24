@@ -1196,6 +1196,79 @@ expect_no_output 'Проверка 9'
 end_case
 
 # ------------------------------------------------------------------
+# Проверка 11. Снятие ограничений схемы вызовом API EF.
+#
+# Сценарии стоят здесь по той же причине, что сценарии AddPrimaryKey: им нужны
+# put_migration и migration_line; GUARD_ALLOW_PROTECTED=1 — по той же причине,
+# что у проверки 9. Раздел ждётся строкой «Проверка 11:» с двоеточием: «Проверка
+# 1» — её подстрока. expect_no_output 'Проверка 4' держит решение владельца:
+# вызов ловит своя проверка, а не расширенный список проверки 4.
+# ------------------------------------------------------------------
+CONSTRAINT_DROPS=(
+    'DropIndex|migrationBuilder.DropIndex(name: "IX_Messages_SentAt", table: "Messages");'
+    'DropForeignKey|migrationBuilder.DropForeignKey(name: "FK_Messages_Conversations", table: "Messages");'
+    'DropPrimaryKey|migrationBuilder.DropPrimaryKey(name: "PK_Messages", table: "Messages");'
+    'DropUniqueConstraint|migrationBuilder.DropUniqueConstraint(name: "AK_Messages_Key", table: "Messages");'
+)
+
+begin_case 'проверка 11: каждый из четырёх вызовов снятия ограничений схемы без метки — гейт падает и называет вызов'
+for drop in "${CONSTRAINT_DROPS[@]}"; do
+    IFS='|' read -r call_name call_line <<< "$drop"
+    # Имя класса без Drop: иначе строка «public partial class …» сама совпала
+    # бы с шаблоном и дала второе попадание.
+    mig_name="Remove${call_name#Drop}"
+    new_fixture
+    put_migration "$repo" "$mig_name" "$call_line"
+    commit_all "$repo" "feat: миграция $mig_name"
+    run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+    expect_status 1
+    expect_output 'Проверка 11: снятие ограничений схемы в миграции'
+    mig_path="src/Domovoy.Data/Migrations/20260901120000_$mig_name.cs"
+    call_at="$(migration_line "$repo" "$mig_name" "migrationBuilder.$call_name(")"
+    expect_output "::error file=$mig_path,line=$call_at::"
+    expect_output "    $mig_path:$call_at: "
+    expect_output "$call_line"
+    expect_no_output 'Проверка 4'
+    expect_no_output 'Проверка 9'
+done
+end_case
+
+begin_case 'проверка 11: снятие ограничений схемы с меткой agent/allow-destructive-migration — гейт пропускает'
+# Без ожиданий раздела и строки «разрешено» сценарий остался бы зелёным при
+# выключенной проверке: код 0 дала бы и пустая проверка.
+for drop in "${CONSTRAINT_DROPS[@]}"; do
+    IFS='|' read -r call_name call_line <<< "$drop"
+    mig_name="Remove${call_name#Drop}"
+    new_fixture
+    put_migration "$repo" "$mig_name" "$call_line"
+    commit_all "$repo" "feat: миграция $mig_name"
+    run_guard "$repo" GUARD_ALLOW_PROTECTED=1 GUARD_ALLOW_DESTRUCTIVE_MIGRATION=1
+    expect_status 0
+    expect_output 'нарушений нет'
+    expect_output 'Проверка 11: снятие ограничений схемы разрешено меткой agent/allow-destructive-migration'
+    expect_output "разрешено: src/Domovoy.Data/Migrations/20260901120000_$mig_name.cs:$(migration_line "$repo" "$mig_name" "migrationBuilder.$call_name(")"
+    expect_no_output 'Проверка 4'
+done
+end_case
+
+begin_case 'проверка 11: создание индекса, внешнего и уникального ключа — гейт молчит'
+# Материал держит границу шаблона: без Drop в альтернативах CreateIndex,
+# AddForeignKey и AddUniqueConstraint совпали бы с ним.
+new_fixture
+put_migration "$repo" 'MessagesConstraints' \
+    'migrationBuilder.CreateIndex(name: "IX_Messages_SentAt", table: "Messages", column: "SentAt");' \
+    'migrationBuilder.AddForeignKey(name: "FK_Messages_Conversations", table: "Messages", column: "ConversationId", principalTable: "Conversations", principalColumn: "Id");' \
+    'migrationBuilder.AddUniqueConstraint(name: "AK_Messages_Key", table: "Messages", column: "Key");'
+commit_all "$repo" 'feat: индекс и ключи сообщений'
+run_guard "$repo" GUARD_ALLOW_PROTECTED=1
+expect_status 0
+expect_output 'нарушений нет'
+expect_no_output 'Проверка 11:'
+expect_no_output 'Проверка 4'
+expect_no_output 'Проверка 9'
+end_case
+
+# ------------------------------------------------------------------
 # Разбор диффа: заголовок файла — только в зоне заголовка.
 #
 # В -U0 добавленная строка «++ x» выглядит как «+++ x». Шаблон заголовка на

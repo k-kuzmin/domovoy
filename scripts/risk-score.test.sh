@@ -897,8 +897,8 @@ else
     new_repo
     ABOVE=$((THRESHOLD_LINES + 1))
     BELOW=$((THRESHOLD_LINES - 1))
-    seq 1 "$ABOVE" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs" 2>/dev/null \
-        || { mkdir -p "$REPO/src/Domovoy.Core"; seq 1 "$ABOVE" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"; }
+    mkdir -p "$REPO/src/Domovoy.Core"
+    seq 1 "$ABOVE" | sed 's/^/\/\/ строка /' > "$REPO/src/Domovoy.Core/Bulk.cs"
     commit_repo 'правка выше порога'
     run_score diff HEAD~1 HEAD --repo "$REPO"
     expect_status 0
