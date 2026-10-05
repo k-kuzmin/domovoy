@@ -23,11 +23,10 @@
 #
 # ЧЕГО ЭТИ СЦЕНАРИИ НЕ ЛОВЯТ
 #
-# Что цикл действительно запустит сценарий, здесь не проверяется и проверено
-# быть не может: форма `Bash(bash scripts/review-comments.sh:*)` в
-# `--allowedTools` прецедента в репозитории не имеет, а цикл выключен. Сверка
-# потребителей ищет литерал в файлах — это проверка текста, а не поведения
-# action, и читать её шире нельзя.
+# Что сценарий действительно позовут — оркестратор или шаг починки, читая
+# замечания Copilot, — здесь не проверяется: вызов держится правилом, а не
+# механикой. Совпадение фикстур с живым ответом эндпоинта сценарии тоже не
+# доказывают: оно проверяется только вызовом на настоящем PR.
 #
 # КАК ЗАПУСКАТЬ
 #
@@ -39,7 +38,6 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="$SCRIPT_DIR/review-comments.sh"
 
 if [ ! -f "$TARGET" ]; then
@@ -576,187 +574,6 @@ expect_no_zero_anywhere
 expect_err 'число замечаний неизвестно'
 end_case
 
-# ==================================================================
-# Сверка потребителей.
-#
-# Доработка пайплайна, доведённая у одного из двух потребителей, сделанной не
-# считается: у локального режима право стоит строкой хука в определении шага, у
-# цикла — записью в `--allowedTools`. Проверяется и обратное — что сценарий не
-# разошёлся по определениям, которым не выдавался: половины ревью читают дифф,
-# а не чужие вердикты.
-#
-# Отсутствие проверяется обходом по маске, а не списком имён: захардкоженный
-# список не увидел бы ни служебного агента без префикса `step-`, ни workflow,
-# появившегося позже. Это храповик на будущее, а не находка сегодняшнего дня.
-# ==================================================================
-LITERAL='bash scripts/review-comments.sh'
-ALLOWED_FORM='Bash(bash scripts/review-comments.sh:*)'
-
-PROBLEMS=0
-
-problem() {
-    printf '        ! %s\n' "$1"
-    PROBLEMS=$((PROBLEMS + 1))
-}
-
-# Фронтматер определения — от первой строки `---` до второй. Список команд
-# хука живёт там, и искать литерал по файлу целиком значило бы засчитать
-# упоминание в прозе за выданное право.
-# Признак границы — регулярка, а не точное сравнение: на рабочей копии с CRLF
-# сравнение с «---» не сошлось бы, и сверка молча считала бы фронтматер пустым.
-frontmatter() {
-    awk 'NR == 1 && /^---[[:space:]]*$/ { inside = 1; next }
-         inside && /^---[[:space:]]*$/ { exit }
-         inside { print }' "$1"
-}
-
-check_consumers() {
-    local root="$1"
-    PROBLEMS=0
-    local fix_def="$root/.claude/agents/step-fix.md"
-    local fix_wf="$root/.github/workflows/agent-fix.yml"
-    local f n
-
-    if [ ! -f "$fix_def" ] || [ ! -f "$fix_wf" ]; then
-        problem "не найдены файлы потребителей в $root"
-        return 1
-    fi
-
-    # Локальная половина: право стоит в списке хука, а не только в прозе.
-    if ! frontmatter "$fix_def" | grep -qF -- "$LITERAL"; then
-        problem "в списке хука .claude/agents/step-fix.md нет: $LITERAL"
-    fi
-
-    # Цикловая половина: ровно одно вхождение среди строк `--allowedTools`.
-    # Сужение области обязательно — второй список того же файла (оценка
-    # случайности падения) `Bash` не содержит вовсе, и разрешение, уехавшее
-    # туда, было бы расширением прав молча.
-    n="$(grep -F -- '--allowedTools' "$fix_wf" | grep -cF -- "$ALLOWED_FORM")"
-    if [ "$n" -ne 1 ]; then
-        problem "строк --allowedTools с «$ALLOWED_FORM» в agent-fix.yml: $n, ожидалась 1"
-    fi
-
-    # Право без метода — выдача, о которой модель не узнает. Проза промпта
-    # обязана назвать сценарий: под счёт выше она не попадает намеренно.
-    if ! grep -F -- "$LITERAL" "$fix_wf" | grep -vF -- '--allowedTools' | grep -q .; then
-        problem "промпт agent-fix.yml не называет $LITERAL прозой"
-    fi
-
-    for f in "$root"/.claude/agents/*.md; do
-        [ -e "$f" ] || continue
-        case "$f" in */step-fix.md) continue ;; esac
-        if grep -qF -- "$LITERAL" "$f"; then
-            problem "сценарий выдан лишнему определению: ${f#"$root"/}"
-        fi
-    done
-
-    for f in "$root"/.github/workflows/agent-*.yml; do
-        [ -e "$f" ] || continue
-        case "$f" in */agent-fix.yml) continue ;; esac
-        if grep -qF -- "$LITERAL" "$f"; then
-            problem "сценарий выдан лишнему workflow: ${f#"$root"/}"
-        fi
-    done
-
-    [ "$PROBLEMS" -eq 0 ]
-}
-
-# Копия обоих каталогов — материал отрицательных сценариев. Проверка,
-# зеленеющая и на сломанном файле, проверяет собственное существование.
-copy_root() {
-    local dest="$SANDBOX/root-$RANDOM$RANDOM"
-    mkdir -p "$dest/.claude/agents" "$dest/.github/workflows"
-    cp "$ROOT"/.claude/agents/*.md "$dest/.claude/agents/"
-    cp "$ROOT"/.github/workflows/agent-*.yml "$dest/.github/workflows/"
-    printf '%s' "$dest"
-}
-
-run_consumers() {
-    OUT="$(check_consumers "$1" 2>&1)"
-    STATUS=$?
-    ERR=''
-}
-
-# Отрицательный сценарий обязан сначала доказать, что копия действительно
-# сломана. Иначе он проверяет собственное существование: правка, от которой
-# `grep`/`awk` перестали что-либо удалять, даёт копию, совпадающую с
-# оригиналом, — и случай падает не там, где задуман, либо зеленеет не тем.
-expect_broken_lacks_hook() {
-    if frontmatter "$1/.claude/agents/step-fix.md" | grep -qF -- "$LITERAL"; then
-        fail_case 'сломанная копия всё ещё называет сценарий в списке хука'
-    fi
-}
-
-expect_broken_lacks_prose() {
-    if grep -F -- "$LITERAL" "$1/.github/workflows/agent-fix.yml" \
-        | grep -vF -- '--allowedTools' | grep -q .; then
-        fail_case 'сломанная копия всё ещё называет сценарий прозой'
-    fi
-}
-
-expect_broken_keeps_allowed() {
-    if ! grep -F -- '--allowedTools' "$1/.github/workflows/agent-fix.yml" \
-        | grep -qF -- "$ALLOWED_FORM"; then
-        fail_case 'сломанная копия потеряла и разрешение — случай ловил бы не то'
-    fi
-}
-
-begin_case 'оба потребителя выдают сценарий починке, прочие файлы — нет'
-run_consumers "$ROOT"
-expect_status 0
-end_case
-
-begin_case 'пропажа права в списке хука step-fix.md ловится'
-BROKEN="$(copy_root)"
-grep -vF -- "'$LITERAL'" "$ROOT/.claude/agents/step-fix.md" \
-    > "$BROKEN/.claude/agents/step-fix.md"
-expect_broken_lacks_hook "$BROKEN"
-run_consumers "$BROKEN"
-expect_status 1
-end_case
-
-# Сломанная копия собирается по однословному якорю и по строкам прозы, а не по
-# длинной фразе `bash scripts/review-comments.sh <номер PR>`: перенос абзаца по
-# ширине увёл бы `<номер PR>` на следующую строку, `grep -vF` не удалил бы
-# ничего, и случай проверял бы совпадение копии с оригиналом вместо пропажи.
-# Строки с `--allowedTools` при этом обязаны уцелеть: сняв заодно и право,
-# копия падала бы по другой причине, и пропажу из прозы случай перестал бы
-# отличать от пропажи разрешения.
-begin_case 'пропажа сценария из прозы промпта ловится'
-BROKEN="$(copy_root)"
-awk 'index($0, "review-comments.sh") && !index($0, "--allowedTools") { next }
-     { print }' "$ROOT/.github/workflows/agent-fix.yml" \
-    > "$BROKEN/.github/workflows/agent-fix.yml"
-expect_broken_lacks_prose "$BROKEN"
-expect_broken_keeps_allowed "$BROKEN"
-run_consumers "$BROKEN"
-expect_status 1
-end_case
-
-begin_case 'второе разрешение в том же workflow ловится'
-BROKEN="$(copy_root)"
-printf "            --allowedTools '%s'\n" "$ALLOWED_FORM" \
-    >> "$BROKEN/.github/workflows/agent-fix.yml"
-run_consumers "$BROKEN"
-expect_status 1
-end_case
-
-begin_case 'сценарий, разошедшийся по чужим определениям, ловится'
-BROKEN="$(copy_root)"
-printf "            '%s'\n" "$LITERAL" \
-    >> "$BROKEN/.claude/agents/step-review-correctness.md"
-run_consumers "$BROKEN"
-expect_status 1
-end_case
-
-begin_case 'сценарий, разошедшийся по чужим workflow, ловится'
-BROKEN="$(copy_root)"
-printf "            --allowedTools 'Bash(%s:*)'\n" "$LITERAL" \
-    >> "$BROKEN/.github/workflows/agent-implement.yml"
-run_consumers "$BROKEN"
-expect_status 1
-end_case
-
 # ------------------------------------------------------------------
 # Итог
 # ------------------------------------------------------------------
@@ -770,5 +587,5 @@ if [ "$FAILED" -ne 0 ]; then
     exit 1
 fi
 
-printf 'Построчные замечания читаются и выданы обоим потребителям.\n'
+printf 'Построчные замечания читаются, отказ на неполном входе громкий.\n'
 exit 0
