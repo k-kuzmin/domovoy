@@ -22,9 +22,6 @@ with io.open(os.path.join(HOOK_DIR, "rules-map.json"), encoding="utf-8") as _fh:
     TABLE = json.load(_fh)["rules"]
 BY_NAME = {r["name"]: r for r in TABLE}
 
-# Определения, которые срез задачи #131 удаляет: пока файл лежит в дереве, записи для него
-# в таблице быть не должно.
-RETIRED_STEPS = {"step-fix-flaky"}
 MAX_RULES, MAX_CHARS = 3, 1500
 
 
@@ -38,7 +35,7 @@ def dead_docs(table, root=REPO_ROOT):
 def step_agents():
     names = [os.path.splitext(os.path.basename(p))[0]
              for p in glob.glob(os.path.join(REPO_ROOT, ".claude", "agents", "step-*.md"))]
-    return sorted(set(names) - RETIRED_STEPS)
+    return sorted(set(names))
 
 
 def edit(path, new="b", tool="Edit"):
