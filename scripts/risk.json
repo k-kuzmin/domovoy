@@ -1,0 +1,77 @@
+{
+  "about": "Таблица сигналов scripts/risk.sh: путей, слов и порога в скрипте нет. Шаблоны путей сравниваются оператором [[ путь == шаблон ]] оболочки: «*» там проходит и через «/», поэтому «**» равно «*», а шаблон без каталога с ведущей «*» ловит файл на любой глубине. Шаблон «**/X/**» требует хотя бы одного каталога перед X. Слова ищутся без учёта регистра по границе слова с обеих сторон; prefix — только по левой границе. Конфиг читается с origin/main, а не из дерева: дифф не ослабляет правило, по которому его оценивают.",
+  "size": {
+    "files": 11,
+    "lines": 1538,
+    "source": "75-й процентиль смерженных PR (nearest-rank, 18 PR, прогон 02.09.2026), перенос из pipeline/risk.json; правило отбора корпуса — docs/tasks/103.md. Срабатывает строго выше порога. В режиме plan считается только число файлов."
+  },
+  "high": {
+    "paths": [
+      "**/Security/**",
+      "**/Auth/**",
+      "**/Crypto/**",
+      "src/Domovoy.Ha/**",
+      "**/Prompts/**",
+      "*AllowList*",
+      "src/Domovoy.Data/Migrations/**",
+      "contracts/**",
+      "src/Domovoy.Mobile.Core/Generated/**",
+      ".gitleaks.toml",
+      ".githooks/**",
+      "src/Domovoy.Mobile.App/Platforms/**",
+      "*AndroidManifest.xml",
+      "*Info.plist",
+      "scripts/risk.*",
+      "scripts/guard-lite.sh",
+      "scripts/council.sh",
+      ".claude/settings.json",
+      ".claude/hooks/**"
+    ],
+    "deleted_paths": [
+      ".github/workflows/gitleaks.yml"
+    ],
+    "words": [
+      "AllowAnonymous",
+      "RequireAuthorization",
+      "password",
+      "secret",
+      "jwt",
+      "Ha:Token",
+      "ApiKey",
+      "access_token",
+      "refresh_token",
+      "Bearer"
+    ],
+    "prefixes": [
+      "authoriz"
+    ],
+    "words_skip_paths": [
+      "docs/**",
+      "*.md"
+    ],
+    "removed_lines": {
+      "paths": [".github/workflows/**"],
+      "words": ["gitleaks", "COVERAGE_MINIMUM"]
+    },
+    "note": "Голого token нет: CancellationToken и токены LLM (FR-CORE-4) уровень не поднимают. Слова читаются и в добавленных, и в удалённых строках: снятие RequireAuthorization — то же событие, что появление AllowAnonymous. words_skip_paths — тексты правил и журналы, где слова стоят как термины, а не как код; новый каталог кода под пропуск не попадает. gitleaks и COVERAGE_MINIMUM — только удалённые строки в workflow: добавление проверки риска не несёт."
+  },
+  "medium": {
+    "paths": [
+      "*Program.cs",
+      "*ServiceCollectionExtensions.cs",
+      "**/DependencyInjection/**",
+      "*appsettings*.json",
+      "*Options.cs",
+      "*.example*",
+      "Directory.Packages.props",
+      ".claude/**",
+      "docs/rules/**",
+      "docs/decisions/**",
+      ".github/**",
+      "scripts/**",
+      "Directory.Build.props",
+      ".editorconfig",
+      "global.json"
+    ]
+  }
+}
