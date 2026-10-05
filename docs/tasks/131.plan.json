@@ -1086,7 +1086,7 @@
       "id": "docs-updated",
       "criterion": ".claude/CLAUDE.md, docs/rules/, docs/pipeline.md, шаблоны журнала, плана и PR обновлены; висячих ссылок из списка нет; 0026 есть и содержит отклонения от ТЗ советника",
       "method": "git grep -nE 'step-bash-allow|rules-sync|wiring\\.sh|route\\.sh|risk-score|owner-comments|test-count-invariant|protected-paths|БЕЗ ОБВЯЗКИ' -- . ':!docs/decisions/00[01]*' ':!docs/decisions/002[0-5]*' ':!docs/tasks/*'; grep -n 'Отклонения от ТЗ советника' docs/decisions/0026-human-led-pipeline.md",
-      "evidence": "вхождения только в 0026 как описание удалённого; docs/decisions/0026-human-led-pipeline.md:192 — раздел «Отклонения от ТЗ советника» с семью пунктами из «Документов»"
+      "evidence": "вхождения только в 0026 как описание удалённого; docs/decisions/0026-human-led-pipeline.md:199 — раздел «Отклонения от ТЗ советника» с семью пунктами из «Документов»"
     },
     {
       "id": "issues-closed",
