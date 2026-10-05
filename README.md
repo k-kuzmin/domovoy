@@ -170,8 +170,9 @@ dotnet run --project src/Domovoy.Api
 - **python 3** — на нём работает впрыск правил (`.claude/hooks/rule-injector.*`):
   хук напоминает правило в момент действия. Без python хук пропускает вызов, а
   не отказывает — напоминание не граница, и работа без него не встаёт.
-- **`jq`** — его читают `scripts/plan.sh` (проверка и рендер плана) и
-  `scripts/review-comments.sh` (построчные замечания ревью).
+- **`jq`** — его читают `scripts/plan.sh` (проверка и рендер плана),
+  `scripts/review-comments.sh` (построчные замечания ревью), `scripts/risk.sh`
+  (уровень риска) и `scripts/council.sh` (сводка совета).
 
 Как устроен конвейер работы с агентом — [`docs/pipeline.md`](docs/pipeline.md).
 
