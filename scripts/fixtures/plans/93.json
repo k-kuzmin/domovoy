@@ -78,61 +78,54 @@
       }
     ]
   },
+  "fork_card": {
+    "matches_request": "да: контракт приёмки становится разделом плана с единственным источником формата, как просит задача",
+    "alternative": "свернуть контракт внутрь раздела «Тесты» — у документационной задачи тестов нет, и контракт исчез бы ровно там, где нужен",
+    "ripple": "правила триажа и ревью корректности, шаблон и указатель журнала, промпт шага плана в цикле и определение step-plan — каждое место, где перечислены разделы плана",
+    "workaround": "нет",
+    "council_signs": ["правка обвязки"],
+    "executor": "субагент шага реализации",
+    "fork": false
+  },
   "files": [
     {
       "path": "docs/rules/plan.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "новый раздел 5 «Контракт приёмки» — единственный источник формата; заголовок «Шесть разделов» становится «Семь разделов», разделы 5 и 6 сдвигаются"
     },
     {
       "path": "docs/rules/triage.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "к «критерий сформулирован проверяемо» добавляется «способ проверки назван в задаче либо становится вопросом человеку», формат — ссылкой"
     },
     {
       "path": "docs/rules/review-correctness.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "ревью проходит контракт по пунктам: не пройден — blocker, «непроверяем» назвать вслух, закрыться словами «замечаний нет» нельзя"
     },
     {
       "path": "docs/tasks/TEMPLATE.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": false,
       "why": "в «Проверено» пишется исход по пунктам контракта из согласованного плана, сам контракт не копируется"
     },
     {
       "path": "docs/tasks/README.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": false,
       "why": "врезка: контракт живёт в плане, в журнале — только исход прогонов"
     },
     {
       "path": ".github/workflows/agent-plan.yml",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "убрать число разделов из прозы промпта и из description схемы; allowedTools, max-turns и структура схемы не трогаются"
     },
     {
       "path": "docs/tasks/93.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": false,
       "why": "журнал: стадия, решения, изменённые файлы и «Проверено» построчно по пунктам контракта"
     },
     {
       "path": ".claude/agents/step-plan.md",
       "action": "modify",
-      "owner": "orchestrator",
-      "protected": true,
       "why": "три вхождения числа разделов, включая исполняемую инструкцию «верни план текстом»; правка конфигурации прав шага шагу реализации запрещена"
     }
   ],
@@ -143,9 +136,6 @@
     ".claude/agents/**"
   ],
   "flags": {
-    "allow_protected": true,
-    "allow_contract": false,
-    "destructive_migration": false,
     "new_dependency": false,
     "new_dependency_reason": ""
   },
