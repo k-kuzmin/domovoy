@@ -1,0 +1,4 @@
+# Хук-скрипты исполняются bash/python на всех ОС — держим LF, иначе CRLF ломает
+# shebang и интерпретацию на Mac/Linux.
+*.sh text eol=lf
+*.py text eol=lf
