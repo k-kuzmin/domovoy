@@ -30,6 +30,12 @@
 # Репозиторий — тот, в котором запущен скрипт (текущий каталог), а не тот, где
 # лежит сам скрипт: так работают сценарии scripts/risk.test.sh.
 #
+# Пути в конфиге разложены по именованным группам (high.paths,
+# high.deleted_paths, medium.paths — объекты «группа → шаблоны»; у
+# removed_lines группа названа полем group). Причина по пути кончается
+# «— группа <имя>»: правила ссылаются на группу, а не копируют шаблоны.
+# Пустая группа или конфиг старой формы — код 2, а не тихий low.
+#
 # Вывод: строка level=<low|medium|high>, затем строки «reason: …».
 # Код возврата: 0 — посчитано, 2 — запуск не состоялся.
 #
@@ -56,23 +62,32 @@ if ! CONFIG="$("${GIT[@]}" show "$REF:scripts/risk.json" 2>/dev/null)"; then
     META+=("конфиг взят из дерева: на $REF файла scripts/risk.json нет")
 fi
 printf '%s' "$CONFIG" | jq -e '
+    def strs: type == "array" and all(type == "string");
+    def groups: type == "object" and length > 0
+        and all(keys_unsorted[]; test("^[a-z_]+$"))
+        and all(.[]; strs and length > 0);
     (.size.files | type) == "number" and (.size.lines | type) == "number"
-    and ([.high.paths, .high.deleted_paths, .high.words, .high.prefixes,
-          .high.words_skip_paths, .high.removed_lines.paths,
-          .high.removed_lines.words, .medium.paths]
-         | all(type == "array" and all(type == "string")))
+    and (.high.paths | groups) and (.high.deleted_paths | groups)
+    and (.medium.paths | groups)
+    and (.high.removed_lines.group | type == "string" and test("^[a-z_]+$"))
+    and ([.high.words, .high.prefixes, .high.words_skip_paths,
+          .high.removed_lines.paths, .high.removed_lines.words] | all(strs))
     and ([.high.words[], .high.prefixes[], .high.removed_lines.words[]]
          | all(test("^[A-Za-z0-9_:-]+$")))' >/dev/null 2>&1 \
     || die "конфиг scripts/risk.json ($REF или дерево) не разбирается или неполон"
 cfg() { printf '%s' "$CONFIG" | jq -r "$1" | tr -d '\r'; }
+# Группы разворачиваются в строки «группа<TAB>шаблон», порядок групп — как в
+# конфиге; у списков без групп строка — сам шаблон.
+GROUPED='to_entries[] | .key as $g | .value[] | "\($g)\t\(.)"'
 # shellcheck disable=SC2034  # массивы читаются по имени через nameref в matches
 {
-    mapfile -t HIGH_PATHS < <(cfg '.high.paths[]')
-    mapfile -t DELETED_PATHS < <(cfg '.high.deleted_paths[]')
+    mapfile -t HIGH_PATHS < <(cfg ".high.paths | $GROUPED")
+    mapfile -t DELETED_PATHS < <(cfg ".high.deleted_paths | $GROUPED")
     mapfile -t SKIP_PATHS < <(cfg '.high.words_skip_paths[]')
     mapfile -t RL_PATHS < <(cfg '.high.removed_lines.paths[]')
-    mapfile -t MEDIUM_PATHS < <(cfg '.medium.paths[]')
+    mapfile -t MEDIUM_PATHS < <(cfg ".medium.paths | $GROUPED")
 }
+RL_GROUP="$(cfg '.high.removed_lines.group')"
 WORDS="$(cfg '.high.words | join(" ")')"
 PREFIXES="$(cfg '.high.prefixes | join(" ")')"
 RL_WORDS="$(cfg '.high.removed_lines.words | join(" ")')"
@@ -83,35 +98,38 @@ MAX_LINES="$(cfg '.size.lines')"
 # Причины сворачиваются по ключу: один шаблон или слово — одна строка с первым
 # файлом и числом остальных, а не строка на каждый файл.
 LEVEL=0
-declare -A FIRST=() COUNT=()
+declare -A FIRST=() COUNT=() GROUP=()
 KEYS=()
-hit() {  # hit <0|1|2> <ключ> <файл>
+hit() {  # hit <0|1|2> <ключ> <файл> [группа]
     local key="$2"
     [ "$1" -gt "$LEVEL" ] && LEVEL="$1"
     if [ -z "${COUNT[$key]+x}" ]; then
-        KEYS+=("$key"); FIRST[$key]="$3"; COUNT[$key]=1
+        KEYS+=("$key"); FIRST[$key]="$3"; COUNT[$key]=1; GROUP[$key]="${4:-}"
     else
         COUNT[$key]=$(( COUNT[$key] + 1 ))
     fi
 }
-matches() {  # matches <путь> <имя массива шаблонов> → печатает шаблон
+# matches <путь> <имя массива> → печатает строку массива: «группа<TAB>шаблон»
+# или голый шаблон у списков без групп.
+matches() {
     local -n pats="$2"
-    local g
-    for g in "${pats[@]}"; do
+    local e g
+    for e in "${pats[@]}"; do
+        g="${e#*$'\t'}"
         # shellcheck disable=SC2053  # шаблон намеренно без кавычек
-        if [[ $1 == $g ]]; then printf '%s' "$g"; return 0; fi
+        if [[ $1 == $g ]]; then printf '%s' "$e"; return 0; fi
     done
     return 1
 }
 classify_path() {  # classify_path <путь> <статус A|M|D>
-    local g
-    if g="$(matches "$1" HIGH_PATHS)"; then
-        hit 2 "high: путь «$g»" "$1"
-    elif g="$(matches "$1" MEDIUM_PATHS)"; then
-        hit 1 "medium: путь «$g»" "$1"
+    local e
+    if e="$(matches "$1" HIGH_PATHS)"; then
+        hit 2 "high: путь «${e#*$'\t'}»" "$1" "${e%%$'\t'*}"
+    elif e="$(matches "$1" MEDIUM_PATHS)"; then
+        hit 1 "medium: путь «${e#*$'\t'}»" "$1" "${e%%$'\t'*}"
     fi
-    if [ "$2" = D ] && g="$(matches "$1" DELETED_PATHS)"; then
-        hit 2 "high: удалён «$g»" "$1"
+    if [ "$2" = D ] && e="$(matches "$1" DELETED_PATHS)"; then
+        hit 2 "high: удалён «${e#*$'\t'}»" "$1" "${e%%$'\t'*}"
     fi
     return 0
 }
@@ -147,7 +165,7 @@ else
     while IFS=$'\t' read -r kind side file word; do
         if [ "$kind" = rl ]; then
             [ "$side" = - ] && matches "$file" RL_PATHS >/dev/null \
-                && hit 2 "high: слово «$word» в удалённой строке workflow" "$file"
+                && hit 2 "high: слово «$word» в удалённой строке workflow" "$file" "$RL_GROUP"
         elif ! matches "$file" SKIP_PATHS >/dev/null; then
             if [ "$side" = + ]; then where='добавленной'; else where='удалённой'; fi
             hit 2 "high: слово «$word» в $where строке" "$file"
@@ -181,6 +199,7 @@ for lvl in high medium; do
         [ "${k%%:*}" = "$lvl" ] || continue
         extra=''
         [ "${COUNT[$k]}" -gt 1 ] && extra=" (и ещё $(( COUNT[$k] - 1 )))"
+        [ -n "${GROUP[$k]}" ] && extra="$extra — группа ${GROUP[$k]}"
         if [ -n "${FIRST[$k]}" ]; then
             printf 'reason: %s: %s%s\n' "$k" "${FIRST[$k]}" "$extra"
         else

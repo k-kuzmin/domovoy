@@ -150,7 +150,7 @@ end_case
 begin_case 'Правка .claude/hooks/** — high'
 branch_with .claude/hooks/rule-injector.sh 'exit 0'
 expect_level high
-expect_output 'high: путь «.claude/hooks/**»: .claude/hooks/rule-injector.sh'
+expect_output 'high: путь «.claude/hooks/**»: .claude/hooks/rule-injector.sh — группа harness_control'
 end_case
 
 begin_case 'Правка scripts/risk.json — high'
@@ -159,7 +159,25 @@ jq '.size.files = 99' "$REPO/scripts/risk.json" > "$SANDBOX/c.json" && cp "$SAND
 g -C "$REPO" commit -q -am 'ослабить порог'
 run_risk diff origin/main HEAD
 expect_level high
-expect_output 'high: путь «scripts/risk.*»: scripts/risk.json'
+expect_output 'high: путь «scripts/risk.*»: scripts/risk.json — группа harness_control'
+end_case
+
+begin_case 'Подпись *.keystore в любом каталоге — high, группа former_protected'
+branch_with tools/signing/release.keystore 'ключ'
+expect_level high
+expect_output 'high: путь «*.keystore»: tools/signing/release.keystore — группа former_protected'
+end_case
+
+begin_case 'Путь под двумя группами medium называет зовущую человека: harness_quality, а не product'
+branch_with .claude/settings.local.example.json '{}'
+expect_level medium
+expect_output 'medium: путь «.claude/**»: .claude/settings.local.example.json — группа harness_quality'
+end_case
+
+begin_case 'Правка *.ruleset — medium, группа harness_quality'
+branch_with src/Domovoy.Api/Quality.ruleset '<RuleSet />'
+expect_level medium
+expect_output 'medium: путь «*.ruleset»: src/Domovoy.Api/Quality.ruleset — группа harness_quality'
 end_case
 
 begin_case 'Кириллический путь под src/Domovoy.Ha/** — high, путь печатается кириллицей'
@@ -189,7 +207,7 @@ end_case
 begin_case 'Правка обвязки (scripts/**) — medium'
 branch_with scripts/other.sh 'echo ok'
 expect_level medium
-expect_output 'medium: путь «scripts/**»: scripts/other.sh'
+expect_output 'medium: путь «scripts/**»: scripts/other.sh — группа harness_quality'
 end_case
 
 begin_case 'Удаление gitleaks.yml — high'
@@ -200,7 +218,7 @@ g -C "$REPO" rm -q .github/workflows/gitleaks.yml
 g -C "$REPO" commit -q -m rm
 run_risk diff origin/main HEAD
 expect_level high
-expect_output 'high: удалён «.github/workflows/gitleaks.yml»'
+expect_output 'high: удалён «.github/workflows/gitleaks.yml»: .github/workflows/gitleaks.yml — группа harness_control'
 end_case
 
 begin_case 'Удалённая строка gitleaks в workflow — high, добавленная — только medium'
@@ -218,7 +236,7 @@ g -C "$REPO" fetch -q origin
 commit_file .github/workflows/ci.yml 'name: ci'
 run_risk diff origin/main HEAD
 expect_level high
-expect_output 'high: слово «gitleaks» в удалённой строке workflow: .github/workflows/ci.yml'
+expect_output 'high: слово «gitleaks» в удалённой строке workflow: .github/workflows/ci.yml — группа harness_control'
 end_case
 
 # ------------------------------------------------------------------ размер
@@ -271,6 +289,23 @@ start_branch
 run_risk diff origin/main HEAD
 expect_status 2
 expect_output 'не разбирается или неполон'
+end_case
+
+begin_case 'Конфиг старой формы (пути списком без групп) — код 2, а не low'
+new_repo
+jq '.high.paths = [.high.paths[][]] | .medium.paths = [.medium.paths[][]]' "$REPO/scripts/risk.json" > "$SANDBOX/old.json" && cp "$SANDBOX/old.json" "$REPO/scripts/risk.json"
+g -C "$REPO" commit -q -am old-form
+start_branch
+commit_file src/Domovoy.Ha/Client.cs '// клиент'
+run_risk diff origin/main HEAD
+expect_status 2
+expect_output 'не разбирается или неполон'
+new_repo
+jq '.high.paths.harness_control = []' "$REPO/scripts/risk.json" > "$SANDBOX/empty.json" && cp "$SANDBOX/empty.json" "$REPO/scripts/risk.json"
+g -C "$REPO" commit -q -am empty-group
+start_branch
+run_risk diff origin/main HEAD
+expect_status 2
 end_case
 
 # ------------------------------------------------------------------ plan
