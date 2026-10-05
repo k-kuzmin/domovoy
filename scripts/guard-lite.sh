@@ -155,8 +155,11 @@ TEST_ATTR='\[(Fact|Theory)(\]|\()'
 while IFS= read -r -d '' status && IFS= read -r -d '' file; do
     base="${file##*/}"; lbase="${base,,}"
     if [ "$status" != D ]; then
-        [[ "$lbase" == *.trx || "$lbase" == coverage* || "$file" =~ (^|/)[Tt]est[Rr]esults?/ ]] &&
-            report "$file" 1 'мусор прогона в диффе (*.trx, TestResults/, coverage*)'
+        # Отчёты покрытия — по расширению: голое coverage* ловило бы и код,
+        # например CoverageGateTests.cs.
+        [[ "$lbase" == *.trx || "$lbase" == *.cobertura.xml || "$file" =~ (^|/)[Tt]est[Rr]esults?/ ||
+           "$lbase" =~ ^coverage.*\.(xml|json|info)$ ]] &&
+            report "$file" 1 'мусор прогона в диффе (*.trx, TestResults/, отчёт покрытия)'
         [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ]] &&
             report "$file" 1 'подпись или ключ платформы в диффе'
     fi

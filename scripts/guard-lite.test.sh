@@ -296,6 +296,9 @@ check_junk() {
 }
 check_junk 'tests/Domovoy.Tests/TestResults/abc/coverage.cobertura.xml' 'мусор прогона'
 check_junk 'out/coverage.json' 'мусор прогона'
+check_junk 'coverage.cobertura.xml' 'мусор прогона'
+check_junk 'out/coverage.info' 'мусор прогона'
+check_junk 'out/Coverage-report.XML' 'мусор прогона'
 check_junk 'certs/dev.p12' 'подпись или ключ платформы'
 check_junk 'ios/App.mobileprovision' 'подпись или ключ платформы'
 check_junk 'android/app/google-services.json' 'подпись или ключ платформы'
@@ -306,6 +309,12 @@ check_junk 'отчёты/прогон.trx' 'мусор прогона'
 # ------------------------------------------------------------------
 begin_case 'Чистый дифф зеленеет'
 add_line 'src/Domovoy.Api/Formatter.cs' 'public static class Formatter { }'
+run_guard
+expect_green
+end_case
+
+begin_case 'Файл кода Coverage*.cs зеленеет'
+add_line 'tests/Domovoy.Tests/CoverageGateTests.cs' 'public sealed class CoverageGateTests { }'
 run_guard
 expect_green
 end_case
