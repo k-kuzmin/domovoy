@@ -53,10 +53,14 @@ G ls-files > "$T/ls"
 if [ "$MODE" = diff ]; then
     G diff --no-color --no-ext-diff --no-renames --name-only "$ART" -- > "$T/files" 2>/dev/null || die "диапазон не разбирается: $ART"
     # Хунки новой стороны: путь<TAB>первая<TAB>последняя строка.
+    # «+++ » — заголовок только между «diff --git» и первым «@@»: в -U0
+    # добавленная строка «++ …» иначе читалась бы как смена файла.
     G diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ -U0 "$ART" -- | awk '
-        /^\+\+\+ / { f = ($0 == "+++ /dev/null") ? "" : substr($0, 7); sub(/\t$/, "", f); next }
-        /^@@ / && f != "" { s = substr($3, 2); n = split(s, p, ","); c = (n > 1) ? p[2] : 1
-                            if (c > 0) printf "%s\t%d\t%d\n", f, p[1], p[1] + c - 1 }' > "$T/hunks"
+        /^diff --git / { hdr = 1; f = ""; next }
+        hdr && /^\+\+\+ / { f = ($0 == "+++ /dev/null") ? "" : substr($0, 7); sub(/\t$/, "", f); next }
+        /^@@ / { hdr = 0; if (f == "") next
+                 s = substr($3, 2); n = split(s, p, ","); c = (n > 1) ? p[2] : 1
+                 if (c > 0) printf "%s\t%d\t%d\n", f, p[1], p[1] + c - 1 }' > "$T/hunks"
 else
     J -r 'if (.files | type) == "array" then .files[] | objects | .path | strings else empty end' "$ART" > "$T/files"
 fi

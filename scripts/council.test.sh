@@ -154,6 +154,20 @@ expect_status 0
 expect_output '[major] engineer: граница — src/New.cs:5'
 end_case
 
+begin_case 'Добавленная строка «++ …» не сбивает файл следующего хунка'
+# В -U0 строка «++ x» в диффе выглядит как «+++ x» — заголовок файла. Ветка
+# trap от HEAD: хунки App.cs на строках 1 и 8, первый добавляет «++ x».
+g branch -q trap HEAD
+g checkout -q trap
+sed -i -e 's/^строка 1$/++ x/' -e 's/^строка 8$/правка 8/' "$REPO/src/App.cs"
+g commit -q -am 'feat: ловушка заголовка'
+g checkout -q -
+quiet; put engineer another_round "[$(fd major второйхунк src/App.cs 8)]"
+run_council diff 'HEAD...trap' "$VD"
+expect_status 0
+expect_output '[major] engineer: второйхунк — src/App.cs:8'
+end_case
+
 begin_case 'quote стража, которой нет в norm.file, — отброшена'
 quiet; put constitution another_round "[$(fn нарушение .claude/CLAUDE.md 'такой фразы нет')]"
 run_diff
