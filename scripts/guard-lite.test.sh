@@ -299,6 +299,11 @@ check_junk 'out/coverage.json' 'мусор прогона'
 check_junk 'coverage.cobertura.xml' 'мусор прогона'
 check_junk 'out/coverage.info' 'мусор прогона'
 check_junk 'out/Coverage-report.XML' 'мусор прогона'
+check_junk 'out/run.coverage' 'мусор прогона'
+check_junk 'out/run.coveragexml' 'мусор прогона'
+check_junk 'coverage/lcov-report/index.html' 'мусор прогона'
+check_junk 'tests/Domovoy.Tests/Coverage/a/b/report.html' 'мусор прогона'
+check_junk 'out/CoverageReport/index.htm' 'мусор прогона'
 check_junk 'certs/dev.p12' 'подпись или ключ платформы'
 check_junk 'ios/App.mobileprovision' 'подпись или ключ платформы'
 check_junk 'android/app/google-services.json' 'подпись или ключ платформы'
@@ -315,6 +320,12 @@ end_case
 
 begin_case 'Файл кода Coverage*.cs зеленеет'
 add_line 'tests/Domovoy.Tests/CoverageGateTests.cs' 'public sealed class CoverageGateTests { }'
+run_guard
+expect_green
+end_case
+
+begin_case 'Каталог Coverage.Tests/ — не каталог отчётов, зеленеет'
+add_line 'tests/Coverage.Tests/CoverageGateTests.cs' 'public sealed class CoverageGateTests { }'
 run_guard
 expect_green
 end_case

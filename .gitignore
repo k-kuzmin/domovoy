@@ -112,9 +112,11 @@ BenchmarkDotNet.Artifacts/
 
 # Результаты тестов и покрытие
 #
-# Эти строки не защита: git add -f снимает их с любого файла. Отчёт прогона
-# (*.trx, TestResults/) и отчёт покрытия (coverage*) в диффе PR ловит как мусор
-# гейт целостности scripts/guard-lite.sh — по любому пути, без исключений.
+# Эти строки не защита: git add -f снимает их с любого файла. В диффе PR как
+# мусор их ловит гейт целостности scripts/guard-lite.sh, по любому пути: *.trx,
+# каталог TestResults/, отчёты покрытия *.cobertura.xml, *.coverage,
+# *.coveragexml, coverage*.xml|json|info и любой файл под каталогом coverage/
+# или CoverageReport/. Не ловит BuildLog.* и .axoCover/: это не отчёты.
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 *.trx

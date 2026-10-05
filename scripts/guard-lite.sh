@@ -155,10 +155,13 @@ TEST_ATTR='\[(Fact|Theory)(\]|\()'
 while IFS= read -r -d '' status && IFS= read -r -d '' file; do
     base="${file##*/}"; lbase="${base,,}"
     if [ "$status" != D ]; then
-        # Отчёты покрытия — по расширению: голое coverage* ловило бы и код,
-        # например CoverageGateTests.cs.
+        # Отчёты покрытия — по расширению и по каталогу отчётов: голое
+        # coverage* ловило бы и код, например CoverageGateTests.cs. Каталог
+        # coverage/ или CoverageReport/ — мусор целиком, как TestResults/.
+        lpath="${file,,}"
         [[ "$lbase" == *.trx || "$lbase" == *.cobertura.xml || "$file" =~ (^|/)[Tt]est[Rr]esults?/ ||
-           "$lbase" =~ ^coverage.*\.(xml|json|info)$ ]] &&
+           "$lbase" =~ ^coverage.*\.(xml|json|info)$ || "$lbase" == *.coverage || "$lbase" == *.coveragexml ||
+           "$lpath" =~ (^|/)(coverage|coveragereport)/ ]] &&
             report "$file" 1 'мусор прогона в диффе (*.trx, TestResults/, отчёт покрытия)'
         [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ]] &&
             report "$file" 1 'подпись или ключ платформы в диффе'
