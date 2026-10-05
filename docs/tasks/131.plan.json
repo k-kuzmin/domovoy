@@ -537,6 +537,11 @@
       "path": "docs/tasks/131.plan.json",
       "action": "create",
       "why": "этот план, записанный задним числом"
+    },
+    {
+      "path": ".github/workflows/gitleaks.yml",
+      "action": "modify",
+      "why": "на pull_request правила gitleaks берутся с базы ветки: PR не ослабляет проверку тем же диффом, что вносит секрет (ревью безопасности, круг 2)"
     }
   ],
   "boundaries": [
