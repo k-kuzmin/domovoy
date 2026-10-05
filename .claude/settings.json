@@ -45,7 +45,15 @@
       "Read(**/.env)",
       "Read(//**/Microsoft/UserSecrets/**)",
       "Read(//**/.microsoft/usersecrets/**)",
-      "Read(//**/.env)"
+      "Read(//**/.env)",
+      "Bash(cat *.env)",
+      "PowerShell(cat *.env)",
+      "Bash(type *.env)",
+      "PowerShell(type *.env)",
+      "Bash(Get-Content *.env)",
+      "PowerShell(Get-Content *.env)",
+      "Bash(git *--output*)",
+      "PowerShell(git *--output*)"
     ],
     "ask": [
       "Bash(gh issue create*)",
