@@ -23,10 +23,11 @@
 #
 # Коды: 0 — блокеров нет; 1 — принят blocker или отброшен blocker/major
 # (пометка «отброшен блокер»); 2 — escalate, no_objections при непустом
-# unable_to_verify, или непустой принятый набор совпал с прошлым хешем;
-# 3 — ошибка запуска, в том числе брак стража (no_objections без read).
+# unable_to_verify, или непустой набор принятых blocker совпал с прошлым
+# хешем; 3 — ошибка запуска, в том числе брак стража (no_objections без read).
 # Приоритет 3 > 2 > 1 > 0. Хеш — sha256 по отсортированным строкам
-# «claim<TAB>место» принятых замечаний. Принятые major и nit код не меняют.
+# «claim<TAB>место» принятых blocker: повтор тех же блокеров зовёт человека,
+# как бы ни менялись major и nit рядом. Принятые major и nit код не меняют.
 #
 set -Eeuo pipefail
 trap 'exit 3' ERR
@@ -142,7 +143,7 @@ while IFS=$'\x1f' read -r role sev claim ek ef el ep nk nf qk q; do
     if [ -z "$R" ]; then
         ACC=$((ACC + 1)); [ "$sev" = blocker ] && ACC_B=1
         printf '  - [%s] %s: %s — %s\n' "$sev" "$role" "$claim" "$P" >> "$T/acc"
-        printf '%s\t%s\n' "$claim" "$P" >> "$T/hash"
+        if [ "$sev" = blocker ]; then printf '%s\t%s\n' "$claim" "$P" >> "$T/hash"; fi
     else
         mark=''; case $sev in nit) ;; *) DROP_B=1; mark=' — отброшен блокер' ;; esac
         printf '  - [%s] %s: %s — причина: %s%s\n' "$sev" "$role" "$claim" "$R" "$mark" >> "$T/drop"
@@ -155,7 +156,7 @@ printf 'Отброшенные: %d\n' "$(($(wc -l < "$T/drop")))"; cat "$T/drop"
 CODE=0 WHY=''
 [ "$ACC_B" -eq 1 ] && CODE=1 WHY='принят blocker — исправление и ещё один круг'
 [ "$DROP_B" -eq 1 ] && CODE=1 WHY="${WHY:+$WHY; }отброшен блокер — смотреть причину"
-[ -n "$PREV" ] && [ "$ACC" -gt 0 ] && [ "$HASH" = "$PREV" ] && CODE=2 WHY="набор совпал с прошлым хешем — человек${WHY:+; $WHY}"
+[ -n "$PREV" ] && [ "$ACC_B" -eq 1 ] && [ "$HASH" = "$PREV" ] && CODE=2 WHY="набор блокеров совпал с прошлым хешем — человек${WHY:+; $WHY}"
 [ -n "$ESC" ] && CODE=2 WHY="escalate —${ESC%;} — человек${WHY:+; $WHY}"
 printf 'Итог: код %d — %s\n' "$CODE" "${WHY:-блокеров нет}"
 printf 'hash=%s\n' "$HASH"

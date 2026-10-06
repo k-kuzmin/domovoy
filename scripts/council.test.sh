@@ -241,9 +241,28 @@ expect_status 1
 H=$(hash_of)
 run_diff "$H"
 expect_status 2
-expect_output 'набор совпал с прошлым хешем'
+expect_output 'набор блокеров совпал с прошлым хешем'
 run_diff "$EMPTY_HASH"
 expect_status 1
+end_case
+
+begin_case 'Те же блокеры при переформулированном nit — код 2'
+quiet; put engineer another_round "[$(fd blocker поломка src/App.cs 3),$(fd nit мелочь src/New.cs 1)]"
+run_diff
+H=$(hash_of)
+quiet; put engineer another_round "[$(fd blocker поломка src/App.cs 3),$(fd nit мелочь-иначе src/New.cs 2)]"
+run_diff "$H"
+expect_status 2
+expect_output 'набор блокеров совпал с прошлым хешем'
+end_case
+
+begin_case 'Повтор одних major без блокеров — не повтор, код 0'
+quiet; put engineer another_round "[$(fd major шероховатость src/App.cs 3)]"
+run_diff
+H=$(hash_of)
+run_diff "$H"
+expect_status 0
+expect_no_output 'совпал с прошлым хешем'
 end_case
 
 begin_case 'Пустой принятый набор с хешем пустоты — не повтор, код 0'
@@ -253,10 +272,10 @@ expect_status 0
 end_case
 
 begin_case 'Хеш не зависит от порядка замечаний и файлов вердиктов'
-quiet; put engineer another_round "[$(fd nit альфа src/App.cs 3),$(fd nit бета src/New.cs 1)]"
+quiet; put engineer another_round "[$(fd blocker альфа src/App.cs 3),$(fd blocker бета src/New.cs 1)]"
 run_diff
 H1=$(hash_of)
-quiet; put skeptic another_round "[$(fd nit бета src/New.cs 1)]"; put engineer another_round "[$(fd nit альфа src/App.cs 3)]"
+quiet; put skeptic another_round "[$(fd blocker бета src/New.cs 1)]"; put engineer another_round "[$(fd blocker альфа src/App.cs 3)]"
 run_diff
 H2=$(hash_of)
 [ -n "$H1" ] && [ "$H1" = "$H2" ] || fail_case "хеши разные: $H1 / $H2"
