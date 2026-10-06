@@ -19,6 +19,7 @@
         "contracts/**",
         "src/Domovoy.Mobile.Core/Generated/**",
         ".gitleaks.toml",
+        ".gitleaksignore",
         ".githooks/**",
         "src/Domovoy.Mobile.App/Platforms/**",
         "*AndroidManifest.xml",

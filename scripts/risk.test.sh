@@ -168,6 +168,12 @@ expect_level high
 expect_output 'high: путь «*.keystore»: tools/signing/release.keystore — группа former_protected'
 end_case
 
+begin_case 'Правка .gitleaksignore — high, группа former_protected'
+branch_with .gitleaksignore 'abc:src/x.cs:generic-api-key:1'
+expect_level high
+expect_output 'high: путь «.gitleaksignore»: .gitleaksignore — группа former_protected'
+end_case
+
 begin_case 'Путь под двумя группами medium называет зовущую человека: harness_quality, а не product'
 branch_with .claude/settings.local.example.json '{}'
 expect_level medium
