@@ -30,9 +30,13 @@
 # строкам, не ловится; IF [NOT] EXISTS снимает срабатывание только с
 # оператора, за ключевым словом которого стоит (перенос из guard.sh, 9).
 #
-# ПОНИЖЕНИЕ AnalysisLevel — любое добавленное значение, кроме latest/preview
-# с режимом default, recommended или all. Номер версии считается понижением:
-# сравнения с прежним значением нет.
+# ПОНИЖЕНИЕ AnalysisLevel — любое добавленное значение AnalysisLevel или
+# свойства по категории (AnalysisLevelSecurity, AnalysisLevelStyle, …), кроме
+# latest/preview с режимом default, recommended или all; регистр не важен, как
+# и в MSBuild. Значение берётся только после имени свойства: «>» тега (с
+# атрибутами или без), «=» в -p:…=… или «:» в env workflow; ссылка
+# $(AnalysisLevel) и закрывающий тег не сверяются. Номер версии считается
+# понижением: сравнения с прежним значением нет.
 #
 set -uo pipefail
 
@@ -101,6 +105,10 @@ SUPPRESSION=(
     'continue-on-error[[:space:]]*:[[:space:]]*([^[:space:]f#]|f[^a])' 'continue-on-error'
     '--filter.*(!=|!~)'                                   '--filter с отрицанием'
 )
+# Имя свойства (группа 2) и значение (группа 4): после тега с атрибутами,
+# после «=» (-p:…=…) или «:» (env в workflow). Перед именем не «/», «(» и
+# не буква — это не закрывающий тег и не $(AnalysisLevel).
+ANALYSIS_LEVEL='(^|[^/(A-Za-z0-9_])([Aa][Nn][Aa][Ll][Yy][Ss][Ii][Ss][Ll][Ee][Vv][Ee][Ll][A-Za-z]*)([[:space:]][^>]*>|>|[[:space:]]*[=:][[:space:]]*["'"'"']?)([A-Za-z0-9.-]*)'
 EF_DESTRUCTIVE='(DropColumn|DropTable|RenameColumn|RenameTable|AlterColumn|DropIndex|DropForeignKey|DropPrimaryKey|DropUniqueConstraint|AddPrimaryKey)'
 L='(^|[^a-z0-9_])'; T='([^a-z0-9_]|$)'
 # Тройки: шаблон в нижнем регистре, идемпотентная форма (вырезается до
@@ -126,10 +134,10 @@ check_added() {
         [[ "$text" =~ severity[[:space:]]*=[[:space:]]*(none|silent)([[:space:]]|$) ]] &&
             report "$file" "$line" "подавление: severity = ${BASH_REMATCH[1]}" ;;
     esac
-    if [[ "$text" =~ AnalysisLevel[^A-Za-z0-9]*([A-Za-z0-9.-]*) ]]; then
-        local level="${BASH_REMATCH[1]}"
-        [[ "$level" =~ ^(latest|preview)(-(default|recommended|all))?$ ]] ||
-            report "$file" "$line" "подавление: понижение AnalysisLevel до «$level»"
+    if [[ "$text" =~ $ANALYSIS_LEVEL ]]; then
+        local prop="${BASH_REMATCH[2]}" level="${BASH_REMATCH[4]}"
+        [[ "${level,,}" =~ ^(latest|preview)(-(default|recommended|all))?$ ]] ||
+            report "$file" "$line" "подавление: понижение $prop до «$level»"
     fi
     is_migration "$file" || return 0
     [ -n "${DOWN[$line]:-}" ] && return 0

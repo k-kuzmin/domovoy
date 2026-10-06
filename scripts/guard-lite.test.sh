@@ -246,6 +246,18 @@ run_guard
 expect_red 'Directory.Build.props:4: подавление: понижение AnalysisLevel до «5.0»'
 end_case
 
+begin_case 'AnalysisLevelSecurity = 5.0 краснеет'
+add_line 'build/a.props' '<AnalysisLevelSecurity>5.0</AnalysisLevelSecurity>'
+run_guard
+expect_red 'build/a.props:2: подавление: понижение AnalysisLevelSecurity до «5.0»'
+end_case
+
+begin_case 'AnalysisLevel с атрибутом Condition = 5.0 краснеет'
+add_line 'build/b.props' '<AnalysisLevel Condition="true">5.0</AnalysisLevel>'
+run_guard
+expect_red 'build/b.props:2: подавление: понижение AnalysisLevel до «5.0»'
+end_case
+
 begin_case 'Правка *.ruleset краснеет'
 add_line 'build/rules.ruleset' '<RuleSet Name="r" />'
 run_guard
@@ -406,6 +418,25 @@ end_case
 
 begin_case 'AnalysisLevel latest-recommended зеленеет'
 sed -i 's|<AnalysisLevel>latest</AnalysisLevel>|<AnalysisLevel>latest-recommended</AnalysisLevel>|' "$repo/Directory.Build.props"
+run_guard
+expect_green
+end_case
+
+begin_case 'AnalysisLevel latest-Recommended зеленеет: регистр не важен'
+sed -i 's|<AnalysisLevel>latest</AnalysisLevel>|<AnalysisLevel>latest-Recommended</AnalysisLevel>|' "$repo/Directory.Build.props"
+run_guard
+expect_green
+end_case
+
+begin_case 'AnalysisLevelSecurity = latest-all зеленеет'
+add_line 'build/a.props' '<AnalysisLevelSecurity>latest-all</AnalysisLevelSecurity>'
+run_guard
+expect_green
+expect_no_output '«Security»'
+end_case
+
+begin_case 'Ссылка $(AnalysisLevel) в условии зеленеет'
+add_line 'build/c.props' '<Foo Condition="$(AnalysisLevel) == 5.0">x</Foo>'
 run_guard
 expect_green
 end_case
