@@ -258,6 +258,18 @@ run_guard
 expect_red 'build/b.props:2: подавление: понижение AnalysisLevel до «5.0»'
 end_case
 
+begin_case 'Skip = с причиной-константой в многострочном атрибуте краснеет'
+add_line 'tests/Domovoy.Tests/C.cs' '    Skip = Reasons.Slow)]'
+run_guard
+expect_red 'tests/Domovoy.Tests/C.cs:2: подавление: Skip ='
+end_case
+
+begin_case 'Skip = в продуктовом коде краснеет — названный предел шапки'
+add_line 'src/Domovoy.Api/Page.cs' '    var page = new Page { Skip = offset };'
+run_guard
+expect_red 'src/Domovoy.Api/Page.cs:2: подавление: Skip ='
+end_case
+
 begin_case 'Правка *.ruleset краснеет'
 add_line 'build/rules.ruleset' '<RuleSet Name="r" />'
 run_guard
