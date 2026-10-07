@@ -46,17 +46,40 @@
     "words": [
       "AllowAnonymous",
       "RequireAuthorization",
-      "password",
-      "secret",
       "jwt",
       "Ha:Token",
-      "ApiKey",
       "access_token",
       "refresh_token",
-      "Bearer"
+      "Bearer",
+      "sha256",
+      "ApplicationVersion",
+      "ApplicationDisplayVersion"
     ],
     "prefixes": [
-      "authoriz"
+      "authoriz",
+      "authenti",
+      "password",
+      "secret",
+      "clientsecret",
+      "client_secret",
+      "ApiKey",
+      "api_key",
+      "api-key",
+      "credential",
+      "encrypt",
+      "decrypt",
+      "cipher",
+      "hmac",
+      "payment",
+      "billing",
+      "invoice",
+      "passport",
+      "personaldata",
+      "personal_data",
+      "personal-data",
+      "devicetoken",
+      "device_token",
+      "device-token"
     ],
     "words_skip_paths": [
       "docs/**",
@@ -72,7 +95,7 @@
         "COVERAGE_MINIMUM"
       ]
     },
-    "note": "Группы: product_security — безопасность продукта; former_protected — бывшие защищённые пути уровня high: миграции, контракт API, правила поиска секретов, хуки коммита, платформенное и подписи; harness_control — обвязка контроля: скрипты риска, гейта и совета, права и хуки сессии, а также удаление gitleaks.yml (deleted_paths) и удалённые строки со словами gitleaks и COVERAGE_MINIMUM в workflow (removed_lines). Голого token нет: CancellationToken и токены LLM (FR-CORE-4) уровень не поднимают. Слова читаются и в добавленных, и в удалённых строках: снятие RequireAuthorization — то же событие, что появление AllowAnonymous. words_skip_paths — тексты правил и журналы, где слова стоят как термины, а не как код; новый каталог кода под пропуск не попадает. gitleaks и COVERAGE_MINIMUM — только удалённые строки в workflow: добавление проверки риска не несёт."
+    "note": "Группы: product_security — безопасность продукта; former_protected — бывшие защищённые пути уровня high: миграции, контракт API, правила поиска секретов, хуки коммита, платформенное и подписи; harness_control — обвязка контроля: скрипты риска, гейта и совета, права и хуки сессии, а также удаление gitleaks.yml (deleted_paths) и удалённые строки со словами gitleaks и COVERAGE_MINIMUM в workflow (removed_lines). Голого token нет: CancellationToken и токены LLM (FR-CORE-4) уровень не поднимают; токен устройства ловится узкими формами devicetoken, device_token, device-token. Чувствительная зона — аутентификация, секреты и ключи, криптография, платежи, персональные данные — стоит в prefixes: префикс ловит множественные и составные формы, начинающиеся с корня (secrets, ApiKeys, PaymentRequest, HMACSHA256). Предел: корень внутри составного идентификатора (AddAuthentication, userPassword) левой границей не находится, а фраза с пробелом (personal data) списком не выражается — без правки scripts/risk.sh это не возвращается (отказ — журнал задачи #133); составные формы из issue (clientsecret, client_secret, api_key, api-key) перечислены поимённо. sha256 — слово с двумя границами, как в прежнем сигнале. ApplicationVersion и ApplicationDisplayVersion — поля версии мобильного клиента: их смена — выпуск, который пользователь получит через магазин приложений. Слова читаются и в добавленных, и в удалённых строках: снятие RequireAuthorization — то же событие, что появление AllowAnonymous. words_skip_paths — тексты правил и журналы, где слова стоят как термины, а не как код; новый каталог кода под пропуск не попадает. gitleaks и COVERAGE_MINIMUM — только удалённые строки в workflow: добавление проверки риска не несёт."
   },
   "medium": {
     "paths": {
@@ -95,9 +118,11 @@
         "**/DependencyInjection/**",
         "*appsettings*.json",
         "*Options.cs",
-        "*.example*"
+        "*.example*",
+        "docker-compose.yml",
+        "src/Domovoy.Mobile.App/Resources/**"
       ]
     },
-    "note": "Группы: product — DI-композиция, конфигурация и .example; harness_quality — правка обвязки и конфигурации качества, включая новую зависимость (Directory.Packages.props)."
+    "note": "Группы: product — DI-композиция, конфигурация и .example, состав стека (docker-compose.yml в корне) и ресурсы мобильного клиента (src/Domovoy.Mobile.App/Resources/**, раскладка — запись 0013); harness_quality — правка обвязки и конфигурации качества, включая новую зависимость (Directory.Packages.props)."
   }
 }
