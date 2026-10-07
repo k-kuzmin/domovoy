@@ -272,7 +272,8 @@ while IFS= read -r -d '' status && IFS= read -r -d '' file; do
            "$lbase" =~ ^coverage.*\.(xml|json|info)$ || "$lbase" == *.coverage || "$lbase" == *.coveragexml ||
            "$lpath" =~ (^|/)(coverage|coveragereport)/ ]] &&
             report "$file" 1 'мусор прогона в диффе (*.trx, TestResults/, отчёт покрытия)'
-        [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ]] &&
+        [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ||
+           "$base" == GoogleService-Info.plist ]] &&
             report "$file" 1 'подпись или ключ платформы в диффе'
     fi
     is_code_file "$file" || continue
