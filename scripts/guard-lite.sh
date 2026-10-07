@@ -99,8 +99,13 @@ down_lines() {
         }'
 }
 
+# Директиву ставит генератор EF (Designer, ModelSnapshot, seed из нескольких
+# строк — CA1814), поэтому в каталоге миграций проекта данных она не
+# нарушение. Исключение — только это правило и только этот путь: каталог в
+# risk.json — former_protected (high), остальные подавления в нём краснеют.
+PRAGMA='#pragma[[:space:]]+warning[[:space:]]+disable'
+EF_GENERATED='src/Domovoy.Data/Migrations/'
 SUPPRESSION=(
-    '#pragma[[:space:]]+warning[[:space:]]+disable'      '#pragma warning disable'
     '(^|[^A-Za-z0-9_])Skip[[:space:]]*=([^=>]|$)'        'Skip = — тест выключен'
     '\[Ignore(\]|\()'                                     '[Ignore] — тест выключен'
     '\[ExcludeFromCodeCoverage'                           '[ExcludeFromCodeCoverage]'
@@ -134,6 +139,8 @@ SQL_RULES=(
 
 check_added() {
     local file="$1" line="$2" text="$3" i lower rest
+    [[ "$text" =~ $PRAGMA && "$file" != "$EF_GENERATED"* ]] &&
+        report "$file" "$line" 'подавление: #pragma warning disable'
     for ((i = 0; i < ${#SUPPRESSION[@]}; i += 2)); do
         [[ "$text" =~ ${SUPPRESSION[i]} ]] && report "$file" "$line" "подавление: ${SUPPRESSION[i + 1]}"
     done
