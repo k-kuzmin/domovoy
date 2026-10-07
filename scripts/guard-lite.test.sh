@@ -138,8 +138,11 @@ expect_red() { expect_status 1; expect_output "$1"; }
 expect_green() { expect_status 0; expect_output 'нарушений нет'; }
 
 # Миграция: строка 9 — тело Up(), строка 14 — тело Down().
-migration() {
-    cat > "$repo/src/Domovoy.Data/Migrations/${3:-20260101000000_Step}.cs" <<EOF
+migration() { migration_at "src/Domovoy.Data/Migrations/${3:-20260101000000_Step}.cs" "$1" "$2"; }
+migration_at() {
+    local path="$1"; shift
+    mkdir -p "$repo/$(dirname "$path")"
+    cat > "$repo/$path" <<EOF
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Domovoy.Data.Migrations;
@@ -310,6 +313,31 @@ check_sql 'DROP TABLE a; DROP TABLE IF EXISTS b;' 'DROP без IF EXISTS'
 check_sql 'LOCK TABLE rooms IN ACCESS EXCLUSIVE MODE;' 'ACCESS EXCLUSIVE'
 check_sql 'ALTER TABLE rooms ADD CONSTRAINT pk PRIMARY KEY (id);' 'ADD CONSTRAINT … PRIMARY KEY'
 check_sql 'ALTER TABLE rooms ADD COLUMN floor int;' 'CREATE TABLE или ADD COLUMN без IF NOT EXISTS'
+
+begin_case 'DropColumn во вложенном каталоге Migrations краснеет'
+NESTED='src/Domovoy.Data/Migrations/2026/20260101000000_Step.cs'
+migration_at "$NESTED" 'migrationBuilder.DropColumn(name: "Name", table: "Rooms");' ''
+run_guard
+expect_red "$NESTED:9: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'DROP TABLE в SQL-файле миграции краснеет'
+add_line 'src/Domovoy.Data/Migrations/Sql/001_drop.sql' 'DROP TABLE rooms;'
+run_guard
+expect_red 'src/Domovoy.Data/Migrations/Sql/001_drop.sql:2: сырой SQL в миграции: DROP без IF EXISTS'
+end_case
+
+begin_case 'DROP TABLE IF EXISTS в SQL-файле миграции зеленеет'
+add_line 'src/Domovoy.Data/Migrations/Sql/001_drop.sql' 'DROP TABLE IF EXISTS rooms;'
+run_guard
+expect_green
+end_case
+
+begin_case 'SQL-файл миграции проверяется только правилами миграций'
+add_line 'src/Domovoy.Data/Migrations/Sql/002_note.sql' '-- NoWarn и Skip = в комментарии SQL — не подавление сборки'
+run_guard
+expect_green
+end_case
 
 check_junk() {
     begin_case "$1 краснеет"
