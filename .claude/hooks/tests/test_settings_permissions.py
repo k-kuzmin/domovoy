@@ -214,6 +214,13 @@ class SettingsPermissions(unittest.TestCase):
                 for tool in FILE_TOOLS:
                     with self.subTest(tool=tool, path=path):
                         self.assertPathDenied(tool, path)
+            name = os.path.basename(rel)
+            for shell in SHELLS:
+                for cmd in READ_COMMANDS:
+                    for arg in (name, "./" + name, rel, "/home/user/src/home-agent/" + rel):
+                        command = "%s %s" % (cmd, arg)
+                        with self.subTest(shell=shell, command=command):
+                            self.assertCommandDenied(shell, command)
 
     def test_tracked_config_open(self):
         for rel in TRACKED_CONFIG:
