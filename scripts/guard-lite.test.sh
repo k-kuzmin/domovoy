@@ -346,6 +346,12 @@ run_guard
 expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
 end_case
 
+begin_case 'Файл тестов, переименованный в tests/ в не-*.cs, — вынесен из тестового кода'
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Tests/HealthTests.cs.txt
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE файл тестов (перенесён в tests/Domovoy.Tests/HealthTests.cs.txt)"
+end_case
+
 begin_case 'Удаление нетестового файла под tests/ зеленеет'
 printf '{ "rooms": [] }\n' > "$repo/tests/Domovoy.Tests/rooms.json"
 commit_all; git -C "$repo" branch -qf base HEAD
