@@ -433,6 +433,7 @@ check_junk 'out/CoverageReport/index.htm' 'мусор прогона'
 check_junk 'certs/dev.p12' 'подпись или ключ платформы'
 check_junk 'ios/App.mobileprovision' 'подпись или ключ платформы'
 check_junk 'android/app/google-services.json' 'подпись или ключ платформы'
+check_junk 'src/Domovoy.Mobile.App/Platforms/iOS/GoogleService-Info.plist' 'подпись или ключ платформы'
 check_junk 'отчёты/прогон.trx' 'мусор прогона'
 
 # ------------------------------------------------------------------
