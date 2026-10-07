@@ -22,8 +22,10 @@
 # тест, унесённый в файл не того типа, считается удалённым. Пути — из -z,
 # поэтому кавычек git в них нет.
 #
-# МИГРАЦИИ. Разрушительный вызов API EF и сырой SQL смотрятся во всём файле
-# миграции, кроме тела Down() (граница из #125): откат законно снимает то,
+# МИГРАЦИИ. Миграция — *.cs или *.sql на любой глубине под Migrations/.
+# SQL-файл проверяется целиком и только правилами миграций. Разрушительный
+# вызов API EF и сырой SQL смотрятся во всём файле *.cs миграции, кроме тела
+# Down() (граница из #125): откат законно снимает то,
 # что создал Up(). Тело Down() размечается по вершине счётом фигурных скобок
 # от заголовка «void Down(»; скобка внутри строкового литерала счёт сбивает.
 # SQL не разбирается — ищется текст в строке: оператор, разнесённый по
@@ -65,10 +67,12 @@ is_code_file() {
     case "$1" in scripts/fixtures/*) return 1 ;; esac
     case "${1##*/}" in
         .editorconfig | .globalconfig | *.cs | *.csproj | *.props | *.targets | *.yml | *.ruleset) return 0 ;;
+        *.sql) is_migration "$1" && return 0 ;;
     esac
     return 1
 }
-is_migration() { [[ "$1" =~ (^|/)Migrations/[^/]+\.cs$ ]]; }
+# Миграция — *.cs или *.sql на любой глубине под каталогом Migrations/.
+is_migration() { [[ "$1" =~ (^|/)Migrations/(.+/)?[^/]+\.(cs|sql)$ ]]; }
 
 # Добавленные строки: «+<TAB>номер<TAB>текст» по новой стороне, удалённые —
 # «-<TAB>номер<TAB>текст» по базовой. Заголовки файла пропускаются до «@@»:
@@ -138,7 +142,9 @@ SQL_RULES=(
 )
 
 check_added() {
-    local file="$1" line="$2" text="$3" i lower rest
+    local file="$1" line="$2" text="$3" i
+    # SQL-файл миграции — не код сборки: только правила миграций.
+    [[ "$file" == *.sql ]] && { check_migration "$file" "$line" "$text"; return 0; }
     [[ "$text" =~ $PRAGMA && "$file" != "$EF_GENERATED"* ]] &&
         report "$file" "$line" 'подавление: #pragma warning disable'
     for ((i = 0; i < ${#SUPPRESSION[@]}; i += 2)); do
@@ -153,7 +159,12 @@ check_added() {
         [[ "${level,,}" =~ ^(latest|preview)(-(default|recommended|all))?$ ]] ||
             report "$file" "$line" "подавление: понижение $prop до «$level»"
     fi
-    is_migration "$file" || return 0
+    is_migration "$file" && check_migration "$file" "$line" "$text"
+    return 0
+}
+
+check_migration() {
+    local file="$1" line="$2" text="$3" i lower rest
     [ -n "${DOWN[$line]:-}" ] && return 0
     [[ "$text" =~ $EF_DESTRUCTIVE ]] && report "$file" "$line" "разрушительная миграция: ${BASH_REMATCH[1]}"
     lower="${text,,}"
@@ -191,7 +202,7 @@ while IFS= read -r -d '' status && IFS= read -r -d '' file; do
     is_code_file "$file" || continue
     [[ "$base" == *.ruleset ]] && { report "$file" 1 'подавление: правка *.ruleset'; continue; }
     declare -A DOWN=()
-    if is_migration "$file" && [ "$status" != D ]; then
+    if is_migration "$file" && [[ "$base" == *.cs && "$status" != D ]]; then
         while IFS= read -r n; do DOWN[$n]=1; done < <(down_lines "$file")
     fi
     file_lines "$file" > "$LINES" ||
