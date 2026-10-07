@@ -220,7 +220,7 @@ end_case
 # Красные: остальные пункты списка, по одному
 # ------------------------------------------------------------------
 check_suppression() {
-    begin_case "$3 краснеет"
+    begin_case "$3 краснеет${4:+ в $4}"
     add_line "$1" "$2"
     run_guard
     expect_red "$1:2: подавление: $3"
@@ -236,6 +236,11 @@ check_suppression 'build/y.targets' '<TreatWarningsAsErrors>false</TreatWarnings
 check_suppression 'build/z.props' '<EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>' 'EnforceCodeStyleInBuild=false'
 check_suppression '.github/workflows/new.yml' '    continue-on-error: true' 'continue-on-error'
 check_suppression '.github/workflows/f.yml' '      - run: dotnet test --filter "FullyQualifiedName!~Slow"' '--filter с отрицанием'
+
+# Типы файлов из п.10 #133.
+check_suppression '.github/workflows/new.yaml' '    continue-on-error: true' 'continue-on-error' '*.yaml'
+check_suppression 'Directory.Build.rsp' '-p:TreatWarningsAsErrors=false' 'TreatWarningsAsErrors=false' '*.rsp'
+check_suppression 'tests/ci.runsettings' '    <TestCaseFilter>Category!=Slow</TestCaseFilter>' 'TestCaseFilter с отрицанием' '*.runsettings'
 
 begin_case 'severity = none в .globalconfig краснеет'
 add_line '.globalconfig' 'dotnet_diagnostic.CA2000.severity = none'
