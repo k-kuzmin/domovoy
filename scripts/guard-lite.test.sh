@@ -674,7 +674,10 @@ run_guard
 expect_red "$MIG:11: $BOUNDARY: глубина скобок ушла в минус"
 end_case
 
-begin_case 'Многострочный литерал в Down() краснеет: граница не определена'
+# Многострочный verbatim разбирается: скобки, «//», «/*» и удвоенная кавычка
+# внутри литерала границу не сдвигают. Сдвинь «}» на строке 15 границу —
+# DropTable на строке 18 оказался бы вне Down() и краснел бы.
+begin_case 'Многострочный @"…" со скобками в Down() не сдвигает границу'
 mig_file <<'EOF'
 using Microsoft.EntityFrameworkCore.Migrations;
 
@@ -684,18 +687,97 @@ public partial class Step : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
     {
+        migrationBuilder.DropColumn(name: "Floor", table: "Rooms");
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
     {
         migrationBuilder.Sql(@"
-            UPDATE rooms SET floor = 0;
+            }
+            DELETE FROM rooms; -- ""}"" { // /*
         ");
+        migrationBuilder.DropTable(name: "Old");
     }
 }
 EOF
 run_guard
-expect_red "$MIG:13: $BOUNDARY: многострочный литерал"
+expect_red "$MIG:9: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+expect_no_output "$MIG:16:"
+expect_no_output "$MIG:18:"
+end_case
+
+begin_case 'Многострочный @"…" в Up() с безобидным SQL зеленеет'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            UPDATE rooms SET floor = 0;
+        ");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_green
+end_case
+
+begin_case 'Многострочный @"…" в Up(): сырой SQL на строке литерала ловится'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            DROP TABLE rooms;
+        ");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: сырой SQL в миграции: DROP без IF EXISTS"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Многострочный @"…", не закрытый до конца файла, — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            UPDATE rooms SET floor = 0;
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:13: $BOUNDARY: многострочный литерал не закрыт до конца файла"
 end_case
 
 begin_case 'Down(): интерполированная строка — граница не определена'
