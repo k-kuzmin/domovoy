@@ -396,6 +396,284 @@ expect_red "$MIG:9: разрушительная миграция: DropTable"
 expect_no_output "$MIG:14:"
 end_case
 
+# ------------------------------------------------------------------
+# Граница Down() (п.9 #133): комментарии и литералы не сдвигают её, а форма,
+# которую разметка не разбирает, — красный «граница не определена», а не
+# молчаливый пропуск. Файл миграции целиком — из stdin, номера строк явные.
+# ------------------------------------------------------------------
+mig_file() { cat > "$repo/$MIG"; }
+BOUNDARY='граница Down() не определена'
+
+begin_case 'Down(): комментарий не сдвигает границу'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        // откат — в void Down(MigrationBuilder migrationBuilder)
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'Down(): блочный комментарий со скобкой не сдвигает границу'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        /* прежняя схема:
+           { "rooms": [ */
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:15: разрушительная миграция: DropColumn"
+end_case
+
+# Down() перед Up(); строка 9 — тело Down(), строка 14 — тело Up().
+down_first() {
+    mig_file <<EOF
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        $1
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+}
+
+begin_case 'Down(): строковый литерал не сдвигает границу'
+down_first 'migrationBuilder.Sql("UPDATE rooms SET meta = '"'"'{'"'"', note = \"}{\";");'
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): символьный литерал со скобкой не сдвигает границу'
+down_first "var open = '{'; var quote = '\\''; var slash = '\\\\'; var brace = '{';"
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): verbatim с обратной косой в конце не сдвигает границу'
+down_first 'migrationBuilder.Sql(@"C:\"); migrationBuilder.Sql("{");'
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): тело-выражение размечается'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.CreateTable(name: "Rooms", columns: t => new { Id = t.Column<int>() });
+
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.DropTable(name: "Rooms");
+}
+EOF
+run_guard
+expect_green
+end_case
+
+begin_case 'Незакрытый Down() краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: Down() не закрыт до конца файла"
+end_case
+
+begin_case 'Два заголовка Down() в файле краснеют: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: заголовков Down() больше одного"
+end_case
+
+begin_case 'Заголовок Up() внутри Down() краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: заголовок Up() внутри Down()"
+expect_output "$MIG:13: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'Лишняя закрывающая скобка краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+}
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: глубина скобок ушла в минус"
+end_case
+
+begin_case 'Многострочный литерал в Down() краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            UPDATE rooms SET floor = 0;
+        ");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:13: $BOUNDARY: многострочный литерал"
+end_case
+
+begin_case 'Down(): интерполированная строка — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        var table = "rooms";
+        migrationBuilder.Sql($"UPDATE \"{table}\" SET floor = 0;");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: $BOUNDARY: интерполированная строка"
+end_case
+
+begin_case 'Down(): raw string — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql("""UPDATE rooms SET floor = 0;""");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:9: $BOUNDARY: raw string"
+end_case
+
+begin_case 'Интерполированная строка в файле без Down() зеленеет'
+add_line 'src/Domovoy.Data/Migrations/Helper.cs' '    var sql = $"UPDATE \"{table}\" SET floor = 0;";'
+run_guard
+expect_green
+end_case
+
 begin_case 'Сырой DELETE в Down() зеленеет'
 migration 'migrationBuilder.Sql("INSERT INTO rooms VALUES (1);");' 'migrationBuilder.Sql("DELETE FROM rooms;");'
 run_guard
