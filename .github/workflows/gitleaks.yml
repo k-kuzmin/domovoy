@@ -36,10 +36,39 @@ jobs:
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # На pull_request правила берутся с базы, а не из ветки PR: иначе тот же
+      # PR ослабляет .gitleaks.toml (или кладёт .gitleaksignore, или
+      # gitleaks:allow на строке) и вносит секрет — и проверка зелёная.
+      # Правка правил вступает в силу после мерджа. Базы без конфига нет:
+      # шаг падает, а не откатывается на конфиг ветки. Запись 0026.
       - name: Проверка истории
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          set -euo pipefail
+          rules="$RUNNER_TEMP/gitleaks-rules"
+          mkdir -p "$rules"
+          extra=()
+          if [ "$EVENT_NAME" = pull_request ]; then
+            # .gitleaksignore из корня сканируемого каталога gitleaks читает
+            # и при --gitleaks-ignore-path в другом месте — замер 8.30.1.
+            # История от удаления из рабочего дерева не меняется.
+            rm -f .gitleaksignore
+            git fetch --no-tags origin "$BASE_REF"
+            git show FETCH_HEAD:.gitleaks.toml > "$rules/config.toml"
+            if git cat-file -e FETCH_HEAD:.gitleaksignore 2>/dev/null; then
+              git show FETCH_HEAD:.gitleaksignore > "$rules/.gitleaksignore"
+            fi
+            extra+=(--ignore-gitleaks-allow)
+          else
+            cp .gitleaks.toml "$rules/config.toml"
+            if [ -f .gitleaksignore ]; then cp .gitleaksignore "$rules/.gitleaksignore"; fi
+          fi
           gitleaks git . \
-            --config .gitleaks.toml \
+            --config "$rules/config.toml" \
+            --gitleaks-ignore-path "$rules" \
+            ${extra[@]+"${extra[@]}"} \
             --redact \
             --no-banner \
             --report-format sarif \

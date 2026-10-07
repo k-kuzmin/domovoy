@@ -1,0 +1,1138 @@
+{
+  "issue": 131,
+  "current_state": [
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 84,
+      "observation": "на origin/main шаг «Число выполненных тестов» в build-test читает tests.trx для test-count-invariant.sh"
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 181,
+      "observation": "на origin/main «Гейт целостности» зовёт scripts/guard.sh, который читает метки PR"
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 184,
+      "observation": "на origin/main работа «Проверки обвязки» гоняет rules-sync.sh, wiring.sh и сценарии скриптов обвязки — частичное удаление её роняет"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 117,
+      "observation": "на origin/main валидатор плана требует scripts/protected-paths.sh и падает без него"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 197,
+      "observation": "на origin/main STEP_CONFIG_RE требует owner: orchestrator у файлов .claude/agents/"
+    },
+    {
+      "path": "scripts/plan-schema.json",
+      "line": 99,
+      "observation": "на origin/main owner и protected обязательны в files[], флаги allow_protected, allow_contract, destructive_migration — в flags"
+    },
+    {
+      "path": ".claude/agents/step-plan.md",
+      "line": 11,
+      "observation": "на origin/main определения шагов держат хук PreToolUse с scripts/step-bash-allow.sh"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 522,
+      "observation": "на origin/main таблица синхронизации требует маркер «БЕЗ ОБВЯЗКИ» и проверку wiring.sh"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/agent-task.yml",
+      "line": 3,
+      "observation": "на origin/main шаблон задачи ставит метку agent"
+    },
+    {
+      "path": "scripts/bootstrap.sh",
+      "line": 79,
+      "observation": "на origin/main bootstrap создаёт метки и говорит о доске"
+    }
+  ],
+  "approach": {
+    "summary": "Одним PR удалить агентский цикл в Actions и самозащиту обвязки (agent-*.yml, status-sync.yml, rules-sync, wiring, route, risk-score, guard, step-bash-allow, test-count-invariant и прочие из списка «Удаляется»), заменить их короткими risk.sh + risk.json, guard-lite.sh и council.sh со сценариями в build-test, добавить четыре определения совета, впрыск правил из соседнего проекта и проектный .claude/settings.json с deny/ask, переписать CLAUDE.md, docs/rules/, docs/pipeline.md, шаблоны и запись 0026. Работу резали на срезы с непересекающимися файлами; срезы делали субагенты общего назначения, git и склейку вёл оркестратор.",
+    "rejected": [
+      {
+        "option": "Разбить переход на несколько PR",
+        "reason": "частичное удаление роняет «Проверки обвязки»: wiring.sh и rules-sync.sh видят пропавшие файлы (тело задачи, «Порядок перехода»)"
+      },
+      {
+        "option": "Исполнитель срезов — step-implement",
+        "reason": "читает план из комментариев задачи, открывает черновой PR и переписывает его тело, а его список команд Bash заморожен на старте сессии (журнал, «Решения»)"
+      },
+      {
+        "option": "Скилл с зашитой последовательностью шагов",
+        "reason": "конвейер — рекомендация, а не сценарий: шаги меняются под задачу (тело задачи, решение 9)"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "да: выбран переход одним PR, как требует раздел «Порядок перехода» тела задачи",
+    "alternative": "разбиение на несколько PR — промежуточные PR краснели бы на «Проверках обвязки»; отклонено в теле задачи",
+    "ripple": "git grep по именам удалённых скриптов на merge-base (без docs/tasks и docs/decisions) находит потребителей вне удаляемых файлов: .claude/CLAUDE.md, step-*.md, CODEOWNERS, ci-fast.yml, .gitignore, README.md, docs/pipeline.md, docs/rules/README.md, fix.md, implement.md, plan.md, review-correctness.md, фикстуры планов и их README, plan-schema.json, plan.sh, plan.test.sh, review-comments.sh — все в диффе; сверх грепа по тексту задачи — ci-heavy.yml, review-comments.test.sh, шаблоны задачи и PR, docs/tasks/README.md и TEMPLATE.md",
+    "workaround": "нет: удаление и замена, а не обход; пределы guard-lite, прав и впрыска записаны в 0026 как принятые",
+    "council_signs": [
+      "правка обвязки",
+      "общий механизм",
+      "новая функциональность"
+    ],
+    "executor": "субагенты общего назначения по срезам с непересекающимися файлами; оркестратор описывает контракты, склеивает результат и ведёт git",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "сокращён под конвейер, который ведёт человек: триггеры «позвать человека», минимум маршрута, потолок кругов, делегирование, первые ходы, указатель «этап → файл правил»; Git — под ruleset"
+    },
+    {
+      "path": ".claude/agents/advisor-constitution.md",
+      "action": "create",
+      "why": "страж совета: сверка с нормами, ответ с norm {file, quote} и read, model sonnet"
+    },
+    {
+      "path": ".claude/agents/advisor-engineer.md",
+      "action": "create",
+      "why": "инженер совета с рубрикой из шести пунктов, model sonnet"
+    },
+    {
+      "path": ".claude/agents/advisor-pragmatist.md",
+      "action": "create",
+      "why": "прагматик совета против раздувания, model sonnet"
+    },
+    {
+      "path": ".claude/agents/advisor-skeptic.md",
+      "action": "create",
+      "why": "скептик совета, адверсариальный проход, model sonnet"
+    },
+    {
+      "path": ".claude/agents/issue-scout.md",
+      "action": "delete",
+      "why": "выжимка по трекеру удаляется вместе с правилом заведения задач"
+    },
+    {
+      "path": ".claude/agents/step-fix-flaky.md",
+      "action": "delete",
+      "why": "признаки флаки переезжают в docs/rules/fix.md"
+    },
+    {
+      "path": ".claude/agents/step-fix.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/agents/step-implement.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/agents/step-plan.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/agents/step-review-correctness.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/agents/step-review-security.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/agents/step-triage.md",
+      "action": "modify",
+      "why": "без хука границы команд; первая инструкция — прочитать файл правил этапа; ссылки на удалённые скрипты убраны"
+    },
+    {
+      "path": ".claude/hooks/.gitattributes",
+      "action": "create",
+      "why": "LF для *.sh и *.py хуков: CRLF ломает shebang на Mac и Linux"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.py",
+      "action": "create",
+      "why": "движок впрыска правил, перенесён из соседнего проекта и очищен от его специфики"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "action": "create",
+      "why": "предфильтр впрыска на bash под пути и команды этого проекта; без python пропускает вызов"
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "action": "create",
+      "why": "таблица правил впрыска проекта, включая step-rules на каждый step-*"
+    },
+    {
+      "path": ".claude/hooks/tests/test_rule_injector.py",
+      "action": "create",
+      "why": "тесты ключей движка впрыска"
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "action": "create",
+      "why": "тесты таблицы: строка через rule-injector.sh, существование doc, потолок блока, step-rules без «*»"
+    },
+    {
+      "path": ".claude/settings.json",
+      "action": "create",
+      "why": "проектные права deny/ask для Bash и PowerShell и подключение хуков впрыска"
+    },
+    {
+      "path": ".github/CODEOWNERS",
+      "action": "modify",
+      "why": "сведён к одной строке, без гейта и метки"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/agent-task.yml",
+      "action": "modify",
+      "why": "убраны метки agent, agent/allow-contract, agent/ready"
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "action": "modify",
+      "why": "разделы «Выбрано и отвергнуто» и «Попутно»"
+    },
+    {
+      "path": ".github/workflows/agent-fix.yml",
+      "action": "delete",
+      "why": "бота нет: агентский цикл в Actions удаляется"
+    },
+    {
+      "path": ".github/workflows/agent-implement.yml",
+      "action": "delete",
+      "why": "бота нет: агентский цикл в Actions удаляется"
+    },
+    {
+      "path": ".github/workflows/agent-plan.yml",
+      "action": "delete",
+      "why": "бота нет: агентский цикл в Actions удаляется"
+    },
+    {
+      "path": ".github/workflows/agent-review.yml",
+      "action": "delete",
+      "why": "бота нет: агентский цикл в Actions удаляется"
+    },
+    {
+      "path": ".github/workflows/agent-triage.yml",
+      "action": "delete",
+      "why": "бота нет: агентский цикл в Actions удаляется"
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "без «Проверок обвязки», счёта тестов и --logger trx; гейт зовёт guard-lite.sh; сценарии скриптов и тесты впрыска — в build-test"
+    },
+    {
+      "path": ".github/workflows/ci-heavy.yml",
+      "action": "modify",
+      "why": "без триггера labeled: PR открывается не черновым, тяжёлый прогон идёт на новый коммит, черновик — явный выбор человека"
+    },
+    {
+      "path": ".github/workflows/status-sync.yml",
+      "action": "delete",
+      "why": "статусы доски агент больше не ведёт"
+    },
+    {
+      "path": ".gitignore",
+      "action": "modify",
+      "why": "комментарий про проверку 8 guard.sh переписан; .council/, .rule-flags/, .python-path"
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "без step-bash-allow; python 3 — требование среды"
+    },
+    {
+      "path": "docs/decisions/0026-human-led-pipeline.md",
+      "action": "create",
+      "why": "запись решения: бота нет, что заменяется из 0014–0024, пределы, отклонения от ТЗ советника"
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "строка 0026 и статус заменённых записей"
+    },
+    {
+      "path": "docs/pipeline.md",
+      "action": "modify",
+      "why": "переписан под новый конвейер"
+    },
+    {
+      "path": "docs/rules/README.md",
+      "action": "modify",
+      "why": "таблица маршрута, таблица шагов, признаки совета"
+    },
+    {
+      "path": "docs/rules/fix.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/plan.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/reading.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/review-correctness.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/review-security.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/rules/triage.md",
+      "action": "modify",
+      "why": "правила этапа сокращены до переживших по существу пунктов (тело задачи, «Документы»)"
+    },
+    {
+      "path": "docs/tasks/125.md",
+      "action": "modify",
+      "why": "строка о закрытии со ссылкой на #131"
+    },
+    {
+      "path": "docs/tasks/131.md",
+      "action": "create",
+      "why": "журнал задачи"
+    },
+    {
+      "path": "docs/tasks/82.md",
+      "action": "modify",
+      "why": "строка о закрытии со ссылкой на #131"
+    },
+    {
+      "path": "docs/tasks/README.md",
+      "action": "modify",
+      "why": "журнал без стадий на метках, со счётчиками кругов"
+    },
+    {
+      "path": "docs/tasks/TEMPLATE.md",
+      "action": "modify",
+      "why": "сокращённый шаблон: шапка со счётчиками, решения, отвергнутое, проверенное, шаги"
+    },
+    {
+      "path": "pipeline/risk.json",
+      "action": "delete",
+      "why": "заменён scripts/risk.json"
+    },
+    {
+      "path": "pipeline/route.json",
+      "action": "delete",
+      "why": "маршрут — таблица в docs/rules/README.md"
+    },
+    {
+      "path": "scripts/bootstrap.sh",
+      "action": "delete",
+      "why": "создавал удалённые метки и доску"
+    },
+    {
+      "path": "scripts/council.sh",
+      "action": "create",
+      "why": "детерминированная сводка вердиктов совета, коды 0–3 и hash набора"
+    },
+    {
+      "path": "scripts/council.test.sh",
+      "action": "create",
+      "why": "сценарии council.sh на подставных вердиктах"
+    },
+    {
+      "path": "scripts/fixtures/plans/81.json",
+      "action": "modify",
+      "why": "фикстура приведена к новой схеме плана"
+    },
+    {
+      "path": "scripts/fixtures/plans/83.json",
+      "action": "modify",
+      "why": "фикстура приведена к новой схеме плана"
+    },
+    {
+      "path": "scripts/fixtures/plans/84.json",
+      "action": "modify",
+      "why": "фикстура приведена к новой схеме плана"
+    },
+    {
+      "path": "scripts/fixtures/plans/93.json",
+      "action": "modify",
+      "why": "фикстура приведена к новой схеме плана"
+    },
+    {
+      "path": "scripts/fixtures/plans/README.md",
+      "action": "modify",
+      "why": "потребитель risk-score.test.sh заменён risk.test.sh"
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "action": "create",
+      "why": "замена guard.sh: подавления, удалённые тесты, разрушительная миграция в Up(), мусор и подписи, без меток"
+    },
+    {
+      "path": "scripts/guard-lite.test.sh",
+      "action": "create",
+      "why": "сценарии guard-lite.sh на подставных диффах"
+    },
+    {
+      "path": "scripts/guard.sh",
+      "action": "delete",
+      "why": "заменён guard-lite.sh"
+    },
+    {
+      "path": "scripts/guard.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с guard.sh"
+    },
+    {
+      "path": "scripts/owner-comments.sh",
+      "action": "delete",
+      "why": "план в файле, комментарии владельца ревью больше не отбирает"
+    },
+    {
+      "path": "scripts/owner-comments.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с owner-comments.sh"
+    },
+    {
+      "path": "scripts/plan-review-round.sh",
+      "action": "delete",
+      "why": "счётчик кругов теперь в журнале"
+    },
+    {
+      "path": "scripts/plan-review-round.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с plan-review-round.sh"
+    },
+    {
+      "path": "scripts/plan-schema.json",
+      "action": "modify",
+      "why": "без owner, protected и флагов allow_*/destructive_migration; карточка развилки и разбор бага"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "action": "modify",
+      "why": "без protected-paths.sh и проверок классов защищённых путей; комментарии о потребителе рендера"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "action": "modify",
+      "why": "без сценариев agent-plan.yml, protected и owner; живые пути-образцы; сценарий --at переписан"
+    },
+    {
+      "path": "scripts/protected-paths.sh",
+      "action": "delete",
+      "why": "классов защищённых путей больше нет"
+    },
+    {
+      "path": "scripts/review-comments.sh",
+      "action": "modify",
+      "why": "шапка без step-bash-allow.sh, комментарий без wiring.sh и --allowedTools"
+    },
+    {
+      "path": "scripts/review-comments.test.sh",
+      "action": "modify",
+      "why": "без сверки с agent-fix.yml и agent-implement.yml"
+    },
+    {
+      "path": "scripts/risk-score.sh",
+      "action": "delete",
+      "why": "заменён risk.sh"
+    },
+    {
+      "path": "scripts/risk-score.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с risk-score.sh"
+    },
+    {
+      "path": "scripts/risk.json",
+      "action": "create",
+      "why": "конфиг уровня риска: пути и слова high/medium, порог размера"
+    },
+    {
+      "path": "scripts/risk.sh",
+      "action": "create",
+      "why": "уровень риска по путям и словам, конфиг с origin/main, ничего не блокирует"
+    },
+    {
+      "path": "scripts/risk.test.sh",
+      "action": "create",
+      "why": "сценарии risk.sh"
+    },
+    {
+      "path": "scripts/route.sh",
+      "action": "delete",
+      "why": "маршрут — таблица в docs/rules/README.md"
+    },
+    {
+      "path": "scripts/route.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с route.sh"
+    },
+    {
+      "path": "scripts/rules-sync.sh",
+      "action": "delete",
+      "why": "синхронизация двух режимов не нужна: бота нет"
+    },
+    {
+      "path": "scripts/rules-sync.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с rules-sync.sh"
+    },
+    {
+      "path": "scripts/set-project-status.sh",
+      "action": "delete",
+      "why": "статусы доски агент не ведёт"
+    },
+    {
+      "path": "scripts/step-bash-allow.sh",
+      "action": "delete",
+      "why": "граница команд шагов удаляется из определений"
+    },
+    {
+      "path": "scripts/step-bash-allow.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с step-bash-allow.sh"
+    },
+    {
+      "path": "scripts/test-count-invariant.sh",
+      "action": "delete",
+      "why": "инвариант числа тестов удаляется"
+    },
+    {
+      "path": "scripts/test-count-invariant.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с test-count-invariant.sh"
+    },
+    {
+      "path": "scripts/wiring.sh",
+      "action": "delete",
+      "why": "сверка обвязки и маркер «БЕЗ ОБВЯЗКИ» удаляются"
+    },
+    {
+      "path": "scripts/wiring.test.sh",
+      "action": "delete",
+      "why": "уходит вместе с wiring.sh"
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "action": "delete",
+      "why": "снимок для удалённого test-count-invariant.sh"
+    },
+    {
+      "path": "docs/tasks/131.plan.json",
+      "action": "create",
+      "why": "этот план, записанный задним числом"
+    },
+    {
+      "path": ".github/workflows/gitleaks.yml",
+      "action": "modify",
+      "why": "на pull_request правила gitleaks берутся с базы ветки: PR не ослабляет проверку тем же диффом, что вносит секрет (ревью безопасности, круг 2)"
+    }
+  ],
+  "boundaries": [
+    ".claude/**",
+    ".github/**",
+    ".gitignore",
+    "README.md",
+    "docs/**",
+    "pipeline/**",
+    "scripts/**",
+    "tests/test-count.baseline"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "сверка каталога workflows и работ ci-fast.yml",
+      "file": ".github/workflows/ci-fast.yml",
+      "new": false,
+      "covers": [
+        "ci-workflows"
+      ],
+      "behavior": "в .github/workflows/ нет agent-*.yml и status-sync.yml; в ci-fast.yml нет «Проверки обвязки», «Число выполненных тестов», --logger trx; гейт зовёт guard-lite.sh без чтения меток"
+    },
+    {
+      "name": "сверка состава scripts/ и шагов build-test",
+      "file": ".github/workflows/ci-fast.yml",
+      "new": false,
+      "covers": [
+        "scripts-set"
+      ],
+      "behavior": "ни одного файла из списка «Удаляется» в scripts/; в build-test есть запуск risk.test.sh, guard-lite.test.sh, council.test.sh, plan.test.sh, review-comments.test.sh и unittest впрыска"
+    },
+    {
+      "name": "прогон risk.sh diff на ветке задачи",
+      "file": "scripts/risk.sh",
+      "new": false,
+      "covers": [
+        "risk-diff-branch"
+      ],
+      "behavior": "уровень не ниже medium и строки причин"
+    },
+    {
+      "name": "plan: пути из files[].path, слова не читаются, число файлов считается",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-plan-fixture"
+      ],
+      "behavior": "в режиме plan путь из files[].path поднимает уровень, слова не читаются, печатаются уровень и причины"
+    },
+    {
+      "name": "Строка с CancellationToken вне путей high и medium — low",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-scenarios"
+      ],
+      "behavior": "голый token уровень не поднимает"
+    },
+    {
+      "name": "Строка с access_token — high, причина называет слово и файл",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-scenarios"
+      ],
+      "behavior": "слово из списка high поднимает уровень до high"
+    },
+    {
+      "name": "Правка .claude/hooks/** — high",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-scenarios"
+      ],
+      "behavior": "правка хуков — обвязка контроля, high"
+    },
+    {
+      "name": "Правка scripts/risk.json — high",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-scenarios"
+      ],
+      "behavior": "правка конфига риска — обвязка контроля, high"
+    },
+    {
+      "name": "Ослабленный risk.json в дереве на уровень не влияет: конфиг с origin/main",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "risk-scenarios"
+      ],
+      "behavior": "дифф не ослабляет правило, по которому его оценивают"
+    },
+    {
+      "name": "Skip = в тесте краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "подавление теста ловится"
+    },
+    {
+      "name": "severity = none в .editorconfig краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "отключение правила анализатора ловится"
+    },
+    {
+      "name": "DropColumn в Up() краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "разрушительная миграция в Up() ловится"
+    },
+    {
+      "name": "migrationBuilder.Sql(\"DELETE …\") краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "сырой DELETE в миграции ловится"
+    },
+    {
+      "name": "migrationBuilder.Sql(\"CREATE TABLE …\") без IF NOT EXISTS краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "неидемпотентный CREATE TABLE ловится"
+    },
+    {
+      "name": "*.trx в любом каталоге краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "мусор прогона ловится по любому пути"
+    },
+    {
+      "name": "*.keystore в любом каталоге краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "подпись платформы ловится по любому пути"
+    },
+    {
+      "name": "Чистый дифф зеленеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "на чистом диффе ложного срабатывания нет"
+    },
+    {
+      "name": "DropTable в Down() зеленеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "Down() не смотрится (граница из #125)"
+    },
+    {
+      "name": "прогон guard-lite.sh на диффе задачи",
+      "file": "scripts/guard-lite.sh",
+      "new": false,
+      "covers": [
+        "guard-lite-cases"
+      ],
+      "behavior": "bash scripts/guard-lite.sh origin/main HEAD — код 0"
+    },
+    {
+      "name": "blocker без evidence — отброшен, код 1 и пометка «отброшен блокер»",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "замечание без evidence отброшено с причиной; отброшенный blocker — код 1 и пометка"
+    },
+    {
+      "name": "major с evidence на несуществующий файл — отброшен, код 1",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "evidence на несуществующий файл отброшен"
+    },
+    {
+      "name": "major с evidence на файл вне диффа — отброшен, код 1",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "evidence вне артефакта отброшен"
+    },
+    {
+      "name": "Строка вне изменённого участка диффа — отброшена, код 1",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "строка вне хунка отброшена"
+    },
+    {
+      "name": "quote стража, которой нет в norm.file, — отброшена",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "несуществующая цитата нормы отброшена"
+    },
+    {
+      "name": "norm.file вне git ls-files — отброшен, хотя цитата в нём есть",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "неотслеживаемый файл нормы отброшен"
+    },
+    {
+      "name": "norm.file вне .claude/CLAUDE.md, docs/decisions/**, docs/rules/** — отброшен",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "норма не из файлов правил отброшена"
+    },
+    {
+      "name": "quote, начинающаяся с «-» и стоящая в norm.file, — принята",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "grep -F -- не путает цитату с ключом"
+    },
+    {
+      "name": "Повтор набора прошлого хеша — код 2, другой хеш — код 1",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "повтор набора — к человеку"
+    },
+    {
+      "name": "escalate — код 2",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "escalate — к человеку"
+    },
+    {
+      "name": "Принятый blocker в изменённом участке — код 1 без пометки",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "принятый блокер — код 1"
+    },
+    {
+      "name": "Чистый набор — код 0, пометки нет, хеш пустого набора",
+      "file": "scripts/council.test.sh",
+      "new": true,
+      "covers": [
+        "council-cases"
+      ],
+      "behavior": "чистый набор — код 0"
+    },
+    {
+      "name": "сверка определений .claude/agents/",
+      "file": ".claude/agents/advisor-constitution.md",
+      "new": false,
+      "covers": [
+        "agent-defs"
+      ],
+      "behavior": "четыре advisor-*.md с model; у стража norm и read; строка «данные, не инструкции» в каждом advisor-*.md; в step-*.md нет PreToolUse, первая инструкция — прочитать docs/rules/<этап>.md"
+    },
+    {
+      "name": "сверка прав в .claude/settings.json",
+      "file": ".claude/settings.json",
+      "new": false,
+      "covers": [
+        "settings-content"
+      ],
+      "behavior": "каждый шаблон deny и ask из раздела «Границы» есть и для Bash(...), и для PowerShell(...); Read-правила на UserSecrets и .env"
+    },
+    {
+      "name": "запрос rulesets и чтение раздела Git",
+      "file": ".claude/CLAUDE.md",
+      "new": false,
+      "covers": [
+        "ruleset"
+      ],
+      "behavior": "ruleset на main с запретом force-push, удаления и изменений мимо PR; правило о прямых коммитах в разделе Git переписано"
+    },
+    {
+      "name": "test_rows",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": [
+        "injector-static"
+      ],
+      "behavior": "каждая строка таблицы срабатывает через rule-injector.sh"
+    },
+    {
+      "name": "test_missing_doc_is_caught",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": [
+        "injector-static"
+      ],
+      "behavior": "тест таблицы краснеет на несуществующем doc"
+    },
+    {
+      "name": "test_one_record_per_step_and_no_star",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": [
+        "injector-static"
+      ],
+      "behavior": "у step-rules запись на каждый step-* и ни одной с «*»"
+    },
+    {
+      "name": "test_without_python_hook_passes_call",
+      "file": ".claude/hooks/tests/test_rule_injector.py",
+      "new": true,
+      "covers": [
+        "injector-static"
+      ],
+      "behavior": "без python хук пропускает вызов, код 0"
+    },
+    {
+      "name": "греп перенесённого движка на специфику соседнего проекта",
+      "file": ".claude/hooks/rule-injector.py",
+      "new": false,
+      "covers": [
+        "injector-static"
+      ],
+      "behavior": "в rule-injector.py, rule-injector.sh и тестах нет хостов, ключей и названий соседнего проекта"
+    },
+    {
+      "name": "сверка размещения сущностей конвейера",
+      "file": "docs/rules/README.md",
+      "new": false,
+      "covers": [
+        "entities-placement",
+        "no-skill"
+      ],
+      "behavior": "триггеры, минимум маршрута, потолок кругов, делегирование — в .claude/CLAUDE.md; таблица маршрута, таблица шагов, признаки совета — в docs/rules/README.md; во втором файле только ссылкой; скилла и скрипта с зашитым порядком нет"
+    },
+    {
+      "name": "запись чтения без источника в журнале",
+      "file": "docs/tasks/131.md",
+      "new": false,
+      "covers": [
+        "cold-read"
+      ],
+      "behavior": "в «Проверено» журнала строка о чтении без источника; каждая находка исправлена или записана"
+    },
+    {
+      "name": "список меток репозитория",
+      "file": "scripts/bootstrap.sh",
+      "new": false,
+      "covers": [
+        "labels"
+      ],
+      "behavior": "gh label list не содержит plan/*, plan-review/*, review/*, fix/*, agent, agent/*; bootstrap.sh удалён"
+    },
+    {
+      "name": "поиск висячих ссылок",
+      "file": "docs/decisions/0026-human-led-pipeline.md",
+      "new": false,
+      "covers": [
+        "docs-updated"
+      ],
+      "behavior": "имена удалённых скриптов и маркер «БЕЗ ОБВЯЗКИ» встречаются только в исторических записях решений и журналах; 0026 содержит отклонения от ТЗ советника"
+    },
+    {
+      "name": "состояние закрытых задач",
+      "file": "docs/tasks/131.md",
+      "new": false,
+      "covers": [
+        "issues-closed"
+      ],
+      "behavior": "каждая задача из списка закрыта с stateReason NOT_PLANNED и комментарием со ссылкой на #131"
+    },
+    {
+      "name": "сборка, тесты и gitleaks",
+      "file": ".github/workflows/ci-fast.yml",
+      "new": false,
+      "covers": [
+        "build-green"
+      ],
+      "behavior": "dotnet build без предупреждений, dotnet test зелёный, gitleaks без находок"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "ci-workflows",
+      "criterion": "В .github/workflows/ нет agent-*.yml и status-sync.yml; в ci-fast.yml нет «Проверки обвязки», «Число выполненных тестов» и --logger trx; «Гейт целостности» вызывает guard-lite.sh и не читает меток",
+      "method": "ls .github/workflows; grep -nE 'Проверки обвязки|Число выполненных тестов|logger trx|labels' .github/workflows/ci-fast.yml — пусто; grep -n guard-lite .github/workflows/ci-fast.yml",
+      "evidence": "в каталоге только ci-fast.yml, ci-heavy.yml, gitleaks.yml; первый grep пуст; ci-fast.yml:210 — bash scripts/guard-lite.sh"
+    },
+    {
+      "id": "scripts-set",
+      "criterion": "В scripts/ нет файлов из списка «Удаляется»; есть risk.sh, risk.json, guard-lite.sh, council.sh; их сценарии, plan.test.sh, review-comments.test.sh и тесты впрыска запускаются в build-test",
+      "method": "ls scripts; grep -n 'run:' .github/workflows/ci-fast.yml в пределах работы build-test",
+      "evidence": "строки ci-fast.yml:155,159,163,167,171,176 внутри build-test; удалённых файлов в ls нет"
+    },
+    {
+      "id": "risk-diff-branch",
+      "criterion": "bash scripts/risk.sh diff origin/main HEAD на ветке задачи печатает уровень не ниже medium и причины",
+      "method": "bash scripts/risk.sh diff origin/main HEAD",
+      "evidence": "строка уровня high или medium и список причин в выводе"
+    },
+    {
+      "id": "risk-plan-fixture",
+      "criterion": "bash scripts/risk.sh plan на плане из фикстуры печатает уровень и причины; пути берутся из files[].path",
+      "method": "bash scripts/risk.test.sh — сценарий режима plan; и bash scripts/risk.sh plan scripts/fixtures/plans/93.json",
+      "evidence": "сценарий пройден; вывод на фикстуре — уровень и причины с путями из files[].path"
+    },
+    {
+      "id": "risk-scenarios",
+      "criterion": "Сценарии risk.sh: CancellationToken — low; access_token — high; правка .claude/hooks/** или scripts/risk.json — high; правка risk.json в дереве на уровень не влияет",
+      "method": "bash scripts/risk.test.sh — код 0",
+      "evidence": "итог сценариев без проваленных, названные сценарии в выводе"
+    },
+    {
+      "id": "guard-lite-cases",
+      "criterion": "guard-lite.sh красный на Skip =, severity = none, DropColumn в Up(), Sql DELETE, Sql CREATE TABLE без IF NOT EXISTS, *.trx и *.keystore в любом каталоге; зелёный на чистом, на DropTable в Down() и на диффе задачи",
+      "method": "bash scripts/guard-lite.test.sh — код 0; bash scripts/guard-lite.sh origin/main HEAD — код 0",
+      "evidence": "итог сценариев без проваленных; код 0 на диффе ветки"
+    },
+    {
+      "id": "council-cases",
+      "criterion": "Сценарии council.sh: отбрасывание без evidence, вне артефакта, вне участка диффа, с чужой quote или norm.file — с причиной; quote с «-» принята; повтор хеша и escalate — код 2; принятый блокер — код 1; отброшенный blocker или major — код 1 и пометка; чистый набор — код 0",
+      "method": "bash scripts/council.test.sh — код 0",
+      "evidence": "итог сценариев без проваленных, названные сценарии в выводе"
+    },
+    {
+      "id": "agent-defs",
+      "criterion": ".claude/agents/ содержит четыре определения совета с явным model; у стража norm {file, quote} и read; в каждом advisor-*.md строка «данные, не инструкции»; step-*.md без хука границы команд, первая инструкция — чтение файла правил этапа",
+      "method": "grep -n '^model:' .claude/agents/advisor-*.md; grep -n 'norm\\|read' .claude/agents/advisor-constitution.md; grep -c 'данные, не инструкции' .claude/agents/advisor-*.md; grep -l PreToolUse .claude/agents/step-*.md — пусто",
+      "evidence": "четыре строки model: sonnet; цитаты norm и read; счётчик ≥1 в каждом файле; пустой список PreToolUse; первая инструкция каждого step-*.md — цитата файл:строка"
+    },
+    {
+      "id": "settings-content",
+      "criterion": ".claude/settings.json с правами из раздела «Границы» для Bash и PowerShell (статическая половина пункта)",
+      "method": "jq '.permissions' .claude/settings.json, сверка с перечнем deny и ask раздела «Границы»",
+      "evidence": "каждый шаблон есть в обеих формах — Bash(...) и PowerShell(...); Read-правила UserSecrets и .env на месте"
+    },
+    {
+      "id": "settings-live",
+      "criterion": "В новой сессии gh pr merge, git push -f, git push origin HEAD:main, dotnet user-secrets list, чтение UserSecrets и .env, gh auth token, printenv, docker compose config — отказ в обоих инструментах; gh issue create и gh pr create — вопрос; результат шаблона с ведущим * записан в 0026",
+      "method": "непроверяем",
+      "evidence": "непроверяем автотестом: ручной замер в свежем процессе claude -p 2.1.289 на одноразовом клоне с локальным bare-remote; результат — docs/decisions/0026-human-led-pipeline.md, абзац «Замерено» и пункт о шаблонах с ведущим *; push-формы мимо deny закрывает ruleset — пункт ruleset"
+    },
+    {
+      "id": "ruleset",
+      "criterion": "Ruleset на main включён владельцем; правило о прямых коммитах в разделе Git .claude/CLAUDE.md переписано",
+      "method": "непроверяем",
+      "evidence": "непроверяем до мерджа: ruleset включает владелец, тело задачи («Порядок перехода») допускает это после мерджа; переписанное правило — .claude/CLAUDE.md, раздел «Git»"
+    },
+    {
+      "id": "tools-bash-measure",
+      "criterion": "Работает ли Bash(<команда> *) в поле tools определения советника — замерено, результат записан в 0026; не работает — у советников нет Bash, вход файлами в .council/<N>/",
+      "method": "непроверяем",
+      "evidence": "непроверяем автотестом: ручной замер в свежем процессе claude -p 2.1.289 по стенограмме советника; результат — 0026, пункт «Ограничение вида Bash(<команда> *) в поле tools определения не работает»; вывод исполнен: у advisor-* tools: Read, Grep, Glob, вход файлами в .council/<N>/"
+    },
+    {
+      "id": "injector-static",
+      "criterion": "Впрыск подключён: тесты движка и таблицы зелёные в CI; каждая строка таблицы покрыта тестом через rule-injector.sh; тест таблицы краснеет на несуществующем doc; step-rules на каждый step-* без «*»; греп движка без специфики соседнего проекта; без python хук пропускает вызов",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — код 0; греп rule-injector.* и тестов по хостам, ключам и названиям соседнего проекта — пусто",
+      "evidence": "OK в выводе unittest и зелёный шаг build-test; пустой вывод грепа"
+    },
+    {
+      "id": "injector-live",
+      "criterion": "В новой сессии pr-create приходит на первом git push и не повторяется, ceremony-card — на первой правке кода, harness-edit-council — на правке .claude/**; правило этапа приходит в промпт субагента (по стенограмме)",
+      "method": "непроверяем",
+      "evidence": "непроверяем автотестом: ручной замер в свежем процессе claude -p 2.1.289 со стенограммами субагентов; результат — 0026, абзац «Замерено»; прогон после мерджа — пункт live-run"
+    },
+    {
+      "id": "own-edits-live",
+      "criterion": "own_edits_gate напоминает на 4-м разном файле оркестратора в новой сессии и не считает docs/tasks/** (замерено)",
+      "method": "непроверяем",
+      "evidence": "непроверяем автотестом: ручной замер в свежем процессе claude -p 2.1.289; результат — 0026, абзац «Замерено»; модульная половина — test_own_edits_gate в .claude/hooks/tests/test_rules_map.py"
+    },
+    {
+      "id": "entities-placement",
+      "criterion": "Триггеры, минимум маршрута, потолок кругов и делегирование — в .claude/CLAUDE.md; таблица маршрута, таблица шагов, признаки совета — в docs/rules/README.md; во втором файле только ссылкой",
+      "method": "grep -n заголовков и ключевых строк каждой сущности в обоих файлах",
+      "evidence": "цитаты файл:строка: определение в одном файле, во втором — ссылка без пересказа"
+    },
+    {
+      "id": "no-skill",
+      "criterion": "Скилла или скрипта с зашитой последовательностью шагов нет; .claude/CLAUDE.md содержит рекомендованный порядок и указатель «этап → файл правил»",
+      "method": "ls .claude/skills — нет каталога; grep -n 'Рекомендованный порядок' .claude/CLAUDE.md; grep -n 'docs/rules/' .claude/CLAUDE.md",
+      "evidence": "каталога нет; цитаты файл:строка порядка и указателя"
+    },
+    {
+      "id": "live-run",
+      "criterion": "Живой прогон в новой сессии после мерджа на задаче этапа 1 уровня medium: триаж → план → риск → совет без ошибок; по стенограмме типы и модели советников, правила этапа прочитаны; ветка прогона удалена",
+      "method": "непроверяем",
+      "evidence": "непроверяем до мерджа: прогон по определению идёт после мерджа в новой сессии; задачу называет владелец"
+    },
+    {
+      "id": "cold-read",
+      "criterion": "Чтение без источника по новым правилам проведено, найденное исправлено или записано",
+      "method": "пункт раздела «Шаги» docs/tasks/131.md о чтении без источника и коммиты исправлений по находкам",
+      "evidence": "пункт журнала с числом находок, исправленных и неисправленных с причиной; ссылки на коммиты либо записи находок"
+    },
+    {
+      "id": "labels",
+      "criterion": "Метки plan/*, plan-review/*, review/*, fix/*, agent и agent/*, включая agent/needs-human и agent/needs-clarification, удалены; bootstrap.sh их не создаёт",
+      "method": "gh label list --limit 200 --json name --jq '.[].name' | grep -E '^(plan|plan-review|review|fix|agent)(/|$)' — пусто; test ! -e scripts/bootstrap.sh",
+      "evidence": "пустой вывод; bootstrap.sh удалён этой задачей"
+    },
+    {
+      "id": "docs-updated",
+      "criterion": ".claude/CLAUDE.md, docs/rules/, docs/pipeline.md, шаблоны журнала, плана и PR обновлены; висячих ссылок из списка нет; 0026 есть и содержит отклонения от ТЗ советника",
+      "method": "git grep -nE 'step-bash-allow|rules-sync|wiring\\.sh|route\\.sh|risk-score|owner-comments|test-count-invariant|protected-paths|БЕЗ ОБВЯЗКИ' -- . ':!docs/decisions/00[01]*' ':!docs/decisions/002[0-5]*' ':!docs/tasks/*' ':!scripts/fixtures/plans/*.json'; grep -n 'Отклонения от ТЗ советника' docs/decisions/0026-human-led-pipeline.md",
+      "evidence": "вхождения только в 0026 как описание удалённого; docs/decisions/0026-human-led-pipeline.md:199 — раздел «Отклонения от ТЗ советника» с семью пунктами из «Документов»"
+    },
+    {
+      "id": "issues-closed",
+      "criterion": "#71, #82, #85, #86, #87, #91, #92, #94, #95, #125, #129, #130 закрыты как not planned с комментарием-ссылкой на #131; у #92, #94, #125 — куда перенесён пункт",
+      "method": "gh issue view <N> --json state,stateReason,comments для каждого номера",
+      "evidence": "state CLOSED, stateReason NOT_PLANNED, последний комментарий ссылается на #131; у #92, #94, #125 названы файлы переноса"
+    },
+    {
+      "id": "build-green",
+      "criterion": "Сборка, тесты, gitleaks зелёные",
+      "method": "dotnet build; dotnet test; gitleaks git --redact --no-banner; gh pr checks после открытия PR",
+      "evidence": "0 предупреждений, 0 упавших тестов, gitleaks no leaks found, зелёные работы CI fast"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Висячая ссылка на удалённый скрипт в правилах или CI — правило ссылается в пустоту",
+      "mitigation": "git grep по именам удалённых скриптов (пункт docs-updated) и чтение без источника свежим агентом"
+    },
+    {
+      "risk": "Права в settings.json сопоставляются по префиксу и не ловят bash -c, абсолютные пути, git -C … push и часть push-форм",
+      "mitigation": "предел записан в 0026; push-формы мимо deny закрывает ruleset на main"
+    },
+    {
+      "risk": "guard-lite.sh правится тем же диффом, который проверяет (#87)",
+      "mitigation": "правка guard-lite.sh — high по risk.json и триггер «позвать человека» всегда; предел записан в 0026"
+    },
+    {
+      "risk": "Хук впрыска исполняет код рабочего дерева вне permissions",
+      "mitigation": ".claude/hooks/** — high в risk.json; запрет открывать чужую ветку сессией с хуком записан в 0026"
+    },
+    {
+      "risk": "Новые определения агентов, права и хуки не проверены в живой сессии до мерджа: они читаются на старте",
+      "mitigation": "пункты settings-live, tools-bash-measure, injector-live, own-edits-live, live-run помечены непроверяемыми; PR не закрывает #131, задачу закрывает оркестратор после живого прогона"
+    }
+  ],
+  "out_of_scope": [
+    "Код продукта (src/, tests/ кроме снимка test-count.baseline) не меняется",
+    "Фазы 5–8 ТЗ советника: теневой режим, журнал решений, лимиты, храповик",
+    "Включение ruleset на main — действие владельца в настройках репозитория",
+    "Живой прогон в новой сессии — после мерджа, отдельно от этого PR",
+    "Правка старых записей решений 0014–0024: меняется только их статус в индексе"
+  ]
+}

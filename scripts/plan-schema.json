@@ -2,13 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "scripts/plan-schema.json",
   "title": "Машиночитаемый план реализации",
-  "description": "Единственный источник формы плана. Читают её трое: шаг планирования (заполняет), scripts/plan.sh (берёт отсюда required, properties, enum и заголовки разделов), scripts/plan.test.sh (сверяет полноту согласованной фикстуры). Своей копии списка полей нет ни у кого: копия разъезжается молча. Разделы и их порядок — docs/rules/plan.md; заголовок раздела живёт в x-title, номер в x-section, поле без раздела печатается внутри раздела из x-render-into.",
+  "description": "Единственный источник формы плана. Читают её трое: шаг планирования (заполняет docs/tasks/<N>.plan.json), scripts/plan.sh (берёт отсюда required, properties, enum, pattern, oneOf и заголовки разделов), scripts/plan.test.sh (сверяет полноту согласованной фикстуры). Своей копии списка полей нет ни у кого: копия разъезжается молча. Разделы и их порядок — docs/rules/plan.md; заголовок раздела живёт в x-title, номер в x-section, поле без раздела печатается внутри раздела из x-render-into.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "issue",
     "current_state",
     "approach",
+    "fork_card",
     "files",
     "boundaries",
     "flags",
@@ -51,6 +52,40 @@
         }
       }
     },
+    "bug_analysis": {
+      "type": "object",
+      "x-render-into": 1,
+      "x-label": "Разбор бага",
+      "description": "Только для бага, и тогда обязателен по docs/rules/plan.md: воспроизведение идёт до плана, а план называет, что именно воспроизведено и почему. Четыре поля разбора; поле необязательно в схеме, потому что задача не обязана быть багом.",
+      "additionalProperties": false,
+      "required": ["symptom", "precondition", "root_cause", "rejected_hypotheses"],
+      "properties": {
+        "symptom": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Что наблюдается: фактический текст падения красного прогона, а не пересказ."
+        },
+        "precondition": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Различающее предусловие: при каком условии дефект проявляется и при каком нет."
+        },
+        "root_cause": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^:]+:[1-9][0-9]*$",
+          "description": "Первопричина в виде файл:строка от корня репозитория. Валидатор проверяет, что путь существует, а строка не выходит за длину файла."
+        },
+        "rejected_hypotheses": {
+          "type": "array",
+          "description": "Отвергнутые гипотезы о первопричине, каждая с причиной отказа одной строкой. Пустой массив допустим: гипотеза была одна.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "approach": {
       "type": "object",
       "x-section": 2,
@@ -87,16 +122,80 @@
         }
       }
     },
+    "fork_card": {
+      "type": "object",
+      "x-render-into": 2,
+      "x-label": "Карточка развилки",
+      "description": "Заполняется до первой правки кода. Либо одна строка trivial для тривиальной правки, либо карточка целиком — вариант выбирается по oneOf, смешанная форма не проходит ни один.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["trivial"],
+          "properties": {
+            "trivial": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Тривиальная правка: одна строка вместо карточки — что правится и почему развилки здесь быть не может."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["matches_request", "alternative", "ripple", "workaround", "council_signs", "executor", "fork"],
+          "properties": {
+            "matches_request": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Совпадает ли выбранное с просьбой задачи, и если нет — в чём расхождение."
+            },
+            "alternative": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Второй реалистичный способ и что пользователь или владелец увидел бы иначе, включая цену. Может быть «нет»."
+            },
+            "ripple": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Что ещё меняется — по грепу вызывающих, а не по памяти."
+            },
+            "workaround": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Костыль ли это, и если да — почему системное решение не выбрано."
+            },
+            "council_signs": {
+              "type": "array",
+              "description": "Сработавшие признаки совета (docs/rules/README.md). Пустой массив допустим: не сработал ни один.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "executor": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Кто правит — оркестратор сам или субагент; счёт по задаче целиком."
+            },
+            "fork": {
+              "type": "boolean",
+              "description": "Развилка: второй способ даёт иной наблюдаемый результат, и выбор не следует из задачи или ТЗ. true — триггер «позвать человека»."
+            }
+          }
+        }
+      ]
+    },
     "files": {
       "type": "array",
       "minItems": 1,
       "x-section": 3,
       "x-title": "Файлы",
-      "description": "Что создаётся, что меняется, что удаляется, по каждому — зачем, кто правит и защищён ли путь.",
+      "description": "Что создаётся, что меняется, что удаляется, по каждому — зачем. Пути отсюда читает и scripts/risk.sh plan.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "action", "owner", "protected", "why"],
+        "required": ["path", "action", "why"],
         "properties": {
           "path": {
             "type": "string",
@@ -107,15 +206,6 @@
             "type": "string",
             "enum": ["create", "modify", "delete"],
             "description": "Что с файлом делается. Для modify и delete валидатор проверяет, что путь существует."
-          },
-          "owner": {
-            "type": "string",
-            "enum": ["implement", "orchestrator"],
-            "description": "Кто правит файл. Конфигурацию прав шага (.claude/agents/**) правит только orchestrator: метка снимает гейт в CI, но согласие человека внутрь субагента не передаёт — запись 0018."
-          },
-          "protected": {
-            "type": "boolean",
-            "description": "Путь из раздела «Файлы, которые агент не трогает». Отметка сверяется со списком scripts/protected-paths.sh в обе стороны."
           },
           "why": {
             "type": "string",
@@ -140,28 +230,10 @@
       "type": "object",
       "x-render-into": 3,
       "x-label": "Флаги",
-      "description": "Явные объявления плана. Каждый флаг, кроме new_dependency, сверяется с путями в обе стороны: не объявлен при подпадающем пути — нарушение, объявлен без единого подпадающего пути — тоже.",
+      "description": "Явные объявления плана, которые не выводятся из путей.",
       "additionalProperties": false,
-      "required": [
-        "allow_protected",
-        "allow_contract",
-        "destructive_migration",
-        "new_dependency",
-        "new_dependency_reason"
-      ],
+      "required": ["new_dependency", "new_dependency_reason"],
       "properties": {
-        "allow_protected": {
-          "type": "boolean",
-          "description": "План правит защищённые пути, PR нужна метка agent/allow-protected."
-        },
-        "allow_contract": {
-          "type": "boolean",
-          "description": "План меняет контракт API, PR нужна метка agent/allow-contract."
-        },
-        "destructive_migration": {
-          "type": "boolean",
-          "description": "План трогает миграции БД, PR нужна метка agent/allow-destructive-migration."
-        },
         "new_dependency": {
           "type": "boolean",
           "description": "План вводит новую библиотеку. Правила проекта требуют обоснования в комментарии к issue до установки."

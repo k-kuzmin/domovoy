@@ -112,10 +112,11 @@ BenchmarkDotNet.Artifacts/
 
 # Результаты тестов и покрытие
 #
-# Эти строки не защита: git add -f снимает их с любого файла. Отчёт прогона и
-# отчёт покрытия в PR ловит проверка 8 гейта целостности scripts/guard.sh —
-# они вход инварианта числа тестов и порога покрытия, и подложенный файл
-# подменил бы результат прогона.
+# Эти строки не защита: git add -f снимает их с любого файла. В диффе PR как
+# мусор их ловит гейт целостности scripts/guard-lite.sh, по любому пути: *.trx,
+# каталог TestResults/, отчёты покрытия *.cobertura.xml, *.coverage,
+# *.coveragexml, coverage*.xml|json|info и любой файл под каталогом coverage/
+# или CoverageReport/. Не ловит BuildLog.* и .axoCover/: это не отчёты.
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 *.trx
@@ -220,3 +221,12 @@ $RECYCLE.BIN/
 # Рабочие каталоги агентов, работающих в изолированных worktree.
 # Появляются локально и коммиту не подлежат никогда.
 .claude/worktrees/
+# Состояние хука впрыска правил: флаги «уже напоминал» и кеш пути к python.
+# .python-path — ещё и точка подмены интерпретатора, в git ему не место.
+.claude/hooks/.rule-flags/
+.claude/hooks/.python-path
+.claude/hooks/__pycache__/
+.claude/hooks/tests/__pycache__/
+# Вердикты совета: оркестратор сохраняет ответы советников для
+# scripts/council.sh; в журнал уходит итог и хеш набора, а не сами файлы.
+.council/

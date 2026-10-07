@@ -83,26 +83,29 @@
       }
     ]
   },
+  "fork_card": {
+    "matches_request": "да: правило о том, кто правит конфигурацию прав шага, ложится разделом в запись 0018 и пунктом указателя, как просит задача",
+    "alternative": "отдельная запись решения рядом с 0018 — читатель получил бы одну мысль в двух записях; отвергнуто решением владельца",
+    "ripple": "указатель .claude/CLAUDE.md получает пятый пункт со ссылкой на запись; ни один скрипт и ни одно определение шага правкой не затронуты",
+    "workaround": "нет: правило записывается в запись решения, механизм не обходится",
+    "council_signs": ["правка обвязки"],
+    "executor": "субагент шага реализации",
+    "fork": false
+  },
   "files": [
     {
       "path": "docs/decisions/0018-local-orchestrator-and-step-subagents.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "новый раздел «Кто правит конфигурацию прав шага» с подразделом про цикл и одна строка в «Что рассматривалось и отвергнуто»"
     },
     {
       "path": ".claude/CLAUDE.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "пятый пункт перечня «что оркестратор делает сам» со ссылкой на запись 0018, без пересказа обоснования"
     },
     {
       "path": "docs/tasks/81.md",
       "action": "create",
-      "owner": "implement",
-      "protected": false,
       "why": "журнал: стадия, решения, изменённые файлы, что проверено"
     }
   ],
@@ -112,9 +115,6 @@
     "docs/tasks/**"
   ],
   "flags": {
-    "allow_protected": true,
-    "allow_contract": false,
-    "destructive_migration": false,
     "new_dependency": false,
     "new_dependency_reason": ""
   },

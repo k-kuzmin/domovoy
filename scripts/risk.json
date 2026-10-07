@@ -1,0 +1,103 @@
+{
+  "about": "Таблица сигналов scripts/risk.sh: путей, слов и порога в скрипте нет. Пути разложены по именованным группам; внутри уровня срабатывает первая подходящая группа, поэтому группы, зовущие человека, стоят первыми; имя группы печатается в причине, и правила ссылаются на группу по имени, а не копируют шаблоны. Шаблоны путей сравниваются оператором [[ путь == шаблон ]] оболочки: «*» там проходит и через «/», поэтому «**» равно «*», а шаблон без каталога с ведущей «*» ловит файл на любой глубине; без неё — только в корне. Шаблон «**/X/**» требует хотя бы одного каталога перед X. Слова ищутся без учёта регистра по границе слова с обеих сторон; prefix — только по левой границе. Конфиг читается с origin/main, а не из дерева: дифф не ослабляет правило, по которому его оценивают.",
+  "size": {
+    "files": 11,
+    "lines": 1538,
+    "source": "75-й процентиль смерженных PR (nearest-rank, 18 PR, прогон 02.09.2026); правило отбора корпуса — docs/tasks/103.md. Срабатывает строго выше порога. В режиме plan считается только число файлов."
+  },
+  "high": {
+    "paths": {
+      "harness_control": [
+        "scripts/risk.*",
+        "scripts/guard-lite.sh",
+        "scripts/council.sh",
+        ".claude/settings.json",
+        ".claude/hooks/**"
+      ],
+      "former_protected": [
+        "src/Domovoy.Data/Migrations/**",
+        "contracts/**",
+        "src/Domovoy.Mobile.Core/Generated/**",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        ".githooks/**",
+        "src/Domovoy.Mobile.App/Platforms/**",
+        "*AndroidManifest.xml",
+        "*Info.plist",
+        "*.keystore",
+        "*.p12",
+        "*.mobileprovision",
+        "*google-services.json"
+      ],
+      "product_security": [
+        "**/Security/**",
+        "**/Auth/**",
+        "**/Crypto/**",
+        "src/Domovoy.Ha/**",
+        "**/Prompts/**",
+        "*AllowList*"
+      ]
+    },
+    "deleted_paths": {
+      "harness_control": [
+        ".github/workflows/gitleaks.yml"
+      ]
+    },
+    "words": [
+      "AllowAnonymous",
+      "RequireAuthorization",
+      "password",
+      "secret",
+      "jwt",
+      "Ha:Token",
+      "ApiKey",
+      "access_token",
+      "refresh_token",
+      "Bearer"
+    ],
+    "prefixes": [
+      "authoriz"
+    ],
+    "words_skip_paths": [
+      "docs/**",
+      "*.md"
+    ],
+    "removed_lines": {
+      "group": "harness_control",
+      "paths": [
+        ".github/workflows/**"
+      ],
+      "words": [
+        "gitleaks",
+        "COVERAGE_MINIMUM"
+      ]
+    },
+    "note": "Группы: product_security — безопасность продукта; former_protected — бывшие защищённые пути уровня high: миграции, контракт API, правила поиска секретов, хуки коммита, платформенное и подписи; harness_control — обвязка контроля: скрипты риска, гейта и совета, права и хуки сессии, а также удаление gitleaks.yml (deleted_paths) и удалённые строки со словами gitleaks и COVERAGE_MINIMUM в workflow (removed_lines). Голого token нет: CancellationToken и токены LLM (FR-CORE-4) уровень не поднимают. Слова читаются и в добавленных, и в удалённых строках: снятие RequireAuthorization — то же событие, что появление AllowAnonymous. words_skip_paths — тексты правил и журналы, где слова стоят как термины, а не как код; новый каталог кода под пропуск не попадает. gitleaks и COVERAGE_MINIMUM — только удалённые строки в workflow: добавление проверки риска не несёт."
+  },
+  "medium": {
+    "paths": {
+      "harness_quality": [
+        "Directory.Packages.props",
+        ".claude/**",
+        "docs/rules/**",
+        "docs/decisions/**",
+        ".github/**",
+        "scripts/**",
+        "Directory.Build.props",
+        ".editorconfig",
+        "global.json",
+        "*.ruleset",
+        "*.globalconfig"
+      ],
+      "product": [
+        "*Program.cs",
+        "*ServiceCollectionExtensions.cs",
+        "**/DependencyInjection/**",
+        "*appsettings*.json",
+        "*Options.cs",
+        "*.example*"
+      ]
+    },
+    "note": "Группы: product — DI-композиция, конфигурация и .example; harness_quality — правка обвязки и конфигурации качества, включая новую зависимость (Directory.Packages.props)."
+  }
+}

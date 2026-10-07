@@ -76,61 +76,54 @@
       }
     ]
   },
+  "fork_card": {
+    "matches_request": "да: просадка числа тестов становится механической проверкой без обхода, как просит задача",
+    "alternative": "новая метка agent/allow-fewer-tests как законный обход — владелец видел бы PR с меньшим числом тестов зелёным после метки; выбор сделал владелец поправкой к плану: обхода у инварианта нет",
+    "ripple": "гейт целостности scripts/guard.sh и его тест, работа сборки в .github/workflows/ci-fast.yml, docs/pipeline.md — то, что вызывает или описывает новую проверку",
+    "workaround": "нет: точное равенство со снимком заменяет перечень шаблонов подавлений, а не дополняет его",
+    "council_signs": ["правка обвязки", "общий механизм: гейт целостности и работа сборки идут на каждом PR"],
+    "executor": "субагент шага реализации",
+    "fork": true
+  },
   "files": [
     {
       "path": "tests/test-count.baseline",
       "action": "create",
-      "owner": "implement",
-      "protected": false,
       "why": "снимок числа выполненных случаев и комментарий, как его обновлять; путь не защищённый, иначе каждый PR с новым тестом требовал бы метки"
     },
     {
       "path": "scripts/test-count-invariant.sh",
       "action": "create",
-      "owner": "implement",
-      "protected": true,
       "why": "инвариант результата: сумма выполненных случаев по всем trx против снимка; шапка по образцу гейта — зачем, как запускать, коды возврата, чего не ловит"
     },
     {
       "path": "scripts/test-count-invariant.test.sh",
       "action": "create",
-      "owner": "implement",
-      "protected": true,
       "why": "харнесс на рукописных trx, без dotnet: проверка, которую никто не проверял, зеленела бы и при сломанном разборе"
     },
     {
       "path": "scripts/guard.sh",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "проверка «снимок понижен» как свойство диффа плюс абзац в шапке; перечень шаблонов подавлений не трогается"
     },
     {
       "path": "scripts/guard.test.sh",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "сценарии на новую проверку гейта: понижение, повышение, отсутствие снимка в базовой ревизии, правка комментария, удаление файла"
     },
     {
       "path": ".github/workflows/ci-fast.yml",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
       "why": "шаг «Число выполненных тестов» в работе сборки — там и только там лежит каталог результатов; шаг с харнессом в работе проверок обвязки"
     },
     {
       "path": "docs/pipeline.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": false,
       "why": "строка в таблице харнессов и абзац о том, что перечень подавлений — про дифф, а инвариант — про результат"
     },
     {
       "path": "docs/tasks/83.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": false,
       "why": "журнал: стадии, решения, изменённые файлы, «Проверено» и строка «Следующий шаг»"
     }
   ],
@@ -142,9 +135,6 @@
     "docs/tasks/**"
   ],
   "flags": {
-    "allow_protected": true,
-    "allow_contract": false,
-    "destructive_migration": false,
     "new_dependency": false,
     "new_dependency_reason": ""
   },

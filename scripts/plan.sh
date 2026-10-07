@@ -4,8 +4,9 @@
 #
 # ЗАЧЕМ
 #
-# План согласуется человеком и после этого становится обязательством: ревью
-# корректности сверяет с ним результат. До сих пор план был прозой в одном
+# План лежит в файле docs/tasks/<N>.plan.json и после совета (или человека, если
+# его позвали) становится обязательством: ревью корректности сверяет с ним
+# результат. До сих пор план был прозой в одном
 # поле, и всё, что в нём можно было проверить, проверял читающий — включая то,
 # что читающий проверяет плохо: существует ли путь, попадает ли он в границы
 # задачи, покрыт ли пункт приёмки хотя бы одним тестом. Ошибка такого рода
@@ -17,9 +18,11 @@
 # ЧТО ПРОВЕРЯЕТСЯ
 #
 #   Форма — по scripts/plan-schema.json: обязательные поля, типы, enum,
-#   пустые строки, поля, не описанные схемой. Проверка формы своего списка
-#   полей не имеет вовсе: `required`, `properties`, `enum` и `minLength` она
-#   читает из схемы — копия разъезжается со схемой молча.
+#   pattern, пустые строки, поля, не описанные схемой, и выбор варианта oneOf
+#   (карточка развилки — одна строка либо карточка целиком). Проверка формы
+#   своего списка полей не имеет вовсе: `required`, `properties`, `enum`,
+#   `minLength`, `pattern` и `oneOf` она читает из схемы — копия разъезжается
+#   со схемой молча.
 #
 #   У рендера имена полей перечислены — иначе ему нечем печатать каждое своё,
 #   — и потому вторая половина того же правила стоит там: поле схемы без ветки
@@ -34,9 +37,10 @@
 #   идёт. Побайтового равенства с файлом размещение не обещает: подстановка
 #   сводит хвостовые переводы строки к одному, чтобы закрывающий забор не
 #   приклеился к последней строке плана. Так форма переживает публикацию
-#   у обоих потребителей правила сразу: render — единственный код, который
-#   зовут и цикл (.github/workflows/agent-plan.yml), и локальный оркестратор
-#   (.claude/CLAUDE.md), и дописывать блок у себя потребителю нечем.
+#   вместе с рендером: источник плана — файл docs/tasks/<N>.plan.json, рендер —
+#   для человека, и комментарий в issue, который уходит, когда зовут человека,
+#   несёт и прозу, и ту форму, из которой она напечатана. Дописывать блок
+#   вручную при публикации незачем — его печатает render.
 #
 #   Блок печатается после guard'а пропущенных полей, поэтому в выводе
 #   отказавшего рендера его нет никогда — наличие блока отличает рендер,
@@ -45,30 +49,27 @@
 #
 #   Зачем форма едет тем же комментарием — docs/rules/plan.md, раздел
 #   «Форма — машиночитаемая». Проверяют это сценарии «Рендер вкладывает
-#   машиночитаемую форму», «Обрезка вывода по началу блока проверяется на
-#   себе» и «Блок с формой печатает один рендер, а не каждый потребитель».
+#   машиночитаемую форму» и «Обрезка вывода по началу блока проверяется на
+#   себе».
 #
-#   Семь классов содержательных нарушений:
+#   Пять классов содержательных нарушений:
 #     1. путь на modify или delete не существует;
 #     2. путь не попадает ни под одну границу задачи;
-#     3. защищённая зона оформлена неверно — путь без отметки protected,
-#        отметка без флага, отметка на незащищённом пути, конфигурация прав
-#        шага с owner=implement;
-#     4. пункт контракта приёмки не покрыт ни одним тестом — и обратное:
+#     3. пункт контракта приёмки не покрыт ни одним тестом — и обратное:
 #        tests[].covers ссылается на пункт, которого в плане нет;
-#     5. существующий тест выдан за новый;
-#     6. флаг не согласован с путями — в обе стороны;
-#     7. способ проверки пуст, либо «непроверяем» без причины.
+#     4. существующий тест выдан за новый;
+#     5. способ проверки пуст, либо «непроверяем» без причины.
 #
-#   Сверх классов: наблюдение раздела «Как устроено сейчас» ссылается на
-#   несуществующий путь или на строку за концом файла; путь уводит за дерево
-#   репозитория — ведущим «/» или сегментом «..», одинаково в files и в
-#   current_state; новая зависимость без обоснования со ссылкой на комментарий
-#   issue.
+#   Сверх классов: наблюдение раздела «Как устроено сейчас» или первопричина
+#   разбора бага ссылается на несуществующий путь или на строку за концом
+#   файла; путь уводит за дерево репозитория — ведущим «/» или сегментом «..»,
+#   одинаково в files, current_state и bug_analysis.root_cause; новая
+#   зависимость без обоснования со ссылкой на комментарий issue.
 #
-#   Предупреждением, не отказом: план больше PLAN_FILES_WARN файлов. Жёсткий
-#   предел краснел бы на плане, который человек уже одобрил, то есть запрещал
-#   бы то, что решает человек.
+#   Предупреждением, не отказом: план больше PLAN_FILES_WARN файлов; в
+#   карточке развилки есть развилка (fork=true) — это триггер «позвать
+#   человека», а не дефект плана. Жёсткий предел на размер краснел бы на плане,
+#   который человек уже одобрил, то есть запрещал бы то, что решает человек.
 #
 # ЧЕГО НЕ ЛОВИТ
 #
@@ -79,9 +80,13 @@
 #   Соответствие поля boundaries прозе issue. Границы в теле задачи — текст,
 #   множество путей из него механически не выводится. Проверяется внутренняя
 #   согласованность плана: files ⊆ boundaries. Что сами границы названы верно,
-#   проверяет плановый круг ревью.
+#   проверяет совет по плану.
 #
-#   Пункт со значением «непроверяем» освобождён от проверки 4: теста у него по
+#   Правду карточки развилки. Форма проверяется — карточка целиком или одна
+#   строка trivial, без пустых строк, — а верно ли названа развилка и тот ли
+#   второй способ, решает чтение.
+#
+#   Пункт со значением «непроверяем» освобождён от проверки 3: теста у него по
 #   определению нет. Отсюда способ обойти проверку — объявить пункт
 #   непроверяемым; причина при нём обязательна, и читает её человек.
 #
@@ -97,9 +102,9 @@
 #
 # КАК ЗАПУСКАТЬ
 #
-#   bash scripts/plan.sh validate plan.json
+#   bash scripts/plan.sh validate docs/tasks/<N>.plan.json
 #   bash scripts/plan.sh validate scripts/fixtures/plans/93.json --at <ref>
-#   bash scripts/plan.sh render   plan.json
+#   bash scripts/plan.sh render   docs/tasks/<N>.plan.json
 #
 # Флаг --at <ref> проверяет план против того дерева, для которого он писался:
 # существование путей и поиск тестов идут по ref, а не по рабочему каталогу.
@@ -114,7 +119,6 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCHEMA="$SCRIPT_DIR/plan-schema.json"
-PATHS_FILE="$SCRIPT_DIR/protected-paths.sh"
 
 # Ориентир из docs/rules/triage.md — «до 10 файлов». Порог поднят с запасом:
 # предупреждение должно отмечать необычный план, а не каждый второй.
@@ -171,55 +175,6 @@ jq -e . "$PLAN" >/dev/null 2>&1 || die "Файл плана не разбира�
 jq -e . "$SCHEMA" >/dev/null 2>&1 || die "Схема не разбирается как JSON: $SCHEMA"
 
 cd "$ROOT" || die "Не удалось перейти в корень репозитория: $ROOT"
-
-# ------------------------------------------------------------------
-# Общий список защищённых путей. Пустой или ненайденный список — это не
-# «нет защищённых путей», а сломанная проверка.
-# ------------------------------------------------------------------
-[ -f "$PATHS_FILE" ] || die "Не найден список защищённых путей: $PATHS_FILE"
-# shellcheck source=protected-paths.sh
-. "$PATHS_FILE"
-[ "${#PROTECTED_PATTERNS[@]}" -gt 0 ] || die 'Список защищённых путей пуст.'
-
-PROTECTED_RE="$(protected_regex)"
-
-# Подмножества того же списка, которым соответствуют отдельные метки. Маски
-# здесь не переписываются, а сверяются с общим списком по точному совпадению:
-# пропажа маски из списка роняет запуск, а не оставляет проверку тихо пустой.
-CONTRACT_PATTERNS=(
-    'contracts/.+'
-    'src/Domovoy\.Mobile\.Core/Generated/.+'
-)
-MIGRATION_PATTERNS=(
-    'src/Domovoy\.Data/Migrations/.+'
-)
-# Конфигурация прав шага: её правит только оркестратор (запись 0018).
-STEP_CONFIG_RE='^\.claude/agents/.+$'
-
-subset_regex() {
-    local -n names="$1"
-    local pattern known found joined=''
-    for pattern in "${names[@]}"; do
-        found=0
-        for known in "${PROTECTED_PATTERNS[@]}"; do
-            if [ "$known" = "$pattern" ]; then
-                found=1
-                break
-            fi
-        done
-        [ "$found" -eq 1 ] \
-            || die "Маска «$pattern» пропала из $PATHS_FILE — проверка флагов стала бы пустой."
-        if [ -z "$joined" ]; then
-            joined="$pattern"
-        else
-            joined="$joined|$pattern"
-        fi
-    done
-    printf '^(%s)$' "$joined"
-}
-
-CONTRACT_RE="$(subset_regex CONTRACT_PATTERNS)" || exit 2
-MIGRATION_RE="$(subset_regex MIGRATION_PATTERNS)" || exit 2
 
 # ------------------------------------------------------------------
 # Доступ к дереву: рабочий каталог или ref.
@@ -361,6 +316,16 @@ def check($s; $v; $p):
     ["\($p): значение null, схема этого не допускает"]
   elif (vtype($s; $v) | not) then
     ["\($p): ожидался тип \($s.type), в плане \($v | type)"]
+  elif (($s.oneOf // null) != null) then
+    # Вариант, под который значение подходит без ошибок, — и значение принято.
+    # Не подошло ни под один — печатаются ошибки ближайшего варианта: «пусто
+    # поле ripple» читается, «не подошло ни под одну форму» — нет. Варианты
+    # закрыты additionalProperties, поэтому смешанная форма не проходит ни один.
+    ( [ $s.oneOf[] | check(.; $v; $p) ] ) as $errs
+    | if any($errs[]; length == 0) then []
+      else ($errs | min_by(length))
+           + ["\($p): не подходит ни под один вариант схемы (oneOf), выше — ошибки ближайшего"]
+      end
   elif ($s.type == "object") then
     ( [ ($s.required // [])[] as $r
         | select(($v | has($r)) | not)
@@ -388,6 +353,12 @@ def check($s; $v; $p):
            and (($v | type) == "string")
            and (($v | length) < $s.minLength)
         then ["\($p): пусто, схема требует не меньше \($s.minLength) символов"]
+        else [] end )
+    + ( if (($s.pattern // null) != null)
+           and (($v | type) == "string")
+           and (($v | length) > 0)
+           and (($v | test($s.pattern)) | not)
+        then ["\($p): значение «\($v)» не по образцу схемы: \($s.pattern)"]
         else [] end ) )
   end;
 
@@ -415,41 +386,61 @@ check_form() {
 # ------------------------------------------------------------------
 # Содержательные проверки.
 # ------------------------------------------------------------------
+# Ссылка «путь:строка» из плана на дерево. Одна на оба места, где план
+# утверждает факт о существующем коде: наблюдение «как устроено сейчас» и
+# первопричина разбора бага. Строка 0 — утверждение о файле целиком.
+check_reference() {
+    local what="$1" path="$2" line="$3" lines
+    if escapes_tree "$path"; then
+        report "$what ссылается на путь вне репозитория: $path — путь пишется от корня, без ведущего «/» и без сегмента «..»"
+        return
+    fi
+    if ! path_exists "$path"; then
+        report "$what ссылается на несуществующий путь: $path"
+        return
+    fi
+    [ "$line" -eq 0 ] && return
+    lines="$(file_line_count "$path")"
+    lines="${lines// /}"
+    if [ -n "$lines" ] && [ "$line" -gt "$lines" ]; then
+        report "$what ссылается на строку $line, а в $path строк $lines"
+    fi
+}
+
 check_current_state() {
-    local path line observation lines rows
+    local path line observation rows
     rows="$(pjq ".current_state[] | [.path, (.line | tostring), .observation] | $JOIN" "$PLAN")" \
         || die 'Разбор плана не отработал (current_state).'
     while IFS="$SEP" read -r path line observation; do
         [ -z "$path" ] && continue
-        if escapes_tree "$path"; then
-            report "наблюдение «как устроено сейчас» ссылается на путь вне репозитория: $path — путь пишется от корня, без ведущего «/» и без сегмента «..»"
-            continue
-        fi
-        if ! path_exists "$path"; then
-            report "наблюдение «как устроено сейчас» ссылается на несуществующий путь: $path"
-            continue
-        fi
-        [ "$line" -eq 0 ] && continue
-        lines="$(file_line_count "$path")"
-        lines="${lines// /}"
-        if [ -n "$lines" ] && [ "$line" -gt "$lines" ]; then
-            report "наблюдение ссылается на строку $line, а в $path строк $lines"
-        fi
+        check_reference 'наблюдение «как устроено сейчас»' "$path" "$line"
     done <<< "$rows"
 }
 
-check_flag() {
-    local name="$1" value="$2" seen="$3" what="$4"
-    if [ "$seen" -eq 1 ] && [ "$value" != 'true' ]; then
-        report "флаг $name не заявлен, а в плане есть $what"
-    fi
-    if [ "$seen" -eq 0 ] && [ "$value" = 'true' ]; then
-        report "флаг $name заявлен, но ни один путь плана под него не подпадает"
+# Форма root_cause — «файл:строка» — проверена образцом схемы до этого места.
+# Делится по последнему двоеточию: в пути от корня репозитория двоеточия нет,
+# но разбор не должен на это опираться.
+check_bug_analysis() {
+    local cause
+    cause="$(pjq '.bug_analysis.root_cause // empty' "$PLAN")" \
+        || die 'Разбор плана не отработал (bug_analysis).'
+    [ -n "$cause" ] || return 0
+    check_reference 'первопричина разбора бага' "${cause%:*}" "${cause##*:}"
+}
+
+# Развилка — не дефект плана, а триггер «позвать человека». Предупреждение, а не
+# нарушение: план с развилкой корректен, решать её не валидатору.
+check_fork_card() {
+    local fork
+    fork="$(pjq '.fork_card.fork // false' "$PLAN")" \
+        || die 'Разбор плана не отработал (fork_card).'
+    if [ "$fork" = 'true' ]; then
+        warn 'в карточке развилки есть развилка — триггер «позвать человека»: план смотрит человек до реализации'
     fi
 }
 
 check_files() {
-    local path action owner protected why boundary covered rows
+    local path action why boundary covered rows
     local total=0
     local -a boundaries=()
 
@@ -458,16 +449,9 @@ check_files() {
         [ -n "$boundary" ] && boundaries+=("$boundary")
     done <<< "$rows"
 
-    local allow_protected allow_contract destructive
-    allow_protected="$(pjq '.flags.allow_protected' "$PLAN")"
-    allow_contract="$(pjq '.flags.allow_contract' "$PLAN")"
-    destructive="$(pjq '.flags.destructive_migration' "$PLAN")"
-
-    local seen_protected=0 seen_contract=0 seen_migration=0
-
-    rows="$(pjq ".files[] | [.path, .action, .owner, (.protected | tostring), .why] | $JOIN" "$PLAN")" \
+    rows="$(pjq ".files[] | [.path, .action, .why] | $JOIN" "$PLAN")" \
         || die 'Разбор плана не отработал (files).'
-    while IFS="$SEP" read -r path action owner protected why; do
+    while IFS="$SEP" read -r path action why; do
         [ -z "$path" ] && continue
         total=$((total + 1))
 
@@ -497,33 +481,7 @@ check_files() {
         if [ "$covered" -eq 0 ]; then
             report "путь вне границ задачи: $path — ни одна граница не покрывает: ${boundaries[*]}"
         fi
-
-        # Класс 3.
-        if matches "$path" "$PROTECTED_RE"; then
-            seen_protected=1
-            if [ "$protected" != 'true' ]; then
-                report "защищённый путь без отметки protected: $path"
-            fi
-            if [ "$allow_protected" != 'true' ]; then
-                report "защищённый путь при flags.allow_protected=false: $path — гейт целостности завернёт PR"
-            fi
-        elif [ "$protected" = 'true' ]; then
-            report "отметка protected на незащищённом пути: $path"
-        fi
-
-        if matches "$path" "$STEP_CONFIG_RE" && [ "$owner" != 'orchestrator' ]; then
-            report "конфигурация прав шага с owner=$owner: $path — такую правку делает оркестратор, запись 0018"
-        fi
-
-        matches "$path" "$CONTRACT_RE" && seen_contract=1
-        matches "$path" "$MIGRATION_RE" && seen_migration=1
     done <<< "$rows"
-
-    # Класс 6. Флаг и пути сверяются в обе стороны: заявленный без повода флаг
-    # просит у человека метку, которая ничего не разрешает.
-    check_flag 'allow_protected' "$allow_protected" "$seen_protected" 'защищённый путь'
-    check_flag 'allow_contract' "$allow_contract" "$seen_contract" 'путь контракта API'
-    check_flag 'destructive_migration' "$destructive" "$seen_migration" 'путь под миграциями'
 
     if [ "$total" -gt "$PLAN_FILES_WARN" ]; then
         warn "файлов в плане $total, ориентир — до $PLAN_FILES_WARN. Если размер принят осознанно, это просто отметка"
@@ -550,7 +508,7 @@ check_acceptance() {
         [ -z "$id" ] && continue
         ids+=("$id")
 
-        # Класс 7.
+        # Класс 5.
         if [ -z "$method" ]; then
             report "пункт приёмки «$id» без способа проверки: пустую ячейку не отличить от забытой, «$unverifiable» с причиной — отличить"
             continue
@@ -559,7 +517,7 @@ check_acceptance() {
             if [ -z "$evidence" ]; then
                 report "пункт приёмки «$id» помечен «$unverifiable» без причины"
             fi
-            # Класс 4 к непроверяемому пункту неприменим: теста у него нет по
+            # Класс 3 к непроверяемому пункту неприменим: теста у него нет по
             # определению. Названо в шапке, раздел «ЧЕГО НЕ ЛОВИТ».
             continue
         fi
@@ -567,7 +525,7 @@ check_acceptance() {
             report "пункт приёмки «$id» без доказательства: способ есть, а что считать пройденным — нет"
         fi
 
-        # Класс 4.
+        # Класс 3.
         found=0
         for c in ${covered[@]+"${covered[@]}"}; do
             if [ "$c" = "$id" ]; then
@@ -578,7 +536,7 @@ check_acceptance() {
         [ "$found" -eq 1 ] || report "пункт приёмки «$id» не покрыт ни одним тестом"
     done <<< "$rows"
 
-    # Обратная сторона класса 4. Опечатка в tests[].covers ссылается в пустоту
+    # Обратная сторона класса 3. Опечатка в tests[].covers ссылается в пустоту
     # и молчит, пока каждый настоящий пункт покрыт другим тестом: покрытие
     # выглядит полным, а один тест на самом деле не закрывает ничего.
     local test_name cover
@@ -606,7 +564,7 @@ check_tests() {
         [ -z "$name" ] && continue
         [ "$new" = 'true' ] || continue
 
-        # Класс 5.
+        # Класс 4.
         hits="$(search_tree "$name" | tr '\n' ' ')"
         hits="${hits% }"
         if [ -n "$hits" ]; then
@@ -638,6 +596,8 @@ do_validate() {
     fi
 
     check_current_state
+    check_bug_analysis
+    check_fork_card
     check_files
     check_acceptance
     check_tests
@@ -685,14 +645,39 @@ render_field() {
                 pjq '.approach.rejected[] | "- \(.option) — \(.reason)"' "$PLAN"
             fi
             ;;
+        bug_analysis)
+            pjq '.bug_analysis
+                | "- **Симптом:** \(.symptom)",
+                  "- **Различающее предусловие:** \(.precondition)",
+                  "- **Первопричина:** `\(.root_cause)`",
+                  "- **Отвергнутые гипотезы:** "
+                    + (if (.rejected_hypotheses | length) == 0 then "нет" else "" end),
+                  (.rejected_hypotheses[] | "  - \(.)")' "$PLAN"
+            ;;
+        fork_card)
+            # Вариант карточки — по ключу trivial: форма уже проверена oneOf,
+            # и смешанной карточки здесь быть не может.
+            pjq '.fork_card
+                | if has("trivial") then "Тривиальная правка: \(.trivial)"
+                  else
+                    "- **Совпадает с просьбой задачи:** \(.matches_request)",
+                    "- **Второй способ и что увидел бы пользователь:** \(.alternative)",
+                    "- **Что ещё меняется:** \(.ripple)",
+                    "- **Костыль ли это:** \(.workaround)",
+                    "- **Сработавшие признаки совета:** "
+                      + (if (.council_signs | length) == 0 then "нет"
+                         else (.council_signs | join("; ")) end),
+                    "- **Исполнитель:** \(.executor)",
+                    "- **Развилка:** "
+                      + (if .fork then "да — триггер «позвать человека»" else "нет" end)
+                  end' "$PLAN"
+            ;;
         files)
-            printf '| Файл | Действие | Кто правит | Защищённый | Зачем |\n'
-            printf '|---|---|---|---|---|\n'
+            printf '| Файл | Действие | Зачем |\n'
+            printf '|---|---|---|\n'
             pjq "$CELL"'
                 .files[]
-                | "| `\(.path | cell)` | \(.action) | \(.owner) | "
-                  + (if .protected then "да" else "нет" end)
-                  + " | \(.why | cell) |"' "$PLAN"
+                | "| `\(.path | cell)` | \(.action) | \(.why | cell) |"' "$PLAN"
             ;;
         boundaries)
             pjq '.boundaries[] | "- `\(.)`"' "$PLAN"
@@ -736,6 +721,15 @@ render_field() {
     RENDERED="$RENDERED$key"$'\n'
 }
 
+# Необязательное поле, которого в плане нет (разбор бага у задачи-не-бага),
+# печатать нечем — ни подписи, ни пустого блока. В список дошедших до рендера
+# оно всё равно попадает: отсутствие в плане — не потеря раздела. Ветку рендера
+# такого поля держит согласованная фикстура plan.test.sh: в ней заполнено
+# каждое поле схемы, и поле без ветки роняет рендер там.
+plan_has() {
+    [ "$(pjq --arg k "$1" 'has($k)' "$PLAN")" = 'true' ]
+}
+
 do_render() {
     local num key title label into missed=''
 
@@ -754,6 +748,10 @@ do_render() {
 
         while IFS="$SEP" read -r into label; do
             [ -z "$into" ] && continue
+            if ! plan_has "$into"; then
+                RENDERED="$RENDERED$into"$'\n'
+                continue
+            fi
             printf '\n**%s.**\n\n' "$label"
             render_field "$into"
         done < <(pjq --argjson n "$num" ".properties | to_entries[]
@@ -775,10 +773,9 @@ do_render() {
     [ -z "$missed" ] || die "Поля схемы не попали в рендер:$missed"
 
     # Машиночитаемая форма едет тем же выводом, что и рендер, и вкладывает её
-    # сам render — единственный код, который зовут оба потребителя правила:
-    # цикл (.github/workflows/agent-plan.yml) и локальный оркестратор
-    # (.claude/CLAUDE.md). Дописывать блок у себя потребителю нечем, поэтому
-    # расхождение поведения по потребителям невозможно, а не незапрещено.
+    # сам render: источник плана — файл docs/tasks/<N>.plan.json, рендер читает
+    # человек, и комментарий в issue, когда человека зовут, несёт обе половины.
+    # Публикующему дописывать блок вручную нечем и незачем.
     #
     # Печатается последним и после guard'а пропущенных полей: в выводе
     # отказавшего рендера блока нет никогда, и это единственное, что

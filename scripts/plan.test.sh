@@ -20,13 +20,13 @@
 #   3. каждое строковое значение фикстуры доезжает до рендера — поле,
 #      добавленное в схему без ветки рендера, иначе исчезало бы из
 #      опубликованного плана молча;
-#   4. рендер вкладывает машиночитаемую форму свёрнутым блоком, форма из блока
-#      равна плану на входе, а своего такого блока потребитель не печатает.
+#   4. рендер вкладывает машиночитаемую форму свёрнутым блоком, и форма из
+#      блока равна плану на входе.
 #
 # ОБРЕЗКА ВЫВОДА
 #
 # Вложенная форма содержит каждое значение плана дословно, поэтому сценарии из
-# пункта 3 и класса 7 искали бы значения в ней, а не в прозе рендера, и
+# пункта 3 и класса 5 искали бы значения в ней, а не в прозе рендера, и
 # зеленели бы тривиально. Они смотрят на вывод, обрезанный помощником
 # prose_only; сама обрезка проверяется на себе — сценарий «Обрезка вывода по
 # началу блока проверяется на себе».
@@ -34,7 +34,10 @@
 # ИСТОРИЧЕСКИЕ ПЛАНЫ
 #
 # Три реальных плана из истории задач лежат в scripts/fixtures/plans и
-# проверяются против того дерева, для которого писались (--at). Это половина
+# проверяются против того дерева, для которого писались (--at). Что без --at
+# план краснеет на разнице деревьев, доказывается не на них, а во временном
+# репозитории с двумя коммитами: история этого репозитория меняется, и
+# доказательство, опирающееся на её файлы, умирает вместе с ними. Это половина
 # критерия «ни одного ложного срабатывания»: класс нарушений можно поймать
 # сколь угодно строгой проверкой, и цена строгости видна только на планах,
 # которые человек уже одобрил.
@@ -201,79 +204,84 @@ cat > "$CANON" <<'PLAN'
   "issue": 4242,
   "current_state": [
     {
-      "path": "scripts/wiring.sh",
-      "line": 16,
-      "observation": "сверка обвязки требует, чтобы каждый scripts/*.sh вызывался хотя бы одним workflow либо был освобождён маркером с причиной"
+      "path": "scripts/plan.sh",
+      "line": 20,
+      "observation": "валидатор отвергает пустой способ проверки, но пункт «непроверяем» с причиной принимает бессрочно"
     },
     {
       "path": "docs/rules/plan.md",
-      "line": 13,
-      "observation": "разделов плана семь, и их порядок задан здесь"
+      "line": 0,
+      "observation": "контракт приёмки допускает значение «непроверяем» с причиной и ничего не говорит о сроке"
     }
   ],
+  "bug_analysis": {
+    "symptom": "план с пунктом «непроверяем» годичной давности проходит валидатор кодом 0",
+    "precondition": "пункт помечен «непроверяем» и причина непустая; с пустой причиной валидатор краснеет",
+    "root_cause": "scripts/plan.sh:20",
+    "rejected_hypotheses": [
+      "причина обрезается при разборе — нет: рендер печатает её целиком"
+    ]
+  },
   "approach": {
-    "summary": "Освобождение от обвязки перестаёт быть строкой в шапке и становится записью с причиной и сроком: сверка читает обе части, а не только длину причины.",
+    "summary": "Пункт «непроверяем» перестаёт быть бессрочным: причина и срок, валидатор читает обе части, а не только длину причины.",
     "rejected": [
       {
-        "option": "отдельный файл со списком освобождений",
-        "reason": "второе описание того же множества, разъедется с шапками молча"
+        "option": "отдельный файл со списком непроверяемых пунктов",
+        "reason": "второе описание того же множества, разъедется с планами молча"
       }
     ]
   },
+  "fork_card": {
+    "matches_request": "да: задача просит срок у непроверяемого пункта, и план вводит именно его",
+    "alternative": "предупреждение вместо отказа — владелец видел бы зелёный план с просроченным пунктом; цена та же",
+    "ripple": "по грепу x-unverifiable: только scripts/plan.sh и схема, других читателей нет",
+    "workaround": "нет: срок проверяется там же, где причина",
+    "council_signs": ["правка обвязки"],
+    "executor": "оркестратор сам: два файла, место найдено",
+    "fork": false
+  },
   "files": [
     {
-      "path": "scripts/wiring.sh",
+      "path": "scripts/plan.sh",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
-      "why": "разбор маркера освобождения: причина и срок вместо одной причины"
+      "why": "разбор пункта «непроверяем»: причина и срок вместо одной причины"
+    },
+    {
+      "path": "scripts/review-comments.sh",
+      "action": "modify",
+      "why": "сообщение о просроченном пункте в той же форме, что замечания"
     },
     {
       "path": "docs/rules/plan.md",
       "action": "modify",
-      "owner": "implement",
-      "protected": true,
-      "why": "план называет срок освобождения там же, где перечисляет файлы"
-    },
-    {
-      "path": ".claude/agents/step-plan.md",
-      "action": "modify",
-      "owner": "orchestrator",
-      "protected": true,
-      "why": "шагу планирования нужна новая команда в списке хука"
+      "why": "план называет срок непроверяемого пункта там же, где причину"
     },
     {
       "path": "docs/tasks/4242.md",
       "action": "create",
-      "owner": "implement",
-      "protected": false,
       "why": "журнал задачи"
     }
   ],
   "boundaries": [
     "scripts/**",
     "docs/rules/**",
-    ".claude/agents/**",
     "docs/tasks/**"
   ],
   "flags": {
-    "allow_protected": true,
-    "allow_contract": false,
-    "destructive_migration": false,
     "new_dependency": false,
     "new_dependency_reason": ""
   },
   "tests": [
     {
-      "name": "освобождение без срока не проходит сверку",
-      "file": "scripts/wiring.test.sh",
+      "name": "непроверяемый пункт без срока не проходит валидатор",
+      "file": "scripts/plan.test.sh",
       "new": true,
       "covers": ["marker-reason"],
-      "behavior": "маркер с причиной, но без срока даёт код 1 и называет файл"
+      "behavior": "пункт с причиной, но без срока даёт код 1 и называет пункт"
     },
     {
-      "name": "просроченное освобождение названо вслух",
-      "file": "scripts/wiring.test.sh",
+      "name": "просроченный непроверяемый пункт назван вслух",
+      "file": "scripts/plan.test.sh",
       "new": true,
       "covers": ["marker-expiry"],
       "behavior": "срок в прошлом даёт код 1 и печатает дату"
@@ -282,32 +290,32 @@ cat > "$CANON" <<'PLAN'
   "acceptance": [
     {
       "id": "marker-reason",
-      "criterion": "Маркер освобождения без причины заворачивается",
-      "method": "bash scripts/wiring.test.sh",
-      "evidence": "сценарий «освобождение без срока не проходит сверку» проходит, итог «провалено 0»"
+      "criterion": "Непроверяемый пункт без срока заворачивается",
+      "method": "bash scripts/plan.test.sh",
+      "evidence": "сценарий «непроверяемый пункт без срока не проходит валидатор» проходит, итог «провалено: 0»"
     },
     {
       "id": "marker-expiry",
-      "criterion": "Просроченное освобождение заворачивается",
-      "method": "bash scripts/wiring.sh",
+      "criterion": "Просроченный непроверяемый пункт заворачивается",
+      "method": "bash scripts/plan.sh validate docs/tasks/4242.plan.json",
       "evidence": "код возврата 1 и дата в выводе"
     },
     {
-      "id": "loop-half",
-      "criterion": "То же поведение в агентском цикле",
+      "id": "live-session",
+      "criterion": "То же поведение в живой сессии",
       "method": "непроверяем",
-      "evidence": "цикл выключен переменной AGENT_LOOP_ENABLED, живого прогона нет; расхождение записывается в журнал"
+      "evidence": "живой прогон в новой сессии в эту задачу не входит; расхождение записывается в журнал"
     }
   ],
   "risks": [
     {
-      "risk": "Срок освобождения превращается в способ отложить работу навсегда.",
+      "risk": "Срок непроверяемого пункта превращается в способ отложить работу навсегда.",
       "mitigation": "просроченный срок краснеет так же, как отсутствующая причина"
     }
   ],
   "out_of_scope": [
-    "перенос существующих освобождений на новую форму разом",
-    "проверка того, что причина освобождения правдива"
+    "перенос существующих планов на новую форму разом",
+    "проверка того, что причина непроверяемости правдива"
   ]
 }
 PLAN
@@ -332,25 +340,25 @@ end_case
 
 # ------------------------------------------------------------------
 begin_case 'Наблюдение «как устроено сейчас»: путь и номер строки'
-run_validate "$(mutate '.current_state[0].path = "scripts/wiring-which-never-was.sh"')"
+run_validate "$(mutate '.current_state[0].path = "scripts/plan-which-never-was.sh"')"
 expect_status 1
-expect_output 'наблюдение «как устроено сейчас» ссылается на несуществующий путь: scripts/wiring-which-never-was.sh'
+expect_output 'наблюдение «как устроено сейчас» ссылается на несуществующий путь: scripts/plan-which-never-was.sh'
 
 run_validate "$(mutate '.current_state[0].line = 999999')"
 expect_status 1
-expect_output 'наблюдение ссылается на строку 999999, а в scripts/wiring.sh строк'
+expect_output 'наблюдение «как устроено сейчас» ссылается на строку 999999, а в scripts/plan.sh строк'
 end_case
 
 # ------------------------------------------------------------------
 begin_case 'Класс 1: путь на правку не существует'
-run_validate "$(mutate '.files[0].path = "scripts/wiring-which-never-was.sh"')"
+run_validate "$(mutate '.files[0].path = "scripts/plan-which-never-was.sh"')"
 expect_status 1
-expect_output 'путь на modify не существует: scripts/wiring-which-never-was.sh'
+expect_output 'путь на modify не существует: scripts/plan-which-never-was.sh'
 end_case
 
 # ------------------------------------------------------------------
 begin_case 'Класс 2: путь вне границ задачи'
-run_validate "$(mutate '.files[0].path = "src/Domovoy.Api/Program.cs" | .files[0].protected = false')"
+run_validate "$(mutate '.files[0].path = "src/Domovoy.Api/Program.cs"')"
 expect_status 1
 expect_output 'путь вне границ задачи: src/Domovoy.Api/Program.cs'
 expect_output 'scripts/**'
@@ -362,12 +370,11 @@ begin_case 'Путь за деревом репозитория отвергае
 # есть план авторизует себя сам. Проверка обязана сработать до класса 2.
 run_validate "$(mutate '
     .files[0].path = "../home-agent-source/tz-home-agent.md"
-    | .files[0].protected = false
     | .boundaries += ["../**"]')"
 expect_status 1
 expect_output 'путь вне репозитория: ../home-agent-source/tz-home-agent.md'
 
-run_validate "$(mutate '.files[0].path = "/etc/hosts" | .files[0].protected = false')"
+run_validate "$(mutate '.files[0].path = "/etc/hosts"')"
 expect_status 1
 expect_output 'путь вне репозитория: /etc/hosts'
 expect_no_output 'путь вне границ задачи: /etc/hosts'
@@ -395,53 +402,31 @@ expect_no_output 'а в /etc/hosts строк'
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Класс 3: защищённая зона оформлена неверно, два подслучая'
-run_validate "$(mutate '.files[0].protected = false | .files[2].owner = "implement"')"
-expect_status 1
-expect_output 'защищённый путь без отметки protected: scripts/wiring.sh'
-expect_output 'конфигурация прав шага с owner=implement: .claude/agents/step-plan.md'
-end_case
-
-# ------------------------------------------------------------------
-begin_case 'Класс 3: два оставшихся подслучая — отметка без пути и путь без флага'
-run_validate "$(mutate '.files[3].protected = true')"
-expect_status 1
-expect_output 'отметка protected на незащищённом пути: docs/tasks/4242.md'
-
-# Флаг снят при трёх защищённых путях: краснеет и сам путь, и класс 6 —
-# метку, которую просит план, снимать некому.
-run_validate "$(mutate '.flags.allow_protected = false')"
-expect_status 1
-expect_output 'защищённый путь при flags.allow_protected=false: scripts/wiring.sh'
-expect_output 'флаг allow_protected не заявлен, а в плане есть защищённый путь'
-end_case
-
-# ------------------------------------------------------------------
-begin_case 'Класс 4: пункт приёмки без покрывающего теста'
+begin_case 'Класс 3: пункт приёмки без покрывающего теста'
 run_validate "$(mutate '.tests[0].covers = ["marker-expiry"]')"
 expect_status 1
 expect_output 'пункт приёмки «marker-reason» не покрыт ни одним тестом'
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Класс 4 с обратной стороны: covers ссылается в пустоту'
+begin_case 'Класс 3 с обратной стороны: covers ссылается в пустоту'
 # Оба настоящих пункта остаются покрытыми, поэтому прямая проверка молчит —
 # видно ровно опечатку в идентификаторе, а не её последствие.
 run_validate "$(mutate '.tests += [{
-    "name": "маркер без срока называет дату отсечения",
-    "file": "scripts/wiring.test.sh",
+    "name": "пункт без срока называет дату отсечения",
+    "file": "scripts/plan.test.sh",
     "new": true,
     "covers": ["marker-expiery"],
-    "behavior": "в сообщении стоит дата, после которой освобождение считается просроченным"
+    "behavior": "в сообщении стоит дата, после которой пункт считается просроченным"
   }]')"
 expect_status 1
 expect_output 'покрывает несуществующий пункт приёмки: «marker-expiery»'
-expect_output 'маркер без срока называет дату отсечения'
+expect_output 'пункт без срока называет дату отсечения'
 expect_no_output 'не покрыт ни одним тестом'
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Класс 5: существующий тест выдан за новый'
+begin_case 'Класс 4: существующий тест выдан за новый'
 run_validate "$(mutate '.tests[0].name = "MobileLayeringTests"')"
 expect_status 1
 expect_output 'тест объявлен новым, но имя уже встречается: MobileLayeringTests'
@@ -449,31 +434,14 @@ expect_output 'tests/Domovoy.Tests/MobileLayeringTests.cs'
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Класс 6: флаги не согласованы с путями, в обе стороны'
-run_validate "$(mutate '
-    .boundaries += ["src/Domovoy.Data/Migrations/**"]
-    | .files += [{
-        "path": "src/Domovoy.Data/Migrations/20240101120000_Init.cs",
-        "action": "create",
-        "owner": "implement",
-        "protected": true,
-        "why": "первая миграция"
-      }]
-    | .flags.allow_contract = true')"
-expect_status 1
-expect_output 'флаг destructive_migration не заявлен, а в плане есть путь под миграциями'
-expect_output 'флаг allow_contract заявлен, но ни один путь плана под него не подпадает'
-end_case
-
-# ------------------------------------------------------------------
-begin_case 'Класс 7: пустая ячейка против «непроверяем»'
+begin_case 'Класс 5: пустая ячейка против «непроверяем»'
 run_validate "$(mutate '.acceptance[1].method = ""')"
 expect_status 1
 expect_output 'пункт приёмки «marker-expiry» без способа проверки'
 
 run_validate "$(mutate '.acceptance[2].evidence = ""')"
 expect_status 1
-expect_output 'пункт приёмки «loop-half» помечен «непроверяем» без причины'
+expect_output 'пункт приёмки «live-session» помечен «непроверяем» без причины'
 
 # Третий подслучай — тот же пункт с причиной. Он в согласованном плане уже
 # есть, и проверяется здесь не код возврата, а то, что причина доезжает до
@@ -484,7 +452,7 @@ expect_output 'пункт приёмки «loop-half» помечен «непр
 run_render "$CANON"
 expect_status 0
 expect_prose 'непроверяем'
-expect_prose 'цикл выключен переменной AGENT_LOOP_ENABLED'
+expect_prose 'живой прогон в новой сессии в эту задачу не входит'
 end_case
 
 # ------------------------------------------------------------------
@@ -504,9 +472,9 @@ end_case
 
 # ------------------------------------------------------------------
 begin_case 'Форма: значение вне enum схемы'
-run_validate "$(mutate '.files[0].owner = "human"')"
+run_validate "$(mutate '.files[0].action = "rename"')"
 expect_status 1
-expect_output 'вне enum схемы'
+expect_output 'план.files[0].action: значение «rename» вне enum схемы'
 end_case
 
 # ------------------------------------------------------------------
@@ -517,11 +485,25 @@ end_case
 #
 # Для массива поле считается пропущенным, когда его нет ни в одном элементе:
 # ровно этого требует цель обхода — чтобы значение доехало до рендера хотя бы
-# раз. Сегодня все вложенные поля схемы обязательны, и разница между «ни в
-# одном» и «не в каждом» проявится на первом же необязательном.
+# раз. Пустой массив считается пропуском по той же причине — значению из него
+# нечего доезжать до рендера, — поэтому в фикстуре council_signs и
+# rejected_hypotheses непусты. Необязательное поле верхнего уровня
+# (bug_analysis) обход тоже требует: его ветку рендера проверяет только
+# фикстура, в которой оно есть.
+#
+# У поля с вариантами (oneOf) обход идёт по варианту, под который план
+# подходит по обязательным полям, а не подходит ни под один — по самому
+# полному: пропуск поля карточки обязан быть назван. Вариант trivial карточки
+# развилки проверяется отдельным сценарием.
 WALK_PROGRAM='
 def walk($s; $v; $p):
-  if ($s.type == "object") then
+  if (($s.oneOf // null) != null) then
+    ( [ $s.oneOf[] | . as $b
+        | select((($v | type) == "object")
+                 and (($b.required // []) | all(. as $r | $v | has($r)))) ] ) as $fit
+    | if ($fit | length) > 0 then walk($fit[0]; $v; $p)
+      else walk(($s.oneOf | max_by(.properties | length)); $v; $p) end
+  elif ($s.type == "object") then
     [ (($s.properties // {}) | keys_unsorted)[] as $k
       | if (($v | type) == "object") and ($v | has($k))
         then walk($s.properties[$k]; $v[$k]; "\($p).\($k)")[]
@@ -554,6 +536,13 @@ jq 'del(.files[].why)' "$CANON" > "$TRIMMED"
 if ! missing_fields "$TRIMMED" | grep -qxF 'план.files[].why'; then
     fail_case 'обход не заметил вложенное поле, удалённое из всех элементов массива'
 fi
+
+# То же для поля с вариантами: пропуск в карточке не должен прятаться за тем,
+# что вариант с этим полем больше не подходит по обязательным.
+jq 'del(.fork_card.ripple)' "$CANON" > "$TRIMMED"
+if ! missing_fields "$TRIMMED" | grep -qxF 'план.fork_card.ripple'; then
+    fail_case 'обход не заметил поле карточки развилки, удалённое из плана'
+fi
 end_case
 
 # ------------------------------------------------------------------
@@ -579,13 +568,13 @@ begin_case 'Рендер: пайп в значении не разъезжает
 # кладётся: инвариант рендера ищет значения дословно, и там он поймал бы
 # экранирование как пропажу значения.
 run_render "$(mutate '
-    .files[0].why = "разбор маркера: причина|срок вместо одной причины"
-    | .tests[0].name = "освобождение без срока|без причины не проходит сверку"
+    .files[0].why = "разбор пункта: причина|срок вместо одной причины"
+    | .tests[0].name = "пункт без срока|без причины не проходит валидатор"
     | .acceptance[0].id = "marker|reason"
     | .tests[0].covers = ["marker|reason"]
     | .acceptance[0].method = "grep -nE \"curl|anthropic\" scripts/plan.sh"')"
 expect_status 0
-expect_cells 'причина\|срок' 6
+expect_cells 'причина\|срок' 4
 expect_cells 'срока\|без причины' 6
 expect_cells 'marker\|reason' 6
 expect_cells 'curl\|anthropic' 4
@@ -662,22 +651,104 @@ fi
 end_case
 
 # ------------------------------------------------------------------
-begin_case 'Блок с формой печатает один рендер, а не каждый потребитель'
-# Пока блок дописывал каждый потребитель у себя, поведение расходилось молча:
-# цикл форму вкладывал, локальный оркестратор — нет. Теперь её печатает общий
-# render, и своего блока у потребителя быть не должно — иначе в комментарии
-# их станет два.
-WORKFLOW="$ROOT/.github/workflows/agent-plan.yml"
-if [ ! -f "$WORKFLOW" ]; then
-    fail_case "нет файла потребителя: $WORKFLOW — сценарий провален, а не пропущен"
-else
-    # Ищется тег, а не фраза: проза с адресом источника на месте удалённого
-    # блока проверку ронять не должна.
-    OWN_BLOCKS="$(grep -cF -- "$FORM_SUMMARY" "$WORKFLOW")"
-    if [ "$OWN_BLOCKS" -ne 0 ]; then
-        fail_case "потребитель печатает свой блок с формой: вхождений тега $OWN_BLOCKS, ожидалось 0"
-    fi
-fi
+begin_case 'Карточка развилки: обязательна, пустая строка и смешанная форма отвергаются'
+run_validate "$(mutate 'del(.fork_card)')"
+expect_status 1
+expect_output 'план.fork_card: обязательное поле схемы отсутствует'
+
+# Ошибка печатается по ближайшему варианту: «пусто поле ripple» читается,
+# «не подошло ни под одну форму» без подробностей — нет.
+run_validate "$(mutate '.fork_card.ripple = ""')"
+expect_status 1
+expect_output 'план.fork_card.ripple: пусто'
+expect_output 'план.fork_card: не подходит ни под один вариант схемы'
+
+# Смешанная форма: строка trivial поверх полной карточки. Варианты закрыты
+# additionalProperties, поэтому она не проходит ни один.
+run_validate "$(mutate '.fork_card.trivial = "опечатка в сообщении"')"
+expect_status 1
+expect_output 'план.fork_card: не подходит ни под один вариант схемы'
+
+run_validate "$(mutate '.fork_card = {"trivial": ""}')"
+expect_status 1
+expect_output 'план.fork_card.trivial: пусто'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Карточка развилки: тривиальная правка — одна строка, и она доезжает до рендера'
+TRIVIAL="$(mutate '.fork_card = {"trivial": "опечатка в сообщении валидатора, второго способа нет"}')"
+run_validate "$TRIVIAL"
+expect_status 0
+expect_no_violations
+run_render "$TRIVIAL"
+expect_status 0
+expect_prose '**Карточка развилки.**'
+expect_prose 'Тривиальная правка: опечатка в сообщении валидатора, второго способа нет'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Карточка развилки: пустые признаки совета — «нет», развилка — предупреждение, а не отказ'
+NO_SIGNS="$(mutate '.fork_card.council_signs = []')"
+run_validate "$NO_SIGNS"
+expect_status 0
+expect_no_violations
+run_render "$NO_SIGNS"
+expect_status 0
+expect_prose '**Сработавшие признаки совета:** нет'
+
+# Развилка — триггер «позвать человека», а не дефект плана: код возврата 0,
+# но сказано вслух и в отчёте валидатора, и в рендере.
+FORKED="$(mutate '.fork_card.fork = true')"
+run_validate "$FORKED"
+expect_status 0
+expect_no_violations
+expect_output 'предупреждение: в карточке развилки есть развилка'
+run_render "$FORKED"
+expect_status 0
+expect_prose '**Развилка:** да — триггер «позвать человека»'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Разбор бага: необязателен, а заполненный проверяется по форме и по дереву'
+NO_BUG="$(mutate 'del(.bug_analysis)')"
+run_validate "$NO_BUG"
+expect_status 0
+expect_no_violations
+# Отсутствующий разбор не печатает ни подписи, ни пустого блока — и не роняет
+# рендер проверкой пропущенных полей.
+run_render "$NO_BUG"
+expect_status 0
+expect_no_output '**Разбор бага.**'
+run_render "$CANON"
+expect_prose '**Разбор бага.**'
+
+run_validate "$(mutate 'del(.bug_analysis.precondition)')"
+expect_status 1
+expect_output 'план.bug_analysis.precondition: обязательное поле схемы отсутствует'
+
+run_validate "$(mutate '.bug_analysis.root_cause = "scripts/plan.sh"')"
+expect_status 1
+expect_output 'план.bug_analysis.root_cause: значение «scripts/plan.sh» не по образцу схемы'
+
+run_validate "$(mutate '.bug_analysis.root_cause = "scripts/plan-which-never-was.sh:3"')"
+expect_status 1
+expect_output 'первопричина разбора бага ссылается на несуществующий путь: scripts/plan-which-never-was.sh'
+
+run_validate "$(mutate '.bug_analysis.root_cause = "scripts/plan.sh:999999"')"
+expect_status 1
+expect_output 'первопричина разбора бага ссылается на строку 999999, а в scripts/plan.sh строк'
+
+run_validate "$(mutate '.bug_analysis.root_cause = "../home-agent-source/tz-home-agent.md:1"')"
+expect_status 1
+expect_output 'путь вне репозитория: ../home-agent-source/tz-home-agent.md'
+
+NO_HYP="$(mutate '.bug_analysis.rejected_hypotheses = []')"
+run_validate "$NO_HYP"
+expect_status 0
+expect_no_violations
+run_render "$NO_HYP"
+expect_status 0
+expect_prose '**Отвергнутые гипотезы:** нет'
 end_case
 
 # ------------------------------------------------------------------
@@ -746,17 +817,64 @@ check_historical 83 "$PIN_83"
 check_historical 81 "$PIN_81"
 
 # ------------------------------------------------------------------
-begin_case 'Без --at исторический план краснеет: флаг существует не для красоты'
-# План #83 объявляет новыми ровно те сценарии, которые с тех пор появились в
-# дереве. Против своего ref он зелёный, против сегодняшнего — красный, и это
-# не строгость валидатора, а разница деревьев. Без этого сценария отличить
-# одно от другого было бы нечем.
-if [ ! -f "$FIXTURES/83.json" ]; then
-    fail_case "нет фикстуры: $FIXTURES/83.json"
+begin_case 'Без --at план краснеет на разнице деревьев, с --at — нет'
+# Доказательство строится во временном репозитории из двух коммитов, а не на
+# истории этого: файлы, на которых оно держалось раньше, удаляются, и сценарий
+# позеленел бы вместе с ними молча. Коммит A — дерево, для которого план
+# писался: файл на правку есть, теста с объявленным именем нет. Коммит B —
+# сегодняшнее дерево: файл удалён, тест с тем же именем появился. Разница
+# деревьев берётся в обе стороны — путь пропал, имя появилось.
+#
+# Git здесь пишет только во временный каталог песочницы. Глобальная и
+# системная конфигурация отключены: подпись коммитов или хуки на машине
+# владельца, как и отсутствие имени автора в CI, иначе роняли бы сценарий
+# не по делу.
+HIST="$SANDBOX/history"
+mkdir -p "$HIST/scripts" "$HIST/docs" "$HIST/tests"
+cp "$CHECK" "$SCHEMA" "$HIST/scripts/"
+
+hist_git() {
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$HIST" \
+        -c user.name=plan-test -c user.email=plan-test@example.invalid \
+        -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+        -c core.autocrlf=false -c init.defaultBranch=main "$@"
+}
+
+HIST_OK=1
+printf 'раздел, который позже удалят\n' > "$HIST/docs/old.md"
+printf 'код, который план читает\n' > "$HIST/tests/base.txt"
+{ hist_git init -q && hist_git add -A && hist_git commit -q -m 'A'; } >/dev/null 2>&1 || HIST_OK=0
+PIN_A="$(hist_git rev-parse HEAD 2>/dev/null | tr -d '\r')"
+rm -f "$HIST/docs/old.md"
+printf 'сценарий, появившийся позже\n' > "$HIST/tests/later.test.sh"
+{ hist_git add -A && hist_git commit -q -m 'B'; } >/dev/null 2>&1 || HIST_OK=0
+
+HPLAN="$SANDBOX/history-plan.json"
+jq '.current_state = [{"path": "tests/base.txt", "line": 1, "observation": "код, на который план опирается"}]
+    | del(.bug_analysis)
+    | .files = [{"path": "docs/old.md", "action": "modify", "why": "раздел, который позже удалят"}]
+    | .boundaries = ["docs/**"]
+    | .tests = [{
+        "name": "сценарий, появившийся позже",
+        "file": "tests/later.test.sh",
+        "new": true,
+        "covers": ["marker-reason", "marker-expiry"],
+        "behavior": "имя, которого в дереве плана ещё нет"
+      }]' "$CANON" > "$HPLAN"
+
+if [ "$HIST_OK" -ne 1 ] || [ -z "$PIN_A" ]; then
+    fail_case 'временный репозиторий не собрался — сценарий провален, а не пропущен'
 else
-    run_validate "$FIXTURES/83.json"
+    OUTPUT="$(bash "$HIST/scripts/plan.sh" validate "$HPLAN" --at "$PIN_A" 2>&1)"
+    STATUS=$?
+    expect_status 0
+    expect_no_violations
+
+    OUTPUT="$(bash "$HIST/scripts/plan.sh" validate "$HPLAN" 2>&1)"
+    STATUS=$?
     expect_status 1
-    expect_output 'тест объявлен новым, но имя уже встречается'
+    expect_output 'путь на modify не существует: docs/old.md'
+    expect_output 'тест объявлен новым, но имя уже встречается: сценарий, появившийся позже — в tests/later.test.sh'
 fi
 end_case
 

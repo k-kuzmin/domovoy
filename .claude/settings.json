@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge*)",
+      "PowerShell(gh pr merge*)",
+      "Bash(git push --force*)",
+      "PowerShell(git push --force*)",
+      "Bash(git push -f*)",
+      "PowerShell(git push -f*)",
+      "Bash(git push origin main*)",
+      "PowerShell(git push origin main*)",
+      "Bash(git push origin HEAD:main*)",
+      "PowerShell(git push origin HEAD:main*)",
+      "Bash(dotnet ef database update*)",
+      "PowerShell(dotnet ef database update*)",
+      "Bash(dotnet user-secrets*)",
+      "PowerShell(dotnet user-secrets*)",
+      "Bash(gh auth token*)",
+      "PowerShell(gh auth token*)",
+      "Bash(gh auth status --show-token*)",
+      "PowerShell(gh auth status --show-token*)",
+      "Bash(env)",
+      "PowerShell(env)",
+      "Bash(printenv*)",
+      "PowerShell(printenv*)",
+      "Bash(Get-ChildItem env:*)",
+      "PowerShell(Get-ChildItem env:*)",
+      "Bash(docker compose config*)",
+      "PowerShell(docker compose config*)",
+      "Bash(cat *UserSecrets*)",
+      "PowerShell(cat *UserSecrets*)",
+      "Bash(type *UserSecrets*)",
+      "PowerShell(type *UserSecrets*)",
+      "Bash(Get-Content *UserSecrets*)",
+      "PowerShell(Get-Content *UserSecrets*)",
+      "Bash(cat *usersecrets*)",
+      "PowerShell(cat *usersecrets*)",
+      "Bash(type *usersecrets*)",
+      "PowerShell(type *usersecrets*)",
+      "Bash(Get-Content *usersecrets*)",
+      "PowerShell(Get-Content *usersecrets*)",
+      "Read(**/Microsoft/UserSecrets/**)",
+      "Read(**/.microsoft/usersecrets/**)",
+      "Read(**/.env)",
+      "Read(//**/Microsoft/UserSecrets/**)",
+      "Read(//**/.microsoft/usersecrets/**)",
+      "Read(//**/.env)",
+      "Bash(cat *.env)",
+      "PowerShell(cat *.env)",
+      "Bash(type *.env)",
+      "PowerShell(type *.env)",
+      "Bash(Get-Content *.env)",
+      "PowerShell(Get-Content *.env)",
+      "Bash(git *--output*)",
+      "PowerShell(git *--output*)"
+    ],
+    "ask": [
+      "Bash(gh issue create*)",
+      "PowerShell(gh issue create*)",
+      "Bash(gh pr create*)",
+      "PowerShell(gh pr create*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/rule-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
