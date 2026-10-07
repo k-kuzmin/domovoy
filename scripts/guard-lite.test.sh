@@ -743,6 +743,28 @@ run_guard
 expect_red "$MIG:9: $BOUNDARY: raw string"
 end_case
 
+begin_case 'Down(): незакрытый литерал — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql("UPDATE rooms SET floor = '{';);
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:9: $BOUNDARY: незакрытый литерал"
+end_case
+
 begin_case 'Интерполированная строка в файле без Down() зеленеет'
 add_line 'src/Domovoy.Data/Migrations/Helper.cs' '    var sql = $"UPDATE \"{table}\" SET floor = 0;";'
 run_guard
