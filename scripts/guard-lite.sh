@@ -19,16 +19,25 @@
 # по любому пути. Смотрятся добавленные строки; удалённые — только у тестовых
 # методов. Удалённый файл с подавлением поэтому не нарушение, а починка.
 # Дифф берётся с --no-renames: переименование — удаление плюс добавление, и
-# тест, унесённый в файл не того типа, считается удалённым. Пути — из -z,
-# поэтому кавычек git в них нет.
+# тест, унесённый в файл не того типа, считается удалённым. Отдельный проход
+# с -M ловит удалённый или вынесенный из tests/ файл *.cs (п.6 #133). Пути —
+# из -z, поэтому кавычек git в них нет.
 #
-# МИГРАЦИИ. Разрушительный вызов API EF и сырой SQL смотрятся во всём файле
-# миграции, кроме тела Down() (граница из #125): откат законно снимает то,
-# что создал Up(). Тело Down() размечается по вершине счётом фигурных скобок
-# от заголовка «void Down(»; скобка внутри строкового литерала счёт сбивает.
-# SQL не разбирается — ищется текст в строке: оператор, разнесённый по
-# строкам, не ловится; IF [NOT] EXISTS снимает срабатывание только с
-# оператора, за ключевым словом которого стоит (перенос из guard.sh, 9).
+# МИГРАЦИИ. Миграция — *.cs или *.sql на любой глубине под Migrations/.
+# SQL-файл проверяется целиком и только правилами миграций. Разрушительный
+# вызов API EF и сырой SQL смотрятся во всём файле *.cs миграции, кроме тела
+# Down() (граница из #125): откат законно снимает то, что создал Up(). Тело
+# Down() размечается по вершине (down_lines): комментарии и литералы, которые
+# разметка разбирает, скобки не сдвигают. Граница не определена — нарушение
+# с причиной, и файл проверяется целиком: два объявления Down(), Down() не
+# закрыт, глубина скобок ушла в минус, внутри Down() объявлен Up(), а также
+# интерполированная строка, raw string, обычный литерал без закрытия в строке
+# или verbatim, не закрытый до конца файла, в файле с объявлением Down().
+# Рукописный migrationBuilder.Sql(@"…") в несколько строк разбирается: его
+# строки — литерал, скобки в них границу не сдвигают. SQL не разбирается —
+# ищется текст в строке: оператор, разнесённый по строкам, не ловится;
+# IF [NOT] EXISTS снимает срабатывание только с оператора, за ключевым словом
+# которого стоит (перенос из guard.sh, 9).
 #
 # SKIP =. Шаблон широкий намеренно: любое присваивание «Skip =» в файле кода,
 # а не только Skip = "…" внутри [Fact(…)]/[Theory(…)]. Проверка построчная, и
@@ -64,11 +73,14 @@ report() { printf '%s:%s: %s\n' "$1" "$2" "${3//$'\r'/}"; VIOLATIONS=$((VIOLATIO
 is_code_file() {
     case "$1" in scripts/fixtures/*) return 1 ;; esac
     case "${1##*/}" in
-        .editorconfig | .globalconfig | *.cs | *.csproj | *.props | *.targets | *.yml | *.ruleset) return 0 ;;
+        .editorconfig | .globalconfig | *.cs | *.csproj | *.props | *.targets | *.yml | *.yaml | \
+            *.rsp | *.runsettings | *.ruleset) return 0 ;;
+        *.sql) is_migration "$1" && return 0 ;;
     esac
     return 1
 }
-is_migration() { [[ "$1" =~ (^|/)Migrations/[^/]+\.cs$ ]]; }
+# Миграция — *.cs или *.sql на любой глубине под каталогом Migrations/.
+is_migration() { [[ "$1" =~ (^|/)Migrations/(.+/)?[^/]+\.(cs|sql)$ ]]; }
 
 # Добавленные строки: «+<TAB>номер<TAB>текст» по новой стороне, удалённые —
 # «-<TAB>номер<TAB>текст» по базовой. Заголовки файла пропускаются до «@@»:
@@ -87,20 +99,103 @@ file_lines() {
             /^-/  { t = substr($0, 2); sub(/\r$/, "", t); print "-\t" ol++ "\t" t; next }'
 }
 
-# Номера строк тела Down() в версии вершины, по одной в строке.
+# Разметка Down() в версии вершины: «D<TAB>номер» на каждую строку от
+# заголовка до закрытия тела, «E<TAB>номер<TAB>причина» — граница не
+# определена. Сначала строка очищается: комментарии вырезаются, литералы
+# (обычная строка с экранированием «\», verbatim @"…" с «""», символьный
+# '…') заменяются пустыми; потом по очищенному коду ищутся заголовки и
+# считаются скобки. Verbatim без закрытия в строке продолжается на следующих
+# (inverb): их текст до кавычки, не удвоенной, — литерал. Форма, которую
+# разметка не разбирает, — интерполированная строка, raw string, обычный
+# литерал без закрытия в строке, verbatim без закрытия до конца файла —
+# останавливает разбор: в файле с объявлением Down() это «E», а не догадка.
+# Только POSIX awk (в CI это mawk), байтово: синтаксис C# — ASCII.
 down_lines() {
-    git show "$HEAD:$1" 2>/dev/null | awk '
-        !inm && /void[[:space:]]+Down[[:space:]]*\(/ { inm = 1; opened = 0; depth = 0 }
-        inm {
-            print NR; line = $0
-            o = gsub(/\{/, "", line); c = gsub(/\}/, "", line); depth += o - c
-            if (o > 0) opened = 1
-            if ((opened && depth <= 0) || (!opened && $0 ~ /;[[:space:]]*$/)) inm = 0
+    git show "$HEAD:$1" 2>/dev/null | LC_ALL=C awk '
+        function fail(why) { if (!stop) { stop = 1; eline = NR; ereason = why } }
+        function isid(ch) { return ch ~ /[A-Za-z0-9_]/ }
+        # Конец литерала, открытого перед позицией j: номер закрывающей
+        # кавычки q или 0, если до конца строки он не закрыт.
+        function close_at(s, j, q, verb,    ch) {
+            while (j <= length(s)) {
+                ch = substr(s, j, 1)
+                if (verb && ch == q) { if (substr(s, j + 1, 1) == q) { j += 2; continue } return j }
+                if (!verb && ch == "\\") { j += 2; continue }
+                if (ch == q) return j
+                j++
+            }
+            return 0
+        }
+        {
+            raw = $0; sub(/\r$/, "", raw)
+            if (raw ~ /void[ \t]+Down[ \t]*\(/) rawdown = 1
+            if (stop) next
+            mark = (mode != "")
+            code = ""; n = length(raw); i = 1
+            if (inverb) {
+                # Продолжение verbatim со строки vline: до закрывающей
+                # кавычки всё — содержимое литерала, а не код.
+                j = close_at(raw, 1, "\"", 1)
+                if (!j) { if (mark) print "D\t" NR; next }
+                inverb = 0; code = "\"\""; i = j + 1
+            } else if (!inblock && raw ~ /^[ \t]*#/) { if (mark) print "D\t" NR; next }
+            while (i <= n) {
+                c = substr(raw, i, 1); c2 = substr(raw, i, 2)
+                if (inblock) { if (c2 == "*/") { inblock = 0; i += 2; code = code " " } else i++; continue }
+                if (c2 == "//") break
+                if (c2 == "/*") { inblock = 1; i += 2; continue }
+                if (c2 == "$\"" || c2 == "$@" || c2 == "@$") { fail("интерполированная строка"); break }
+                if (substr(raw, i, 3) == "\"\"\"") { fail("raw string"); break }
+                if (c2 == "@\"" || c == "\"" || c == "'\''") {
+                    verb = (c == "@"); q = verb ? "\"" : c
+                    j = close_at(raw, i + (verb ? 2 : 1), q, verb)
+                    if (!j && verb) { inverb = 1; vline = NR; code = code q q; break }
+                    if (!j) { fail("незакрытый литерал"); break }
+                    code = code q q; i = j + 1; continue
+                }
+                code = code c; i++
+            }
+            if (stop) next
+            n = length(code)
+            for (i = 1; i <= n; i++) {
+                c = substr(code, i, 1)
+                if (c == "v" && (i == 1 || !isid(substr(code, i - 1, 1)))) {
+                    rest = substr(code, i)
+                    if (rest ~ /^void[ \t]+Down[ \t]*\(/) {
+                        if (++downs > 1) { fail("заголовков Down() больше одного"); break }
+                        mode = "sig"; hline = NR; mark = 1; continue
+                    }
+                    if (mode != "" && rest ~ /^void[ \t]+Up[ \t]*\(/) { fail("заголовок Up() внутри Down()"); break }
+                }
+                if (c == "{") {
+                    depth++
+                    if (mode == "sig") { mode = "body"; ddepth = depth }
+                } else if (c == "}") {
+                    if (--depth < 0) { fail("глубина скобок ушла в минус"); break }
+                    if (mode == "body" && depth < ddepth) mode = ""
+                } else if (c == "=" && substr(code, i + 1, 1) == ">" && mode == "sig") {
+                    mode = "expr"; edepth = depth
+                } else if (c == ";" && (mode == "sig" || (mode == "expr" && depth == edepth))) {
+                    mode = ""
+                }
+            }
+            if (stop) next
+            if (mark) print "D\t" NR
+        }
+        END {
+            if (!stop && inverb) { stop = 1; eline = vline; ereason = "многострочный литерал не закрыт до конца файла" }
+            if (stop) { if (rawdown || downs) printf "E\t%d\t%s\n", eline, ereason }
+            else if (mode != "") printf "E\t%d\t%s\n", hline, "Down() не закрыт до конца файла"
         }'
 }
 
+# Директиву ставит генератор EF (Designer, ModelSnapshot, seed из нескольких
+# строк — CA1814), поэтому в каталоге миграций проекта данных она не
+# нарушение. Исключение — только это правило и только этот путь: каталог в
+# risk.json — former_protected (high), остальные подавления в нём краснеют.
+PRAGMA='#pragma[[:space:]]+warning[[:space:]]+disable'
+EF_GENERATED='src/Domovoy.Data/Migrations/'
 SUPPRESSION=(
-    '#pragma[[:space:]]+warning[[:space:]]+disable'      '#pragma warning disable'
     '(^|[^A-Za-z0-9_])Skip[[:space:]]*=([^=>]|$)'        'Skip = — тест выключен'
     '\[Ignore(\]|\()'                                     '[Ignore] — тест выключен'
     '\[ExcludeFromCodeCoverage'                           '[ExcludeFromCodeCoverage]'
@@ -111,6 +206,7 @@ SUPPRESSION=(
     'EnforceCodeStyleInBuild[^A-Za-z]*[Ff]alse'           'EnforceCodeStyleInBuild=false'
     'continue-on-error[[:space:]]*:[[:space:]]*([^[:space:]f#]|f[^a])' 'continue-on-error'
     '--filter.*(!=|!~)'                                   '--filter с отрицанием'
+    '<TestCaseFilter>.*(!=|!~)'                           'TestCaseFilter с отрицанием'
 )
 # Имя свойства (группа 2) и значение (группа 4): после тега с атрибутами,
 # после «=» (-p:…=…) или «:» (env в workflow). Перед именем не «/», «(» и
@@ -133,7 +229,11 @@ SQL_RULES=(
 )
 
 check_added() {
-    local file="$1" line="$2" text="$3" i lower rest
+    local file="$1" line="$2" text="$3" i
+    # SQL-файл миграции — не код сборки: только правила миграций.
+    [[ "$file" == *.sql ]] && { check_migration "$file" "$line" "$text"; return 0; }
+    [[ "$text" =~ $PRAGMA && "$file" != "$EF_GENERATED"* ]] &&
+        report "$file" "$line" 'подавление: #pragma warning disable'
     for ((i = 0; i < ${#SUPPRESSION[@]}; i += 2)); do
         [[ "$text" =~ ${SUPPRESSION[i]} ]] && report "$file" "$line" "подавление: ${SUPPRESSION[i + 1]}"
     done
@@ -146,7 +246,12 @@ check_added() {
         [[ "${level,,}" =~ ^(latest|preview)(-(default|recommended|all))?$ ]] ||
             report "$file" "$line" "подавление: понижение $prop до «$level»"
     fi
-    is_migration "$file" || return 0
+    is_migration "$file" && check_migration "$file" "$line" "$text"
+    return 0
+}
+
+check_migration() {
+    local file="$1" line="$2" text="$3" i lower rest
     [ -n "${DOWN[$line]:-}" ] && return 0
     [[ "$text" =~ $EF_DESTRUCTIVE ]] && report "$file" "$line" "разрушительная миграция: ${BASH_REMATCH[1]}"
     lower="${text,,}"
@@ -178,14 +283,23 @@ while IFS= read -r -d '' status && IFS= read -r -d '' file; do
            "$lbase" =~ ^coverage.*\.(xml|json|info)$ || "$lbase" == *.coverage || "$lbase" == *.coveragexml ||
            "$lpath" =~ (^|/)(coverage|coveragereport)/ ]] &&
             report "$file" 1 'мусор прогона в диффе (*.trx, TestResults/, отчёт покрытия)'
-        [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ]] &&
+        [[ "$lbase" == *.keystore || "$lbase" == *.p12 || "$lbase" == *.mobileprovision || "$base" == google-services.json ||
+           "$base" == GoogleService-Info.plist ]] &&
             report "$file" 1 'подпись или ключ платформы в диффе'
     fi
     is_code_file "$file" || continue
     [[ "$base" == *.ruleset ]] && { report "$file" 1 'подавление: правка *.ruleset'; continue; }
     declare -A DOWN=()
-    if is_migration "$file" && [ "$status" != D ]; then
-        while IFS= read -r n; do DOWN[$n]=1; done < <(down_lines "$file")
+    if is_migration "$file" && [[ "$base" == *.cs && "$status" != D ]]; then
+        undetermined=0
+        while IFS=$'\t' read -r kind n why; do
+            case "$kind" in
+                D) DOWN[$n]=1 ;;
+                E) report "$file" "$n" "граница Down() не определена: $why"; undetermined=1 ;;
+            esac
+        done < <(down_lines "$file")
+        # Граница не определена — весь файл проверяется как Up().
+        [ "$undetermined" -eq 0 ] || DOWN=()
     fi
     file_lines "$file" > "$LINES" ||
         { printf 'guard-lite: не удалось получить дифф %s\n' "$file" >&2; exit 2; }
@@ -198,6 +312,24 @@ while IFS= read -r -d '' status && IFS= read -r -d '' file; do
         fi
     done < "$LINES"
     unset DOWN
+done < "$NAME_STATUS"
+
+# Файл тестового кода (*.cs под tests/), удалённый или вынесенный из него, —
+# нарушение сам по себе: баланс атрибутов ниже его не видит, если столько же
+# тестов добавлено в другом месте. Отдельный проход с -M (порог сходства git
+# по умолчанию, 50 %): переименование в tests/…*.cs не нарушение; переименование
+# с переписыванием ниже порога git читает как удаление — красный осознанно,
+# переименование и переписывание идут разными PR. Не-код под tests/ не правило.
+is_test_code() { [[ "$1" == tests/*.cs ]]; }
+git -c core.quotePath=false diff --name-status -z -M "$BASE" "$HEAD" > "$NAME_STATUS" ||
+    { echo 'guard-lite: не удалось получить список переименований' >&2; exit 2; }
+while IFS= read -r -d '' status && IFS= read -r -d '' file; do
+    case "$status" in
+        R*) IFS= read -r -d '' dest
+            is_test_code "$file" && ! is_test_code "$dest" &&
+                report "$file" 1 "удалён или вынесен из tests/ файл тестов (перенесён в $dest)" ;;
+        D) is_test_code "$file" && report "$file" 1 'удалён или вынесен из tests/ файл тестов (удалён)' ;;
+    esac
 done < "$NAME_STATUS"
 
 TESTS_REMOVED="$(wc -l < "$REMOVED_TESTS" | tr -d ' ')"

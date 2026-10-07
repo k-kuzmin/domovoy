@@ -138,8 +138,11 @@ expect_red() { expect_status 1; expect_output "$1"; }
 expect_green() { expect_status 0; expect_output 'нарушений нет'; }
 
 # Миграция: строка 9 — тело Up(), строка 14 — тело Down().
-migration() {
-    cat > "$repo/src/Domovoy.Data/Migrations/${3:-20260101000000_Step}.cs" <<EOF
+migration() { migration_at "src/Domovoy.Data/Migrations/${3:-20260101000000_Step}.cs" "$1" "$2"; }
+migration_at() {
+    local path="$1"; shift
+    mkdir -p "$repo/$(dirname "$path")"
+    cat > "$repo/$path" <<EOF
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Domovoy.Data.Migrations;
@@ -217,7 +220,7 @@ end_case
 # Красные: остальные пункты списка, по одному
 # ------------------------------------------------------------------
 check_suppression() {
-    begin_case "$3 краснеет"
+    begin_case "$3 краснеет${4:+ в $4}"
     add_line "$1" "$2"
     run_guard
     expect_red "$1:2: подавление: $3"
@@ -233,6 +236,11 @@ check_suppression 'build/y.targets' '<TreatWarningsAsErrors>false</TreatWarnings
 check_suppression 'build/z.props' '<EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>' 'EnforceCodeStyleInBuild=false'
 check_suppression '.github/workflows/new.yml' '    continue-on-error: true' 'continue-on-error'
 check_suppression '.github/workflows/f.yml' '      - run: dotnet test --filter "FullyQualifiedName!~Slow"' '--filter с отрицанием'
+
+# Типы файлов из п.10 #133.
+check_suppression '.github/workflows/new.yaml' '    continue-on-error: true' 'continue-on-error' '*.yaml'
+check_suppression 'Directory.Build.rsp' '-p:TreatWarningsAsErrors=false' 'TreatWarningsAsErrors=false' '*.rsp'
+check_suppression 'tests/ci.runsettings' '    <TestCaseFilter>Category!=Slow</TestCaseFilter>' 'TestCaseFilter с отрицанием' '*.runsettings'
 
 begin_case 'severity = none в .globalconfig краснеет'
 add_line '.globalconfig' 'dotnet_diagnostic.CA2000.severity = none'
@@ -288,6 +296,75 @@ run_guard
 expect_red 'tests/Domovoy.Tests/HealthTests.cs:10: удалён тестовый метод'
 end_case
 
+# Удалённый или вынесенный из tests/ файл *.cs (п.6 #133) — нарушение сам по
+# себе, без баланса атрибутов. Добавленный файл непохож на удалённый, чтобы
+# git не свёл их в переименование.
+other_tests() {
+    mkdir -p "$repo/$(dirname "$1")"
+    cat > "$repo/$1" <<'EOF'
+using System.Globalization;
+
+namespace Domovoy.Tests.Formatting;
+
+internal static class NumberFormatChecks
+{
+    [Fact]
+    internal static void InvariantDecimalSeparator() =>
+        Assert.Equal("1.5", 1.5m.ToString(CultureInfo.InvariantCulture));
+
+    [Theory]
+    [InlineData(42)]
+    internal static void RoundTrip(int value) =>
+        Assert.Equal(value, int.Parse(value.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture));
+}
+EOF
+}
+REMOVED_RULE='удалён или вынесен из tests/'
+
+begin_case 'Удалённый *.cs под tests/ краснеет при равном балансе атрибутов'
+git -C "$repo" rm -q tests/Domovoy.Tests/HealthTests.cs
+other_tests 'tests/Domovoy.Tests/NumberFormatChecks.cs'
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+expect_no_output 'NumberFormatChecks.cs:1:'
+end_case
+
+begin_case 'Тестовый файл, вынесенный из tests/ в другой каталог кода, краснеет'
+mkdir -p "$repo/src/Domovoy.Api"
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs src/Domovoy.Api/HealthTests.cs
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+expect_output 'src/Domovoy.Api/HealthTests.cs'
+end_case
+
+begin_case 'Переименование тестового файла внутри tests/ зеленеет'
+mkdir -p "$repo/tests/Domovoy.Api.Tests"
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Api.Tests/HealthEndpointTests.cs
+run_guard
+expect_green
+end_case
+
+begin_case 'Переименование *.cs внутри tests/ с переписыванием большей части краснеет — осознанно'
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Tests/NumberFormatChecks.cs
+other_tests 'tests/Domovoy.Tests/NumberFormatChecks.cs'
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+end_case
+
+begin_case 'Файл тестов, переименованный в tests/ в не-*.cs, — вынесен из тестового кода'
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Tests/HealthTests.cs.txt
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE файл тестов (перенесён в tests/Domovoy.Tests/HealthTests.cs.txt)"
+end_case
+
+begin_case 'Удаление нетестового файла под tests/ зеленеет'
+printf '{ "rooms": [] }\n' > "$repo/tests/Domovoy.Tests/rooms.json"
+commit_all; git -C "$repo" branch -qf base HEAD
+git -C "$repo" rm -q tests/Domovoy.Tests/rooms.json
+run_guard
+expect_green
+end_case
+
 for api in DropTable RenameColumn RenameTable AlterColumn DropIndex DropForeignKey \
     DropPrimaryKey DropUniqueConstraint AddPrimaryKey; do
     begin_case "$api в Up() краснеет"
@@ -311,6 +388,31 @@ check_sql 'LOCK TABLE rooms IN ACCESS EXCLUSIVE MODE;' 'ACCESS EXCLUSIVE'
 check_sql 'ALTER TABLE rooms ADD CONSTRAINT pk PRIMARY KEY (id);' 'ADD CONSTRAINT … PRIMARY KEY'
 check_sql 'ALTER TABLE rooms ADD COLUMN floor int;' 'CREATE TABLE или ADD COLUMN без IF NOT EXISTS'
 
+begin_case 'DropColumn во вложенном каталоге Migrations краснеет'
+NESTED='src/Domovoy.Data/Migrations/2026/20260101000000_Step.cs'
+migration_at "$NESTED" 'migrationBuilder.DropColumn(name: "Name", table: "Rooms");' ''
+run_guard
+expect_red "$NESTED:9: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'DROP TABLE в SQL-файле миграции краснеет'
+add_line 'src/Domovoy.Data/Migrations/Sql/001_drop.sql' 'DROP TABLE rooms;'
+run_guard
+expect_red 'src/Domovoy.Data/Migrations/Sql/001_drop.sql:2: сырой SQL в миграции: DROP без IF EXISTS'
+end_case
+
+begin_case 'DROP TABLE IF EXISTS в SQL-файле миграции зеленеет'
+add_line 'src/Domovoy.Data/Migrations/Sql/001_drop.sql' 'DROP TABLE IF EXISTS rooms;'
+run_guard
+expect_green
+end_case
+
+begin_case 'SQL-файл миграции проверяется только правилами миграций'
+add_line 'src/Domovoy.Data/Migrations/Sql/002_note.sql' '-- NoWarn и Skip = в комментарии SQL — не подавление сборки'
+run_guard
+expect_green
+end_case
+
 check_junk() {
     begin_case "$1 краснеет"
     mkdir -p "$repo/$(dirname "$1")"; printf 'x\n' > "$repo/$1"
@@ -331,6 +433,7 @@ check_junk 'out/CoverageReport/index.htm' 'мусор прогона'
 check_junk 'certs/dev.p12' 'подпись или ключ платформы'
 check_junk 'ios/App.mobileprovision' 'подпись или ключ платформы'
 check_junk 'android/app/google-services.json' 'подпись или ключ платформы'
+check_junk 'src/Domovoy.Mobile.App/Platforms/iOS/GoogleService-Info.plist' 'подпись или ключ платформы'
 check_junk 'отчёты/прогон.trx' 'мусор прогона'
 
 # ------------------------------------------------------------------
@@ -368,6 +471,388 @@ expect_red "$MIG:9: разрушительная миграция: DropTable"
 expect_no_output "$MIG:14:"
 end_case
 
+# ------------------------------------------------------------------
+# Граница Down() (п.9 #133): комментарии и литералы не сдвигают её, а форма,
+# которую разметка не разбирает, — красный «граница не определена», а не
+# молчаливый пропуск. Файл миграции целиком — из stdin, номера строк явные.
+# ------------------------------------------------------------------
+mig_file() { cat > "$repo/$MIG"; }
+BOUNDARY='граница Down() не определена'
+
+begin_case 'Down(): комментарий не сдвигает границу'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        // откат — в void Down(MigrationBuilder migrationBuilder)
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'Down(): блочный комментарий со скобкой не сдвигает границу'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        /* прежняя схема:
+           { "rooms": [ */
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:15: разрушительная миграция: DropColumn"
+end_case
+
+# Down() перед Up(); строка 9 — тело Down(), строка 14 — тело Up().
+down_first() {
+    mig_file <<EOF
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        $1
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+}
+
+begin_case 'Down(): строковый литерал не сдвигает границу'
+down_first 'migrationBuilder.Sql("UPDATE rooms SET meta = '"'"'{'"'"', note = \"}{\";");'
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): символьный литерал со скобкой не сдвигает границу'
+down_first "var open = '{'; var quote = '\\''; var slash = '\\\\'; var brace = '{';"
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): verbatim с обратной косой в конце не сдвигает границу'
+down_first 'migrationBuilder.Sql(@"C:\"); migrationBuilder.Sql("{");'
+run_guard
+expect_red "$MIG:14: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Down(): тело-выражение размечается'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.CreateTable(name: "Rooms", columns: t => new { Id = t.Column<int>() });
+
+    protected override void Down(MigrationBuilder migrationBuilder) =>
+        migrationBuilder.DropTable(name: "Rooms");
+}
+EOF
+run_guard
+expect_green
+end_case
+
+begin_case 'Незакрытый Down() краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: Down() не закрыт до конца файла"
+end_case
+
+begin_case 'Два заголовка Down() в файле краснеют: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: заголовков Down() больше одного"
+end_case
+
+begin_case 'Заголовок Up() внутри Down() краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Name", table: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: заголовок Up() внутри Down()"
+expect_output "$MIG:13: разрушительная миграция: DropColumn"
+end_case
+
+begin_case 'Лишняя закрывающая скобка краснеет: граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+}
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+EOF
+run_guard
+expect_red "$MIG:11: $BOUNDARY: глубина скобок ушла в минус"
+end_case
+
+# Многострочный verbatim разбирается: скобки, «//», «/*» и удвоенная кавычка
+# внутри литерала границу не сдвигают. Сдвинь «}» на строке 15 границу —
+# DropTable на строке 18 оказался бы вне Down() и краснел бы.
+begin_case 'Многострочный @"…" со скобками в Down() не сдвигает границу'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(name: "Floor", table: "Rooms");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            }
+            DELETE FROM rooms; -- ""}"" { // /*
+        ");
+        migrationBuilder.DropTable(name: "Old");
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:9: разрушительная миграция: DropColumn"
+expect_no_output "$BOUNDARY"
+expect_no_output "$MIG:16:"
+expect_no_output "$MIG:18:"
+end_case
+
+begin_case 'Многострочный @"…" в Up() с безобидным SQL зеленеет'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            UPDATE rooms SET floor = 0;
+        ");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(name: "Rooms");
+    }
+}
+EOF
+run_guard
+expect_green
+end_case
+
+begin_case 'Многострочный @"…" в Up(): сырой SQL на строке литерала ловится'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            DROP TABLE rooms;
+        ");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: сырой SQL в миграции: DROP без IF EXISTS"
+expect_no_output "$BOUNDARY"
+end_case
+
+begin_case 'Многострочный @"…", не закрытый до конца файла, — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
+            UPDATE rooms SET floor = 0;
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:13: $BOUNDARY: многострочный литерал не закрыт до конца файла"
+end_case
+
+begin_case 'Down(): интерполированная строка — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        var table = "rooms";
+        migrationBuilder.Sql($"UPDATE \"{table}\" SET floor = 0;");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:10: $BOUNDARY: интерполированная строка"
+end_case
+
+begin_case 'Down(): raw string — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql("""UPDATE rooms SET floor = 0;""");
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:9: $BOUNDARY: raw string"
+end_case
+
+begin_case 'Down(): незакрытый литерал — граница не определена'
+mig_file <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+namespace Domovoy.Data.Migrations;
+
+public partial class Step : Migration
+{
+    protected override void Up(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql("UPDATE rooms SET floor = '{';);
+    }
+
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+    }
+}
+EOF
+run_guard
+expect_red "$MIG:9: $BOUNDARY: незакрытый литерал"
+end_case
+
+begin_case 'Интерполированная строка в файле без Down() зеленеет'
+add_line 'src/Domovoy.Data/Migrations/Helper.cs' '    var sql = $"UPDATE \"{table}\" SET floor = 0;";'
+run_guard
+expect_green
+end_case
+
 begin_case 'Сырой DELETE в Down() зеленеет'
 migration 'migrationBuilder.Sql("INSERT INTO rooms VALUES (1);");' 'migrationBuilder.Sql("DELETE FROM rooms;");'
 run_guard
@@ -379,6 +864,221 @@ migration 'migrationBuilder.Sql("CREATE TABLE IF NOT EXISTS rooms (id int); DROP
     'migrationBuilder.Sql("ALTER TABLE rooms ADD COLUMN IF NOT EXISTS floor int;");'
 run_guard
 expect_green
+end_case
+
+# ------------------------------------------------------------------
+# Сгенерированная EF миграция (п.7 #133). Содержимое — вывод настоящего
+# dotnet ef migrations add (dotnet-ef 8.0.26, Npgsql.EntityFrameworkCore.
+# PostgreSQL и EF Core Design 8.0.11): Initial с одной строкой seed, затем
+# SeedRooms с несколькими. Урезано до значимых строк; имя контекста приведено
+# к проекту. EF пишет UTF-8 с BOM — BOM сохранён; переводы строк — LF, как
+# *.cs лежит в репозитории по .gitattributes. Директиву ставят Designer,
+# ModelSnapshot и, при seed из нескольких строк, сам файл миграции (CA1814).
+# Аргумент — тело Down() файла Initial после DropTable.
+# ------------------------------------------------------------------
+EF_DIR='src/Domovoy.Data/Migrations'
+ef_generated() {
+    local dir="$repo/$EF_DIR"
+    mkdir -p "$dir"
+    printf '\xEF\xBB\xBF' > "$dir/20261007164442_Initial.cs"
+    cat >> "$dir/20261007164442_Initial.cs" <<EOF
+using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace Domovoy.Data.Migrations
+{
+    /// <inheritdoc />
+    public partial class Initial : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.CreateTable(
+                name: "Rooms",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    Name = table.Column<string>(type: "text", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Rooms", x => x.Id);
+                });
+
+            migrationBuilder.InsertData(
+                table: "Rooms",
+                columns: new[] { "Id", "Name" },
+                values: new object[] { 1, "Kitchen" });
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {${1:+
+            $1
+}
+            migrationBuilder.DropTable(
+                name: "Rooms");
+        }
+    }
+}
+EOF
+    printf '\xEF\xBB\xBF' > "$dir/20261007164442_Initial.Designer.cs"
+    cat >> "$dir/20261007164442_Initial.Designer.cs" <<'EOF'
+// <auto-generated />
+using Domovoy.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace Domovoy.Data.Migrations
+{
+    [DbContext(typeof(DomovoyDbContext))]
+    [Migration("20261007164442_Initial")]
+    partial class Initial
+    {
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "8.0.11")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("Domovoy.Data.Room", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Rooms");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Name = "Kitchen"
+                        });
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+EOF
+    printf '\xEF\xBB\xBF' > "$dir/DomovoyDbContextModelSnapshot.cs"
+    cat >> "$dir/DomovoyDbContextModelSnapshot.cs" <<'EOF'
+// <auto-generated />
+using Domovoy.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
+
+#nullable disable
+
+namespace Domovoy.Data.Migrations
+{
+    [DbContext(typeof(DomovoyDbContext))]
+    partial class DomovoyDbContextModelSnapshot : ModelSnapshot
+    {
+        protected override void BuildModel(ModelBuilder modelBuilder)
+        {
+#pragma warning disable 612, 618
+            modelBuilder
+                .HasAnnotation("ProductVersion", "8.0.11")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            modelBuilder.Entity("Domovoy.Data.Room", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Rooms");
+                });
+#pragma warning restore 612, 618
+        }
+    }
+}
+EOF
+    printf '\xEF\xBB\xBF' > "$dir/20261007164500_SeedRooms.cs"
+    cat >> "$dir/20261007164500_SeedRooms.cs" <<'EOF'
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+#pragma warning disable CA1814 // Prefer jagged arrays over multidimensional
+
+namespace Domovoy.Data.Migrations
+{
+    /// <inheritdoc />
+    public partial class SeedRooms : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.InsertData(
+                table: "Rooms",
+                columns: new[] { "Id", "Name" },
+                values: new object[,]
+                {
+                    { 2, "Hall" },
+                    { 3, "Bedroom" }
+                });
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DeleteData(
+                table: "Rooms",
+                keyColumn: "Id",
+                keyValue: 2);
+
+            migrationBuilder.DeleteData(
+                table: "Rooms",
+                keyColumn: "Id",
+                keyValue: 3);
+        }
+    }
+}
+EOF
+}
+
+begin_case 'Сгенерированная EF миграция (Initial, Designer, ModelSnapshot) зеленеет'
+ef_generated ''
+run_guard
+expect_green
+end_case
+
+begin_case 'Сгенерированная EF миграция с однострочным SQL в Down() зеленеет'
+ef_generated 'migrationBuilder.Sql("DELETE FROM \"Rooms\" WHERE \"Id\" = 1;");'
+run_guard
+expect_green
+end_case
+
+begin_case '#pragma warning disable в Migrations/ вне src/Domovoy.Data краснеет'
+add_line 'src/Legacy/Migrations/20260101000000_Step.cs' '#pragma warning disable CA1814'
+run_guard
+expect_red 'src/Legacy/Migrations/20260101000000_Step.cs:2: подавление: #pragma warning disable'
+end_case
+
+begin_case 'Skip = в src/Domovoy.Data/Migrations/ краснеет'
+add_line "$EF_DIR/Helper.cs" '    var page = new Page { Skip = offset };'
+run_guard
+expect_red "$EF_DIR/Helper.cs:2: подавление: Skip ="
 end_case
 
 begin_case 'Skip = в .md и в .sh зеленеет'
