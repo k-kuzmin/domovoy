@@ -291,6 +291,69 @@ run_guard
 expect_red 'tests/Domovoy.Tests/HealthTests.cs:10: удалён тестовый метод'
 end_case
 
+# Удалённый или вынесенный из tests/ файл *.cs (п.6 #133) — нарушение сам по
+# себе, без баланса атрибутов. Добавленный файл непохож на удалённый, чтобы
+# git не свёл их в переименование.
+other_tests() {
+    mkdir -p "$repo/$(dirname "$1")"
+    cat > "$repo/$1" <<'EOF'
+using System.Globalization;
+
+namespace Domovoy.Tests.Formatting;
+
+internal static class NumberFormatChecks
+{
+    [Fact]
+    internal static void InvariantDecimalSeparator() =>
+        Assert.Equal("1.5", 1.5m.ToString(CultureInfo.InvariantCulture));
+
+    [Theory]
+    [InlineData(42)]
+    internal static void RoundTrip(int value) =>
+        Assert.Equal(value, int.Parse(value.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture));
+}
+EOF
+}
+REMOVED_RULE='удалён или вынесен из tests/'
+
+begin_case 'Удалённый *.cs под tests/ краснеет при равном балансе атрибутов'
+git -C "$repo" rm -q tests/Domovoy.Tests/HealthTests.cs
+other_tests 'tests/Domovoy.Tests/NumberFormatChecks.cs'
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+expect_no_output 'NumberFormatChecks.cs:1:'
+end_case
+
+begin_case 'Тестовый файл, вынесенный из tests/ в другой каталог кода, краснеет'
+mkdir -p "$repo/src/Domovoy.Api"
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs src/Domovoy.Api/HealthTests.cs
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+expect_output 'src/Domovoy.Api/HealthTests.cs'
+end_case
+
+begin_case 'Переименование тестового файла внутри tests/ зеленеет'
+mkdir -p "$repo/tests/Domovoy.Api.Tests"
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Api.Tests/HealthEndpointTests.cs
+run_guard
+expect_green
+end_case
+
+begin_case 'Переименование *.cs внутри tests/ с переписыванием большей части краснеет — осознанно'
+git -C "$repo" mv tests/Domovoy.Tests/HealthTests.cs tests/Domovoy.Tests/NumberFormatChecks.cs
+other_tests 'tests/Domovoy.Tests/NumberFormatChecks.cs'
+run_guard
+expect_red "tests/Domovoy.Tests/HealthTests.cs:1: $REMOVED_RULE"
+end_case
+
+begin_case 'Удаление нетестового файла под tests/ зеленеет'
+printf '{ "rooms": [] }\n' > "$repo/tests/Domovoy.Tests/rooms.json"
+commit_all; git -C "$repo" branch -qf base HEAD
+git -C "$repo" rm -q tests/Domovoy.Tests/rooms.json
+run_guard
+expect_green
+end_case
+
 for api in DropTable RenameColumn RenameTable AlterColumn DropIndex DropForeignKey \
     DropPrimaryKey DropUniqueConstraint AddPrimaryKey; do
     begin_case "$api в Up() краснеет"
