@@ -146,6 +146,74 @@ branch_with docs/notes.md 'секрет — это secret, а password не пи
 expect_level low
 end_case
 
+# Чувствительная зона: сценарий на каждую форму, а не на одну. Строка лежит
+# вне путей high и medium, поэтому уровень даёт только слово; причина печатает
+# запись конфига в её написании, у префикса — с «…». Корень внутри составного
+# идентификатора (AddAuthentication) и фраза с пробелом конфигом не
+# выражаются — отказ записан в журнале задачи #133.
+sensitive_case() {  # sensitive_case <форма> <запись в причине> <строка>
+    begin_case "Слово чувствительной зоны «$1» — high"
+    branch_with src/Domovoy.Core/Models/Sense.cs "$3"
+    expect_level high
+    expect_output "слово «$2» в добавленной строке: src/Domovoy.Core/Models/Sense.cs"
+    end_case
+}
+sensitive_case Authentication authenti… 'const string S = "Authentication";'
+sensitive_case Credentials    credential… 'var c = Credentials;'
+sensitive_case Encrypt        encrypt… 'var x = Encrypt(data);'
+sensitive_case Decrypt        decrypt… 'var x = Decrypt(data);'
+sensitive_case CipherMode     cipher… 'var m = CipherMode.CBC;'
+sensitive_case HMACSHA256     hmac… 'using var h = new HMACSHA256();'
+sensitive_case SHA256         sha256 'var h = SHA256.HashData(data);'
+sensitive_case PaymentRequest payment… 'var p = new PaymentRequest();'
+sensitive_case Billing        billing… 'var b = Billing;'
+sensitive_case Invoice        invoice… 'var i = new Invoice();'
+sensitive_case Passport       passport… 'var p = Passport;'
+sensitive_case PersonalData   personaldata… 'var d = PersonalData;'
+sensitive_case personal_data  personal_data… 'const string D = "personal_data";'
+sensitive_case personal-data  personal-data… 'const string D = "personal-data";'
+sensitive_case DeviceToken    devicetoken… 'var t = DeviceToken;'
+sensitive_case device_token   device_token… 'const string T = "device_token";'
+sensitive_case device-token   device-token… 'const string T = "device-token";'
+sensitive_case Secrets        secret… 'var s = Secrets;'
+sensitive_case ApiKeys        ApiKey… 'var k = ApiKeys;'
+sensitive_case api_key        api_key… 'const string K = "api_key";'
+sensitive_case api-key        api-key… 'const string K = "api-key";'
+sensitive_case ClientSecret   clientsecret… 'var s = ClientSecret;'
+sensitive_case client_secret  client_secret… 'const string S = "client_secret";'
+
+# Переезд password, secret и ApiKey из words в prefixes не сужает сигнал:
+# одиночное слово ловится и до, и после. Голого token нет.
+begin_case 'Одиночные password, secret, ApiKey — по-прежнему high'
+branch_with src/Domovoy.Core/Models/Old.cs 'var p = password;'
+expect_level high
+expect_output 'слово «password'
+branch_with src/Domovoy.Core/Models/Old.cs 'var s = secret;'
+expect_level high
+expect_output 'слово «secret'
+branch_with src/Domovoy.Core/Models/Old.cs 'var k = ApiKey;'
+expect_level high
+expect_output 'слово «ApiKey'
+end_case
+
+begin_case 'ApplicationVersion в csproj — high'
+branch_with src/Domovoy.Core/Domovoy.Core.csproj '    <ApplicationVersion>2</ApplicationVersion>'
+expect_level high
+expect_output 'слово «ApplicationVersion» в добавленной строке: src/Domovoy.Core/Domovoy.Core.csproj'
+end_case
+
+begin_case 'ApplicationDisplayVersion в csproj — high'
+branch_with src/Domovoy.Core/Domovoy.Core.csproj '    <ApplicationDisplayVersion>1.1</ApplicationDisplayVersion>'
+expect_level high
+expect_output 'слово «ApplicationDisplayVersion» в добавленной строке: src/Domovoy.Core/Domovoy.Core.csproj'
+end_case
+
+begin_case 'Токены LLM уровень не поднимают — low'
+branch_with src/Domovoy.Core/Models/Budget.cs 'var maxTokens = 4000; int tokens = 0;'
+expect_level low
+expect_output 'reason: сигналов нет'
+end_case
+
 # ------------------------------------------------------------------ пути
 begin_case 'Правка .claude/hooks/** — high'
 branch_with .claude/hooks/rule-injector.sh 'exit 0'
@@ -208,6 +276,18 @@ run_risk diff origin/main HEAD
 expect_level high
 expect_output 'high: путь «src/Domovoy.Ha/**»: src/Domovoy.Ha/Client.cs'
 expect_output 'medium: путь «scripts/**»: scripts/Client.cs'
+end_case
+
+begin_case 'docker-compose.yml — medium, группа product'
+branch_with docker-compose.yml 'services: {}'
+expect_level medium
+expect_output 'medium: путь «docker-compose.yml»: docker-compose.yml — группа product'
+end_case
+
+begin_case 'Ресурс Mobile.App/Resources — medium, группа product'
+branch_with src/Domovoy.Mobile.App/Resources/Styles/Colors.xaml '<ResourceDictionary />'
+expect_level medium
+expect_output 'medium: путь «src/Domovoy.Mobile.App/Resources/**»: src/Domovoy.Mobile.App/Resources/Styles/Colors.xaml — группа product'
 end_case
 
 begin_case 'Правка обвязки (scripts/**) — medium'
