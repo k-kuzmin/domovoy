@@ -72,7 +72,8 @@ report() { printf '%s:%s: %s\n' "$1" "$2" "${3//$'\r'/}"; VIOLATIONS=$((VIOLATIO
 is_code_file() {
     case "$1" in scripts/fixtures/*) return 1 ;; esac
     case "${1##*/}" in
-        .editorconfig | .globalconfig | *.cs | *.csproj | *.props | *.targets | *.yml | *.ruleset) return 0 ;;
+        .editorconfig | .globalconfig | *.cs | *.csproj | *.props | *.targets | *.yml | *.yaml | \
+            *.rsp | *.runsettings | *.ruleset) return 0 ;;
         *.sql) is_migration "$1" && return 0 ;;
     esac
     return 1
@@ -194,6 +195,7 @@ SUPPRESSION=(
     'EnforceCodeStyleInBuild[^A-Za-z]*[Ff]alse'           'EnforceCodeStyleInBuild=false'
     'continue-on-error[[:space:]]*:[[:space:]]*([^[:space:]f#]|f[^a])' 'continue-on-error'
     '--filter.*(!=|!~)'                                   '--filter с отрицанием'
+    '<TestCaseFilter>.*(!=|!~)'                           'TestCaseFilter с отрицанием'
 )
 # Имя свойства (группа 2) и значение (группа 4): после тега с атрибутами,
 # после «=» (-p:…=…) или «:» (env в workflow). Перед именем не «/», «(» и
