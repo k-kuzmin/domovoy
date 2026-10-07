@@ -205,7 +205,7 @@
     {
       "path": ".claude/settings.json",
       "action": "modify",
-      "why": "Пункты 12–14: Edit на хранилище секретов, варианты .env из .gitignore, разрушительные формы EF. Обвязка контроля (harness_control) — high и триггер «позвать человека»."
+      "why": "Пункты 12–14: Edit на хранилище секретов, варианты .env из .gitignore, разрушительные формы EF. Обвязка контроля (harness_control) — high и триггер «позвать человека». Пункт 13 расширен ответом владельца: локальные файлы конфигурации из .gitignore тоже закрываются."
     },
     {
       "path": ".claude/hooks/tests/test_settings_permissions.py",
@@ -612,6 +612,28 @@
         "done-dotnet"
       ],
       "behavior": "Шаг CI после «Тесты и покрытие»: bash scripts/test-count-invariant.sh сверяет сумму executed по настоящему trx прогона с tests/test-count.baseline; меньше или больше снимка — шаг красный."
+    },
+    {
+      "name": "test_local_config_denied",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p13",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Чтение и правка appsettings.{Development,Production,Local}.json и docker-compose.override.{yml,yaml} закрыты правилами deny; до правки — нет."
+    },
+    {
+      "name": "test_tracked_config_open",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p13",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Отслеживаемые appsettings.json и docker-compose.override.example.yml не закрыты ни одним правилом deny — правило синхронизации конфигурации остаётся выполнимым."
     }
   ],
   "acceptance": [
@@ -689,8 +711,8 @@
     },
     {
       "id": "p13",
-      "criterion": "П.13: варианты .env из .gitignore закрыты",
-      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — test_env_variants_read_denied ok (до правки — FAIL), test_env_example_open ok",
+      "criterion": "П.13: варианты .env и локальные файлы конфигурации из .gitignore (appsettings.{Development,Production,Local}.json, docker-compose.override.{yml,yaml}) закрыты на чтение и правку — по ответу владельца 2026-10-07",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — test_env_variants_read_denied, test_local_config_denied ok (до правки — FAIL), test_env_example_open, test_tracked_config_open ok",
       "evidence": "Строки ok/FAIL в «Проверено» Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
     },
     {
@@ -771,7 +793,6 @@
     "Удаление нетестовых файлов под tests/ как нарушение гейта — п.6 ограничен тестовым кодом (*.cs).",
     "Правка scripts/risk.sh (поле слов без границ, ограничение слов по путям) — по issue вне объёма; вопрос владельцу развилкой.",
     "Фраза с пробелом (personal data) в risk.json — список делится по пробелу и проверяется на ^[A-Za-z0-9_:-]+$; формы с «_», «-» и слитная возвращаются.",
-    "Закрытие appsettings.{Development,Production,Local}.json и docker-compose.override.yml правами: issue говорит о вариантах .env; расширение — отдельное решение владельца (агенту нужен appsettings.json и .example).",
     "Запись в хранилище секретов командой оболочки — предел префиксных шаблонов, записанный в 0026; issue его не отменяет.",
     "Новые формы подавления в *.rsp сверх существующего перечня — вне пункта 10 (он о типах файлов); замеченное попутно — раздел «Попутно» в PR.",
     "Описание локального запуска инварианта в .claude/CLAUDE.md, раздел «Команды», — файл вне «Границ» issue; команда описана в шапке скрипта, «Попутно» в PR.",
