@@ -1,0 +1,743 @@
+{
+  "issue": 133,
+  "current_state": [
+    {
+      "path": "scripts/risk.sh",
+      "line": 175,
+      "observation": "Слова ищутся регулярным выражением с границей L = (^|[^a-z0-9_]) слева и T = ([^a-z0-9_]|$) справа после tolower; у prefixes (строка 186) — только левая граница. Прогон этого же awk на строках C# показал: префикс ловит форму с начала идентификатора (secrets, deviceToken), но не вхождение корня внутрь составного идентификатора. Старый конфиг (052a93c:pipeline/risk.json, сигнал sensitive-area) искал часть корней без границ."
+    },
+    {
+      "path": "scripts/risk.sh",
+      "line": 76,
+      "observation": "Каждое слово и префикс обязаны проходить ^[A-Za-z0-9_:-]+$, а списки склеиваются через пробел и делятся split по пробелу: фраза с пробелом (personal data) конфигом не выражается, формы с «_» и «-» — выражаются."
+    },
+    {
+      "path": "scripts/risk.json",
+      "line": 46,
+      "observation": "high.words: AllowAnonymous, RequireAuthorization, password, secret, jwt, Ha:Token, ApiKey, access_token, refresh_token, Bearer; prefixes — только authoriz. Нет authenti, credential, encrypt/decrypt, hmac/sha256/cipher, payment/billing/invoice, passport/personal data, токена устройства, ApplicationVersion/ApplicationDisplayVersion."
+    },
+    {
+      "path": "scripts/risk.json",
+      "line": 92,
+      "observation": "medium.product: Program.cs, ServiceCollectionExtensions, DependencyInjection, appsettings*.json, *Options.cs, *.example*. docker-compose.yml и src/Domovoy.Mobile.App/Resources/** не входят ни в одну группу; в 052a93c:pipeline/risk.json они давали medium (app-configuration, platform-code)."
+    },
+    {
+      "path": "scripts/risk.json",
+      "line": 10,
+      "observation": "harness_control: risk.*, guard-lite.sh, council.sh, settings.json, hooks. removed_lines.words (строка 70) — gitleaks и COVERAGE_MINIMUM: удаление строки с ними из workflow даёт high."
+    },
+    {
+      "path": "scripts/risk.test.sh",
+      "line": 53,
+      "observation": "new_repo кладёт на origin/main песочницы конфиг из дерева ($CONF): новый сценарий против неисправленного scripts/risk.json краснеет, после правки конфига зеленеет — «красный до правки» наблюдаем без RISK_CONFIG_REF."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 64,
+      "observation": "is_code_file пропускает только .editorconfig, .globalconfig, *.cs, *.csproj, *.props, *.targets, *.yml, *.ruleset: *.yaml, *.rsp, *.runsettings и *.sql не проверяются вовсе, и *.sql отсекается раньше, чем до файла доходит is_migration. В дереве уже есть config/*.example.yaml — они попадут под проверку."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 71,
+      "observation": "is_migration = (^|/)Migrations/[^/]+\\.cs$: вложенный каталог под Migrations/ и файлы SQL не считаются миграцией."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 91,
+      "observation": "down_lines размечает Down() по тексту заголовка и счёту фигурных скобок без учёта комментариев и строковых литералов; размеченные строки check_added пропускает (строка 150). Граница может определиться неверно, и неопределённость красным не становится — проверка Up() в таком случае выполняется не целиком."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 103,
+      "observation": "Шаблон #pragma warning disable применяется ко всем файлам кода, включая каталог миграций. Сгенерированные EF файлы *.Designer.cs и *ModelSnapshot.cs несут такую директиву — первая настоящая миграция красит гейт. В 052a93c:scripts/guard.sh проверка подавлений пропускала защищённые пути, включая src/Domovoy.Data/Migrations/."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 113,
+      "observation": "Шаблон фильтра тестов с отрицанием рассчитан на форму командной строки; для новых типов файлов (*.runsettings) нужен свой шаблон — одно добавление расширения в is_code_file ничего бы не проверило."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 181,
+      "observation": "Подписи и ключи платформы: *.keystore, *.p12, *.mobileprovision, google-services.json. Пары для iOS — GoogleService-Info.plist — нет; в 052a93c:scripts/protected-paths.sh она была. Пункт 11 issue стоит в части 4 (guard-lite.sh): покрытие *Info.plist в risk.json даёт только уровень, а не нарушение гейта."
+    },
+    {
+      "path": "scripts/guard-lite.sh",
+      "line": 165,
+      "observation": "Список файлов берётся с --no-renames; удаление теста ловится только балансом атрибутов [Fact]/[Theory] по всем *.cs (строки 195–208). Файл тестов, целиком перенесённый из tests/ в другой каталог кода, баланс не меняет. В 052a93c:scripts/guard.sh (проверка 3) удалённый файл под tests/ и переименование из tests/ наружу были нарушением сами по себе, отдельным проходом с -M."
+    },
+    {
+      "path": "scripts/guard-lite.test.sh",
+      "line": 422,
+      "observation": "Зелёный сценарий «Перенос теста в другой файл зеленеет» и красный «Тестовый файл, переименованный в не-код, — удалённые тесты» (строка 285) — их ожидания новая проверка удалённых файлов не меняет."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 84,
+      "observation": "Тесты запускаются без --logger trx; шага сверки числа выполненных тестов нет. В 052a93c здесь стояли --logger \"trx;LogFileName=tests.trx\", шаг «Число выполненных тестов» (scripts/test-count-invariant.sh) и шаг его сценариев; снимок — tests/test-count.baseline (55). Сценарии обвязки перечислены поимённо (строки 153–176), комментарий артефакта (178) говорит, что в TestResults/ только отчёты покрытия."
+    },
+    {
+      "path": ".claude/settings.json",
+      "line": 15,
+      "observation": "Из команд EF закрыта одна форма — префикс dotnet ef database update (Bash и PowerShell). Форма с ключами перед подкомандой, запуск через dotnet-ef и dotnet tool run, database drop и migrations remove не закрыты."
+    },
+    {
+      "path": ".claude/settings.json",
+      "line": 43,
+      "observation": "Хранилище секретов закрыто только на чтение: Read(**/Microsoft/UserSecrets/**), Read(**/.microsoft/usersecrets/**) и абсолютные формы; правил Edit на эти пути нет. dotnet user-secrets закрыт целиком префиксом (строка 17). Read(**/.env) и cat/type/Get-Content *.env — точное имя .env."
+    },
+    {
+      "path": ".gitignore",
+      "line": 15,
+      "observation": "Как файлы с реальными значениями .gitignore ожидает .env, .env.local, .env.production (строки 15–17); рядом appsettings.{Development,Production,Local}.json и docker-compose.override.yml."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 317,
+      "observation": "«Команды человека»: применение миграций к базе и секреты агенту закрыты правами .claude/settings.json. Агенту при этом нужны dotnet ef migrations add и migrations script (раздел «Команды») и правка .env.example (таблица синхронизации)."
+    },
+    {
+      "path": "docs/decisions/0026-human-led-pipeline.md",
+      "line": 79,
+      "observation": "Пределы: права — страховка, а не граница; шаблоны префиксные, шаблоны с * в середине (cat *UserSecrets*, git *--output*) замерены работающими; правки permissions проверяются чисто только новой сессией. Issue: эти пределы не отменяются."
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "line": 280,
+      "observation": "SettingsWiring уже читает .claude/settings.json статически и проверяет его разводку; тесты каталога идут в CI шагом «Тесты впрыска правил» через unittest discover — новый test_*.py подхватывается без правки workflow."
+    }
+  ],
+  "approach": {
+    "summary": "Один PR, порядок коммитов по ответу владельца: часть 3 первой. В каждом коммите сначала сценарий, красный на текущем коде, затем правка, после которой он зелёный; оба прогона — в «Проверено» журнала.\n\nЧасть 3 (guard-lite.sh). П.7: правило #pragma warning disable не применяется к файлам под src/Domovoy.Data/Migrations/ (только это правило и только этот каталог — тот, что risk.json держит в former_protected, high); остальные подавления в миграциях по-прежнему краснеют. Фикстура сценария — содержимое трёх файлов из настоящего прогона dotnet ef migrations add (EF Core 8, Npgsql) в одноразовом проекте вне репозитория, урезанное до значимых строк. П.8: is_migration — любой файл *.cs или *.sql на любой глубине под каталогом Migrations/; is_code_file пропускает миграции SQL; у *.sql нет Down(), файл проверяется целиком и только правилами миграций. П.9: down_lines заменяется разметкой, которая перед счётом скобок вырезает однострочные комментарии, блочные комментарии и обычные строковые литералы, а заголовком Down() считает только объявление метода. Граница не определена — нарушение «граница Down() не определена: <причина>», а не пропуск: заголовков Down() больше одного; Down() не закрыт до конца файла; глубина ушла в минус; внутри Down() начался заголовок Up(); внутри Down() литерал, который разметка не разбирает (многострочный verbatim, raw string).\n\nЧасть 4 (guard-lite.sh). П.10: is_code_file добавляет *.yaml, *.rsp, *.runsettings; к перечню добавляется шаблон отрицания в TestCaseFilter (тот же класс, что --filter с отрицанием, — иначе для *.runsettings проверка пустая). П.11: GoogleService-Info.plist — в список подписей платформы рядом с google-services.json.\n\nЧасть 2. П.5: возвращаются scripts/test-count-invariant.sh и его сценарии из 052a93c с правкой шапки под guard-lite.sh и отсутствие прямых коммитов в main; tests/test-count.baseline с числом из прогона на реализации (два прогона подряд — число совпало); в ci-fast.yml — --logger trx в шаге тестов, шаг сверки после него, шаг сценариев рядом с остальными, комментарий артефакта. Диффовая половина: guard-lite.sh краснеет, если число в tests/test-count.baseline уменьшилось или файл удалён (рост — нет). В risk.json скрипт инварианта — в harness_control, слово test-count-invariant — в removed_lines.words: снятие шага из workflow даёт high, как у COVERAGE_MINIMUM. Снимок в группу не идёт: каждый PR с новым тестом правит его. П.6: отдельный проход git diff -M --name-status: удалённый файл под tests/ и переименование из tests/ наружу — нарушение; переименование внутри tests/ — нет.\n\nЧасть 1 (risk.json). П.1: docker-compose.yml — в medium.product. П.2: src/Domovoy.Mobile.App/Resources/** — в medium.product (новое имя группы потянуло бы .claude/CLAUDE.md, он вне границ). П.3: ApplicationVersion, ApplicationDisplayVersion — в high.words. П.4: слова старого сигнала возвращаются в той мере, в какой их выражают words и prefixes без правки risk.sh: префиксы authenti, credential, encrypt, decrypt, cipher, hmac, payment, billing, invoice, passport, personaldata, personal_data, personal-data, devicetoken, device_token, device-token; secret, password и ApiKey переезжают из words в prefixes (ловят множественные и составные формы, начинающиеся с них) вместе с формами api_key, api-key, clientsecret, client_secret; слово sha256. Вхождение внутрь составного идентификатора и фраза с пробелом конфигом не выражаются — это отказ с причиной в журнале и развилка для владельца (карточка). Заметки note и about в risk.json приводятся к новому составу.\n\nЧасть 5 (settings.json, Bash и PowerShell парами). П.12: Edit-правила на пути хранилища секретов в тех же четырёх формах, что Read. П.13: Read(**/.env.local), Read(**/.env.production) и абсолютные формы плюс cat/type/Get-Content этих имён; .env.* не используется — deny без исключений закрыл бы .env.example. П.14: шаблоны с * между исполняемым и подкомандой (одна форма закрывает dotnet ef, dotnet-ef и dotnet tool run dotnet-ef и ключи перед подкомандой) на database update, database drop, migrations remove; прежние правила не удаляются; migrations add и migrations script остаются открытыми. Тест — статический unittest в .claude/hooks/tests/: модель сопоставления шаблонов (как префиксные шаблоны описаны в 0026) прогоняет обещанные формы против deny и отрицательные примеры против всего списка.\n\nЗапись в docs/decisions/ не нужна: пункты 5, 6, 12–14 возвращаются, а пределы префиксных шаблонов уже записаны в 0026 и issue их не отменяет. Отказ по п.4 — запись в журнал (п.4 не из списка, требующего записи решения).",
+    "rejected": [
+      {
+        "option": "П.7: исключить из проверки подавлений весь каталог миграций, как в 052a93c",
+        "reason": "шире нужного: Skip =, NoWarn и прочие подавления в миграциях тоже перестали бы краснеть; генератор даёт только #pragma warning disable"
+      },
+      {
+        "option": "П.7: исключать только *.Designer.cs и *ModelSnapshot.cs",
+        "reason": "EF при seed-данных ставит директиву и в основной файл миграции — гейт снова краснел бы на сгенерированном коде; проверить на реальном выводе при реализации"
+      },
+      {
+        "option": "П.7: пропускать файлы с заголовком <auto-generated>",
+        "reason": "заголовок пишется рукой так же легко, как директива, и снял бы все проверки файла, включая разрушительные операции"
+      },
+      {
+        "option": "П.6: вернуть -M в основной проход гейта",
+        "reason": "--no-renames там нужен намеренно (шапка guard-lite.sh): тест, унесённый в файл не того типа, считается удалённым; отдельный проход для удалённых файлов не меняет остальных проверок"
+      },
+      {
+        "option": "П.5: снимок tests/test-count.baseline в группу harness_control",
+        "reason": "каждый PR с новым тестом правит снимок и получал бы high; понижение ловит гейт"
+      },
+      {
+        "option": "П.5: только диффовая проверка без инварианта результата",
+        "reason": "issue прямо называет дыру: тест убирается из прогона, не трогая атрибутов; это видит только число выполненных"
+      },
+      {
+        "option": "П.13: Read(**/.env.*) одним правилом",
+        "reason": "deny не знает исключений и закрыл бы .env.example, который агент обязан править по таблице синхронизации"
+      },
+      {
+        "option": "П.12: шаблон Bash на любую команду с UserSecrets в тексте",
+        "reason": "закрыл бы поиск UserSecretsId в *.csproj; запись в хранилище командой оболочки — предел префиксных шаблонов из 0026"
+      },
+      {
+        "option": "П.4: перечислять составные формы поимённо до полноты",
+        "reason": "перечень составных идентификаторов не кончается; перечислены только формы из issue и формы с начала идентификатора, остальное — предел"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да, по пунктам 1–3 и 5–14 — проверка возвращается. Пункт 4 — частично: формы с начала идентификатора возвращаются конфигом, вхождение внутрь составного идентификатора (issue прямо называет clientsecret) и фраза с пробелом без правки scripts/risk.sh не выражаются. Расхождение с журналом: триаж записал, что пункт 4 выражается конфигом без правки risk.sh, кроме фразы с пробелом; прогон awk из risk.sh:184–186 это опровергает. Второе расхождение: пункт 11 issue относит к guard-lite.sh (часть 4), а не к risk.json, — нужна правка гейта, а не только сценарий.",
+    "alternative": "П.4: добавить в risk.sh поле слов без границ (поиск подстроки) и перенести туда корни старого сигнала. Владелец увидел бы high на любой правке кода с такими корнями внутри идентификаторов — то, что ловил старый сигнал, — ценой правки обвязки контроля вне «Границ» issue (issue: «если сигнал без неё не выражается — сказать в триаже») и большего числа ложных срабатываний вне src/ и tests/ (старый сигнал был ограничен keyword_paths, нынешний risk.sh этого поля не знает). Остальные пункты — альтернатив с иным наблюдаемым результатом нет.",
+    "ripple": "risk.json читают risk.sh и risk.test.sh; новые слова срабатывают по всему дереву вне docs/** и *.md: git grep показал sha256 в scripts/council.sh и council.test.sh, encrypt в .gitignore (encryptable), credential в .gitleaks.toml (уже high) и в SecretMaskingEnricher.cs, authenti и devicetoken в src/Domovoy.Api/Program.cs и Security/ (уже high по пути). guard-lite.sh зовёт только job guard в ci-fast.yml и guard-lite.test.sh; правка is_code_file меняет охват для всех проверок гейта, включая config/*.example.yaml. test-count-invariant.sh — новый, вызывающих нет, кроме нового шага ci-fast.yml. settings.json читает Claude Code и SettingsWiring в test_rules_map.py (разводку хуков правка не трогает).",
+    "workaround": "Нет. Исключение #pragma warning disable для src/Domovoy.Data/Migrations/ — не обход, а граница генерируемого кода, путь которого risk.json держит в former_protected (high); других исключений правка не вводит.",
+    "council_signs": [
+      "правка обвязки: scripts/guard-lite.sh, scripts/risk.json, .claude/settings.json, .github/workflows/ci-fast.yml",
+      "общий механизм: guard-lite.sh — гейт каждого PR; греп вызовов — job guard в ci-fast.yml и guard-lite.test.sh",
+      "правка расширяет допустимые состояния: #pragma warning disable в src/Domovoy.Data/Migrations/ перестаёт быть нарушением"
+    ],
+    "executor": "Субагенты: правка выше порога (12 файлов, сотни строк). Срезы по файлам, параллельно после части 3: (1) guard-lite.sh + guard-lite.test.sh — части 3, 4, п.6 и понижение снимка, первыми коммитами; (2) risk.json + risk.test.sh — часть 1 и группа инварианта; (3) test-count-invariant.sh + его сценарии + tests/test-count.baseline + ci-fast.yml; (4) settings.json + test_settings_permissions.py. Контракты стыков: путь снимка tests/test-count.baseline, формат — строка из цифр, строки с # — комментарии; имя скрипта scripts/test-count-invariant.sh; текст нарушения гейта о снимке называет файл и оба числа. Склейка и сверка диффа — оркестратор.",
+    "fork": true
+  },
+  "files": [
+    {
+      "path": "scripts/guard-lite.sh",
+      "action": "modify",
+      "why": "Пункты 6–11 и понижение снимка: исключение #pragma для src/Domovoy.Data/Migrations/, is_migration на вложенные каталоги и *.sql, разметка Down() с красным при неопределённости, расширения *.yaml/*.rsp/*.runsettings и шаблон TestCaseFilter, GoogleService-Info.plist, удалённый или вынесенный из tests/ файл, уменьшение числа в tests/test-count.baseline. Обвязка контроля (harness_control) — high и триггер «позвать человека» независимо от заявления."
+    },
+    {
+      "path": "scripts/guard-lite.test.sh",
+      "action": "modify",
+      "why": "Сценарии на каждую возвращённую проверку гейта и сценарий со сгенерированной EF миграцией (п.7). Обвязка качества (harness_quality, medium)."
+    },
+    {
+      "path": "scripts/risk.json",
+      "action": "modify",
+      "why": "Пункты 1–4 и защита инварианта: docker-compose.yml и Mobile.App/Resources/** в medium.product, слова и префиксы чувствительной зоны, ApplicationVersion/ApplicationDisplayVersion, scripts/test-count-invariant.sh в harness_control, test-count-invariant в removed_lines.words, заметки. Обвязка контроля (harness_control) — high; новая таблица в силе только после мерджа (конфиг читается с origin/main), до него проверяется RISK_CONFIG_REF=HEAD."
+    },
+    {
+      "path": "scripts/risk.test.sh",
+      "action": "modify",
+      "why": "Сценарий на каждый путь и на каждую форму слова (issue: сценарий на каждую форму, а не на одну) плюс сценарий названного предела п.4. Обвязка контроля (scripts/risk.*) — high."
+    },
+    {
+      "path": "scripts/test-count-invariant.sh",
+      "action": "create",
+      "why": "Пункт 5: инвариант числа выполненных тестовых случаев из 052a93c; шапка приведена к guard-lite.sh и к правилу «прямых коммитов в main нет». Обвязка качества (scripts/**), после правки risk.json — harness_control."
+    },
+    {
+      "path": "scripts/test-count-invariant.test.sh",
+      "action": "create",
+      "why": "Пункт 5: сценарии инварианта из 052a93c на рукописных trx. Обвязка качества (harness_quality)."
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "action": "create",
+      "why": "Пункт 5: снимок числа выполненных случаев с пояснением в комментариях; число — из прогона на реализации."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "Пункт 5: --logger trx в шаге тестов, шаг сверки числа тестов, шаг сценариев инварианта, комментарий артефакта. Обвязка качества (.github/**, medium); строки со словами gitleaks и COVERAGE_MINIMUM не удаляются."
+    },
+    {
+      "path": ".claude/settings.json",
+      "action": "modify",
+      "why": "Пункты 12–14: Edit на хранилище секретов, варианты .env из .gitignore, разрушительные формы EF. Обвязка контроля (harness_control) — high и триггер «позвать человека»."
+    },
+    {
+      "path": ".claude/hooks/tests/test_settings_permissions.py",
+      "action": "create",
+      "why": "Пункты 12–14: статический тест прав. Путь не перечислен в «Границах» issue, но назван в «Готово, когда» («тест в .claude/hooks/tests/»). Обвязка контроля (.claude/hooks/**) — high."
+    },
+    {
+      "path": "docs/tasks/133.md",
+      "action": "modify",
+      "why": "Решения, отказ по п.4 с причиной, отвергнутое, «Проверено» с красными и зелёными прогонами, счётчики."
+    },
+    {
+      "path": "docs/tasks/133.plan.json",
+      "action": "create",
+      "why": "Этот план."
+    }
+  ],
+  "boundaries": [
+    "scripts/risk.json",
+    "scripts/risk.test.sh",
+    "scripts/guard-lite.sh",
+    "scripts/guard-lite.test.sh",
+    "scripts/test-count-invariant.sh",
+    "scripts/test-count-invariant.test.sh",
+    "tests/test-count.baseline",
+    ".github/workflows/ci-fast.yml",
+    ".claude/settings.json",
+    ".claude/hooks/tests/test_settings_permissions.py",
+    "docs/decisions/**",
+    "docs/tasks/133.md",
+    "docs/tasks/133.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "Сгенерированная EF миграция (Initial, Designer, ModelSnapshot) зеленеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p7",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Три файла с содержимым из настоящего dotnet ef migrations add (с #pragma warning disable в Designer и ModelSnapshot, CreateTable в Up(), DropTable в Down()) под src/Domovoy.Data/Migrations/ — код 0. До правки — код 1 с «подавление: #pragma warning disable»."
+    },
+    {
+      "name": "#pragma warning disable в Migrations/ вне src/Domovoy.Data краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p7",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Исключение узкое: та же директива в каталоге Migrations/ другого проекта — код 1 и строка «подавление: #pragma warning disable»; Skip = в файле под src/Domovoy.Data/Migrations/ — тоже код 1."
+    },
+    {
+      "name": "DropColumn во вложенном каталоге Migrations краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p8",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Миграция в подкаталоге Migrations/ с DropColumn в Up() — код 1 и «разрушительная миграция: DropColumn» с файлом и строкой."
+    },
+    {
+      "name": "DROP TABLE в SQL-файле миграции краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p8",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Файл *.sql под Migrations/ с DROP TABLE без IF EXISTS — код 1 и «сырой SQL в миграции: DROP без IF EXISTS»; тот же оператор с IF EXISTS — код 0."
+    },
+    {
+      "name": "Down(): комментарий не сдвигает границу",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p9",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Миграция с комментарием, упоминающим Down(), внутри Up() и DropColumn в Up() — код 1 со строкой DropColumn; до правки — код 0."
+    },
+    {
+      "name": "Down(): строковый литерал не сдвигает границу",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p9",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Миграция, где Down() стоит перед Up() и в литерале Down() есть фигурная скобка, а в Up() — DropColumn: код 1 со строкой из Up(); до правки — код 0."
+    },
+    {
+      "name": "Незакрытый Down() краснеет: граница не определена",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p9",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Down() без закрывающей скобки до конца файла — код 1 и «граница Down() не определена»."
+    },
+    {
+      "name": "Два заголовка Down() в файле краснеют: граница не определена",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p9",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Два объявления Down() в одном файле миграции — код 1 и «граница Down() не определена»."
+    },
+    {
+      "name": "Многострочный литерал в Down() краснеет: граница не определена",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p9",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Verbatim-литерал, разнесённый по строкам внутри Down(), — код 1 и «граница Down() не определена»; существующий «DropTable в Down() зеленеет» остаётся зелёным."
+    },
+    {
+      "name": "continue-on-error в workflow *.yaml краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p10",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Файл .github/workflows/*.yaml с continue-on-error: true — код 1 и «подавление: continue-on-error»; до правки — код 0."
+    },
+    {
+      "name": "TreatWarningsAsErrors=false в Directory.Build.rsp краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p10",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Файл ответов сборки с -p:TreatWarningsAsErrors=false — код 1 и «подавление: TreatWarningsAsErrors=false»; до правки — код 0."
+    },
+    {
+      "name": "TestCaseFilter с отрицанием в *.runsettings краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p10",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Элемент TestCaseFilter с != в *.runsettings — код 1 и правило фильтра с отрицанием; до правки — код 0."
+    },
+    {
+      "name": "GoogleService-Info.plist в любом каталоге краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p11",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Добавленный GoogleService-Info.plist во вложенном каталоге — код 1 и «подпись или ключ платформы в диффе»; до правки — код 0."
+    },
+    {
+      "name": "Удалённый файл под tests/ краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p6",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Удаление файла под tests/ при добавлении стольких же атрибутов в другом файле (баланс атрибутов не нарушен) — код 1 и нарушение «удалён или вынесен из tests/» с путём; до правки — код 0."
+    },
+    {
+      "name": "Тестовый файл, вынесенный из tests/ в другой каталог кода, краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p6",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "git mv файла тестов из tests/ в src/ без правки содержимого — код 1 с исходным путём; до правки — код 0 (баланс атрибутов равен)."
+    },
+    {
+      "name": "Переименование тестового файла внутри tests/ зеленеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p6",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "git mv файла тестов внутри tests/ — код 0: новая проверка не даёт ложного срабатывания на переименовании."
+    },
+    {
+      "name": "Понижение числа в tests/test-count.baseline краснеет",
+      "file": "scripts/guard-lite.test.sh",
+      "new": true,
+      "covers": [
+        "p5",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Число в снимке уменьшено — код 1, в строке нарушения файл и оба числа; рост числа и правка одних комментариев — код 0; удаление снимка — код 1."
+    },
+    {
+      "name": "сценарии инварианта числа тестов из 052a93c (14 штук, от «число совпало со снимком — код 0 и напечатанное сравнение» до «атрибут notexecuted перед executed не подменяет число»)",
+      "file": "scripts/test-count-invariant.test.sh",
+      "new": true,
+      "covers": [
+        "p5",
+        "done-ci"
+      ],
+      "behavior": "На рукописных trx: совпадение — код 0; меньше снимка, больше снимка, нет снимка, нечисловой/пустой снимок, нет trx, нет executed или Counters — код 1 с названным случаем; два trx складываются; notExecuted не считается выполненным."
+    },
+    {
+      "name": "docker-compose.yml — medium, группа product",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p1",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Правка docker-compose.yml в корне — level=medium и причина с группой product; до правки конфига — low."
+    },
+    {
+      "name": "Ресурс Mobile.App/Resources — medium, группа product",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p2",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Файл под src/Domovoy.Mobile.App/Resources/ — level=medium, группа product; до правки — low."
+    },
+    {
+      "name": "ApplicationVersion и ApplicationDisplayVersion в csproj — high",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p3",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Два сценария, по одному на поле: добавленная строка с элементом поля в *.csproj вне путей high — level=high и причина со словом; до правки — low."
+    },
+    {
+      "name": "Слово чувствительной зоны «<форма>» — high (по сценарию на каждую форму)",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p4",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Цикл по формам: authenti…, credential(s), encrypt, decrypt, cipher, hmac, sha256, payment, billing, invoice, passport, personaldata, personal_data, personal-data, devicetoken, device_token, device-token, secrets, apikey, api_key, api-key, clientsecret, client_secret; каждая — отдельный сценарий: строка в файле вне путей high — level=high и причина называет слово или префикс. До правки конфига каждый — low."
+    },
+    {
+      "name": "Существующие слова после переезда в prefixes ловят прежние формы",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p4",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "password, secret, ApiKey одиночным словом по-прежнему дают high (переезд из words в prefixes не сузил сигнал); CancellationToken и токены LLM — по-прежнему low."
+    },
+    {
+      "name": "Вхождение корня внутрь составного идентификатора — названный предел, low",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p4",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Фиксирует отказ: корень внутри составного идентификатора уровень не поднимает. Если владелец выберет правку risk.sh, сценарий переворачивается в high — предел виден в коде, а не только в журнале."
+    },
+    {
+      "name": "Правка scripts/test-count-invariant.sh — high, группа harness_control",
+      "file": "scripts/risk.test.sh",
+      "new": true,
+      "covers": [
+        "p5",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Правка скрипта инварианта — level=high, группа harness_control; удалённая из workflow строка со словом test-count-invariant — high, добавленная — medium."
+    },
+    {
+      "name": "test_ef_destructive_forms_denied",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p14",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Для Bash и PowerShell каждая форма — database update с ключом перед подкомандой, запуск через dotnet-ef и dotnet tool run, database drop, migrations remove — совпадает хотя бы с одним правилом deny по модели сопоставления шаблонов; до правки — нет."
+    },
+    {
+      "name": "test_ef_agent_commands_open",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p14",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "dotnet ef migrations add и migrations script из раздела «Команды» не совпадают ни с одним правилом deny и ask."
+    },
+    {
+      "name": "test_user_secrets_store_write_denied",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p12",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Запись (Edit) по путям хранилища секретов Windows и Unix, в относительной и абсолютной форме, закрыта правилом deny; до правки — нет."
+    },
+    {
+      "name": "test_env_variants_read_denied",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p13",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": "Чтение .env.local и .env.production инструментом Read и командами cat/type/Get-Content закрыто; до правки — нет."
+    },
+    {
+      "name": "test_env_example_open",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "p13",
+        "done-redgreen",
+        "done-ci"
+      ],
+      "behavior": ".env.example на чтение и правку не закрыт ни одним правилом deny — правило синхронизации .example остаётся выполнимым."
+    },
+    {
+      "name": "Число выполненных тестов",
+      "file": ".github/workflows/ci-fast.yml",
+      "new": true,
+      "covers": [
+        "p5",
+        "done-dotnet"
+      ],
+      "behavior": "Шаг CI после «Тесты и покрытие»: bash scripts/test-count-invariant.sh сверяет сумму executed по настоящему trx прогона с tests/test-count.baseline; меньше или больше снимка — шаг красный."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "p1",
+      "criterion": "П.1: docker-compose.yml снова даёт medium",
+      "method": "bash scripts/risk.test.sh — сценарий «docker-compose.yml — medium, группа product» ok; на коммите со сценарием до правки risk.json — FAIL",
+      "evidence": "Строки ok/FAIL обоих прогонов в «Проверено» журнала; цитата scripts/risk.json с шаблоном"
+    },
+    {
+      "id": "p2",
+      "criterion": "П.2: src/Domovoy.Mobile.App/Resources/** снова даёт medium",
+      "method": "bash scripts/risk.test.sh — сценарий ресурса Mobile.App ok; до правки — FAIL",
+      "evidence": "Строки прогонов в «Проверено»; цитата шаблона в risk.json"
+    },
+    {
+      "id": "p3",
+      "criterion": "П.3: ApplicationVersion и ApplicationDisplayVersion дают уровень",
+      "method": "bash scripts/risk.test.sh — два сценария полей ok (level=high); до правки — FAIL",
+      "evidence": "Строки прогонов в «Проверено»"
+    },
+    {
+      "id": "p4",
+      "criterion": "П.4: слова чувствительной зоны срабатывают; составные и множественные формы (проверка возвращена или отказ записан с причиной)",
+      "method": "bash scripts/risk.test.sh — сценарий на каждую форму ok, до правки — FAIL; вхождение внутрь составного идентификатора и фраза с пробелом — отказ записан в журнал с причиной (правка risk.sh вне «Границ» issue), выбор между отказом и правкой risk.sh — у владельца (fork)",
+      "evidence": "Строки прогонов в «Проверено»; запись отказа в «Решения» docs/tasks/133.md; ответ владельца по развилке в журнале; п.4 не входит в список пунктов, отказ по которым требует записи в docs/decisions/ — достаточно журнала"
+    },
+    {
+      "id": "p5",
+      "criterion": "П.5: инвариант числа выполненных тестов возвращён",
+      "method": "bash scripts/test-count-invariant.test.sh — все сценарии ok; dotnet test с --logger trx и bash scripts/test-count-invariant.sh — «Инвариант числа тестов: сходится.», код 0; тот же скрипт против снимка на 1 больше — код 1; шаг «Число выполненных тестов» в ci-fast.yml зелёный на PR; сценарий понижения снимка в guard-lite.test.sh ok",
+      "evidence": "Вывод скрипта с числом в «Проверено»; число в tests/test-count.baseline; имя и итог шага в прогоне CI PR Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
+    },
+    {
+      "id": "p6",
+      "criterion": "П.6: удаление тестового файла и вынос из tests/ ловятся сами по себе",
+      "method": "bash scripts/guard-lite.test.sh — сценарии удаления и выноса ok, до правки — FAIL; сценарий переименования внутри tests/ и «Перенос теста в другой файл зеленеет» ok",
+      "evidence": "Строки [ ok  ]/[ FAIL] обоих прогонов в «Проверено» Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
+    },
+    {
+      "id": "p7",
+      "criterion": "П.7 (блокер): сгенерированный EF код миграции не красит гейт; сценарий с файлами, какие генерирует dotnet ef migrations add, зелёный",
+      "method": "bash scripts/guard-lite.test.sh — сценарий «Сгенерированная EF миграция (Initial, Designer, ModelSnapshot) зеленеет» ok, до правки — FAIL с «#pragma warning disable»; сценарий узости исключения ok",
+      "evidence": "Строки прогонов в «Проверено»; в журнале — версия EF и команда, которой получена фикстура"
+    },
+    {
+      "id": "p8",
+      "criterion": "П.8: вложенные каталоги и SQL-файлы миграций проверяются",
+      "method": "bash scripts/guard-lite.test.sh — сценарии вложенного каталога и SQL-файла ok, до правки — FAIL",
+      "evidence": "Строки прогонов в «Проверено»"
+    },
+    {
+      "id": "p9",
+      "criterion": "П.9: граница Down() определяется надёжно, неопределённость — красный",
+      "method": "bash scripts/guard-lite.test.sh — пять сценариев Down() ok, до правки — FAIL; существующие «DropTable в Down() зеленеет» и «DropTable и в Up(), и в Down(): в выводе только Up()» ok",
+      "evidence": "Строки прогонов в «Проверено»"
+    },
+    {
+      "id": "p10",
+      "criterion": "П.10: *.yaml, *.rsp, *.runsettings проверяются на подавления",
+      "method": "bash scripts/guard-lite.test.sh — три сценария расширений ok, до правки — FAIL",
+      "evidence": "Строки прогонов в «Проверено»"
+    },
+    {
+      "id": "p11",
+      "criterion": "П.11: GoogleService-Info.plist снова в подписях платформы",
+      "method": "bash scripts/guard-lite.test.sh — сценарий GoogleService-Info.plist ok, до правки — FAIL",
+      "evidence": "Строки прогонов в «Проверено»"
+    },
+    {
+      "id": "p12",
+      "criterion": "П.12: запись в хранилище секретов закрыта правами",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — test_user_secrets_store_write_denied ok, до правки — FAIL",
+      "evidence": "Строки ok/FAIL в «Проверено» Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
+    },
+    {
+      "id": "p13",
+      "criterion": "П.13: варианты .env из .gitignore закрыты",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — test_env_variants_read_denied ok (до правки — FAIL), test_env_example_open ok",
+      "evidence": "Строки ok/FAIL в «Проверено» Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
+    },
+    {
+      "id": "p14",
+      "criterion": "П.14: другие формы и разрушительные подкоманды EF закрыты",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v — test_ef_destructive_forms_denied ok (до правки — FAIL), test_ef_agent_commands_open ok",
+      "evidence": "Строки ok/FAIL в «Проверено» Пункт возвращается, поэтому запись в docs/decisions/ не требуется (issue требует её только для отказа)."
+    },
+    {
+      "id": "live-perms",
+      "criterion": "Права 12–14 действительно применяются Claude Code",
+      "method": "непроверяем",
+      "evidence": "Тест моделирует сопоставление шаблонов, а не Claude Code; по 0026 чистый замер правки permissions — новая сессия или claude -p в одноразовом клоне, его делает человек. Применяются ли правила Edit и к Write — по документации не сверено (инструмента документации у шага не было); остаётся вопросом замера."
+    },
+    {
+      "id": "done-redgreen",
+      "criterion": "На каждую возвращённую проверку есть сценарий или тест, красный до правки и зелёный после",
+      "method": "Порядок коммитов: сценарий — отдельным коммитом до правки; прогон на нём краснеет по именно этому сценарию, на следующем — зеленеет",
+      "evidence": "Хеши коммитов и строки FAIL/ok в «Проверено» журнала"
+    },
+    {
+      "id": "done-ci",
+      "criterion": "bash scripts/risk.test.sh, bash scripts/guard-lite.test.sh и все шаги ci-fast.yml зелёные",
+      "method": "Оба сценария локально с кодом 0; gh pr checks на PR — все работы ci-fast.yml success; bash scripts/guard-lite.sh origin/main HEAD — код 0 на ветке",
+      "evidence": "Итоговые строки сценариев и вывод gh pr checks в «Проверено»"
+    },
+    {
+      "id": "done-dotnet",
+      "criterion": "dotnet build, dotnet test зелёные, число тестов не уменьшилось",
+      "method": "dotnet build и dotnet test локально — код 0; число выполненных до и после из trx (bash scripts/test-count-invariant.sh) — не меньше, чем на origin/main",
+      "evidence": "Числа до и после в «Проверено»"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Новая разметка Down() краснеет на реальной сгенерированной миграции (ложная «неопределённость»).",
+      "mitigation": "Фикстура п.7 — настоящий вывод dotnet ef migrations add (EF Core 8, Npgsql), включая Down() с CreateTable и литералами; сценарий обязан быть зелёным, иначе правка не сдаётся."
+    },
+    {
+      "risk": "Исключение #pragma в каталоге миграций расширяет допустимые состояния гейта.",
+      "mitigation": "Только одно правило и только src/Domovoy.Data/Migrations/ — путь former_protected (high, человек смотрит дифф); сценарий узости: в другом Migrations/ и для Skip = гейт краснеет."
+    },
+    {
+      "risk": "Новые слова и префиксы дают high вне src/ и tests/ (sha256 в scripts/council.sh, encryptable в .gitignore): старый сигнал был ограничен keyword_paths, нынешний risk.sh — нет.",
+      "mitigation": "До и после правки — RISK_CONFIG_REF=HEAD bash scripts/risk.sh diff <M>^1 <M> по последним пяти смерженным PR; уровни сводкой в «Проверено». Рост уровня у PR без чувствительной правки — сузить форму слова, а не добавлять пути в words_skip_paths."
+    },
+    {
+      "risk": "Число выполненных тестов не детерминировано между Windows и CI (ubuntu) — инвариант краснеет на ровном месте.",
+      "mitigation": "Снимок — из двух локальных прогонов подряд, сверенных с числом шага CI на PR; расхождение — разбор до мерджа, а не правка снимка под CI."
+    },
+    {
+      "risk": "Каждый PR с новым тестом один раз краснеет на инварианте и правит снимок.",
+      "mitigation": "Принятая цена из 052a93c: сообщение печатает число, которое надо вписать; понижение ловит гейт."
+    },
+    {
+      "risk": "Новые deny перекрывают законные команды агента (migrations add/script, .env.example, поиск UserSecretsId).",
+      "mitigation": "Отрицательные тесты test_ef_agent_commands_open и test_env_example_open; .env.* и Bash-шаблон на UserSecrets отвергнуты."
+    },
+    {
+      "risk": "*.yaml в is_code_file начинает проверять config/*.example.yaml; шаблоны перечня на YAML-данных могут сработать ложно.",
+      "mitigation": "Прогон bash scripts/guard-lite.sh против дерева с этими файлами как добавленными (сценарий-проба на копии) — код 0; результат в «Проверено»."
+    },
+    {
+      "risk": "guard-lite.sh и risk.json правятся тем же PR, который ими оценивается (предел 0026); новая таблица risk.json в силе только после мерджа.",
+      "mitigation": "Обвязка контроля — триггер «позвать человека» и high; уровень по новой таблице — RISK_CONFIG_REF=HEAD bash scripts/risk.sh diff origin/main HEAD, вывод в «Проверено»."
+    },
+    {
+      "risk": "Объём выше порога size.files (12 файлов при 11) и пять подсистем — длинный дифф ревью.",
+      "mitigation": "Решение владельца — один PR; коммиты по частям, часть 3 первой; срезы субагентам с контрактами стыков."
+    }
+  ],
+  "out_of_scope": [
+    "Правка scripts/risk.sh (поле слов без границ, ограничение слов по путям) — по issue вне объёма; вопрос владельцу развилкой.",
+    "Фраза с пробелом (personal data) в risk.json — список делится по пробелу и проверяется на ^[A-Za-z0-9_:-]+$; формы с «_», «-» и слитная возвращаются.",
+    "Закрытие appsettings.{Development,Production,Local}.json и docker-compose.override.yml правами: issue говорит о вариантах .env; расширение — отдельное решение владельца (агенту нужен appsettings.json и .example).",
+    "Запись в хранилище секретов командой оболочки — предел префиксных шаблонов, записанный в 0026; issue его не отменяет.",
+    "Новые формы подавления в *.rsp сверх существующего перечня — вне пункта 10 (он о типах файлов); замеченное попутно — раздел «Попутно» в PR.",
+    "Описание локального запуска инварианта в .claude/CLAUDE.md, раздел «Команды», — файл вне «Границ» issue; команда описана в шапке скрипта, «Попутно» в PR.",
+    "Режим history, всё отвергнутое в 0026, проверка фронтматера агентов, обязательные проверки ruleset — вне объёма по issue."
+  ]
+}
