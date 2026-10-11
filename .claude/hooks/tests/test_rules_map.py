@@ -65,6 +65,11 @@ PROBES = {
         [edit("src/Domovoy.Api/appsettings.json"), edit("src\\Domovoy.Ha\\HaOptions.cs", tool="MultiEdit"),
          bash("sed -i 's/a/b/' src/Domovoy.Api/appsettings.Development.json")],
         [edit("src/Domovoy.Api/Program.cs"), bash("cat src/Domovoy.Api/appsettings.json")]),
+    "example-sync": (
+        [edit(".env.example"), edit("D:\\r\\docker-compose.override.example.yml", tool="MultiEdit"),
+         edit("config/entities.example.yaml", tool="Write"),
+         bash("sed -i 's/a/b/' config/home-profile.example.md")],
+        [edit("docker-compose.yml"), bash("cat .env.example"), bash("cp .env.example .env")]),
     "anonymous-endpoint": (
         [edit("src/Domovoy.Api/Endpoints/Pair.cs", "app.MapPost(\"/x\", H).AllowAnonymous();"),
          edit("src/Domovoy.Api/Endpoints/Pair.cs", "[AllowAnonymous]", "MultiEdit"),
