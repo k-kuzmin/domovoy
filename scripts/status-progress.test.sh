@@ -614,6 +614,62 @@ expect_status_not_zero
 expect_refs_unchanged "$before"
 end_case
 
+# ==================================================================
+# Форма workflow.
+# ==================================================================
+begin_case 'workflow: права, закрепление, без данных события'
+if [ ! -f "$WORKFLOW" ]; then
+    fail_case "нет $WORKFLOW"
+else
+    WF="$(tr -d '\r' < "$WORKFLOW")"
+    # Ровно один блок permissions, и в нём ровно contents: write.
+    n_perm="$(printf '%s\n' "$WF" | grep -cE '^[[:space:]]*permissions:' || true)"
+    [ "$n_perm" = 1 ] || fail_case "блоков permissions: $n_perm, ожидался 1"
+    perm_body="$(printf '%s\n' "$WF" | awk '
+        /^permissions:/ { inside = 1; next }
+        inside && /^[^[:space:]#]/ { inside = 0 }
+        inside && /[^[:space:]]/ && !/^[[:space:]]*#/ { sub(/^[[:space:]]+/, ""); print }')"
+    [ "$perm_body" = 'contents: write' ] || fail_case "в permissions: «$(printf '%s' "$perm_body" | tr '\n' '|')»"
+    printf '%s\n' "$WF" | grep -qF 'secrets.' && fail_case 'в workflow есть secrets.'
+    # github.event. — только в строках условий `if:`.
+    bad_event="$(printf '%s\n' "$WF" | grep -F 'github.event.' | grep -vE '^[[:space:]]*if:' || true)"
+    [ -z "$bad_event" ] || fail_case "github.event. вне if: $bad_event"
+    # Каждый uses — actions/checkout@v7.
+    uses="$(printf '%s\n' "$WF" | grep -E '^[[:space:]]*(-[[:space:]]+)?uses:' | sed -E 's/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*//' | sort -u)"
+    [ "$uses" = 'actions/checkout@v7' ] || fail_case "uses: «$(printf '%s' "$uses" | tr '\n' '|')»"
+    for trig in pull_request schedule workflow_dispatch issues milestone push; do
+        printf '%s\n' "$WF" | grep -qE "^  $trig:" || fail_case "нет триггера $trig"
+    done
+    printf '%s\n' "$WF" | grep -qE '^concurrency:' || fail_case 'нет concurrency'
+    printf '%s\n' "$WF" | grep -qE '^  cancel-in-progress: false$' || fail_case 'cancel-in-progress не false'
+    group="$(printf '%s\n' "$WF" | sed -n 's/^  group:[[:space:]]*//p')"
+    case "$group" in
+        *"pull_request"*) ;;
+        *) fail_case "группа concurrency не различает pull_request: «$group»" ;;
+    esac
+    printf '%s\n' "$WF" | grep -qE 'milestones\?[^ ]*state=all' || fail_case 'запрос майлстоунов без state=all'
+    printf '%s\n' "$WF" | grep -qE 'issues\?[^ ]*state=all' || fail_case 'запрос задач без state=all'
+    printf '%s\n' "$WF" | grep -qF 'status-progress.sh render light' || fail_case 'нет render light'
+    printf '%s\n' "$WF" | grep -qF 'status-progress.sh render dark' || fail_case 'нет render dark'
+    # Шаги publish: какое условие у шага и есть ли --dry-run. Публикация без
+    # --dry-run допустима только в шаге с условием «не pull_request», вызов
+    # на pull_request — только с --dry-run.
+    steps="$(printf '%s\n' "$WF" | awk '
+        /^      - / { cond = "" }
+        /^        if:/ { cond = $0 }
+        /status-progress\.sh publish/ {
+            mode = ($0 ~ /--dry-run/) ? "dry" : "write"
+            files = ($0 ~ /progress-light\.svg/ && $0 ~ /progress-dark\.svg/) ? "both" : "partial"
+            if (cond ~ /!= .pull_request./) c = "not-pr"
+            else if (cond ~ /== .pull_request./) c = "pr"
+            else c = "any"
+            print c, mode, files
+        }' | sort)"
+    [ "$steps" = $'not-pr write both\npr dry both' ] ||
+        fail_case "шаги publish (условие режим файлы): «$(printf '%s' "$steps" | tr '\n' '|')»"
+fi
+end_case
+
 # ------------------------------------------------------------------
 # Итог
 # ------------------------------------------------------------------
