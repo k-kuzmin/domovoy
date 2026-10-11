@@ -19,6 +19,9 @@ public sealed class ConfigurationExampleTests
     private static readonly Regex VariableReference =
         new(@"\$\{(?<name>[A-Za-z_][A-Za-z0-9_]*)(?::?-[^}]*)?\}", RegexOptions.Compiled);
 
+    private static readonly Regex HaProfile =
+        new(@"^profiles:\s*\[\s*['""]?ha['""]?\s*\]$", RegexOptions.Compiled);
+
     private static readonly string[] SecretSettingPaths =
     [
         "Ha:Token",
@@ -108,6 +111,85 @@ public sealed class ConfigurationExampleTests
 
         gitignore.Should().Contain("!config/*.example.*",
             "без исключения примеры выпадут из репозитория вместе с реальными файлами");
+    }
+
+    [Fact(DisplayName = "Home Assistant в compose — только под профилем ha и с автозапуском")]
+    public void HomeAssistantServiceIsOptInAndRestartsAutomatically()
+    {
+        Dictionary<string, List<string>> services = ParseComposeServices(
+            File.ReadAllText(RepositoryLayout.Path("docker-compose.yml")));
+
+        services.Should().ContainKey("homeassistant", "Home Assistant поднимается в общем стеке");
+
+        List<string> homeAssistant = services["homeassistant"];
+
+        homeAssistant.Should().Contain(
+            line => HaProfile.IsMatch(line),
+            "без профиля docker compose up на чистой машине и в CI тянет образ Home Assistant");
+        homeAssistant.Should().Contain(
+            "restart: unless-stopped",
+            "Home Assistant поднимается сам после перезагрузки машины (AR-5)");
+
+        foreach (string name in new[] { "postgres", "api" })
+        {
+            services.Should().ContainKey(name);
+            services[name].Should().NotContain(
+                line => line.StartsWith("profiles:", StringComparison.Ordinal),
+                $"сервис {name} входит в стек по умолчанию — профиль выключил бы его из docker compose up");
+        }
+    }
+
+    /// <summary>
+    /// Ключи первого уровня каждого сервиса из секции <c>services:</c>.
+    /// Сервис — строка на отступе 2, его блок — до следующей значимой
+    /// строки с отступом не больше 2. Пустые строки и комментарии не
+    /// значимы: закомментированный ключ не действует и не должен засчитываться.
+    /// </summary>
+    private static Dictionary<string, List<string>> ParseComposeServices(string compose)
+    {
+        var services = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        bool inServices = false;
+        List<string>? current = null;
+
+        foreach (string raw in compose.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r', ' ', '\t');
+            string trimmed = line.TrimStart(' ');
+
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+            {
+                continue;
+            }
+
+            int indent = line.Length - trimmed.Length;
+
+            if (indent == 0)
+            {
+                inServices = trimmed == "services:";
+                current = null;
+                continue;
+            }
+
+            if (!inServices)
+            {
+                continue;
+            }
+
+            if (indent <= 2)
+            {
+                string name = trimmed.TrimEnd(':');
+                current = [];
+                services[name] = current;
+                continue;
+            }
+
+            if (indent == 4)
+            {
+                current?.Add(trimmed);
+            }
+        }
+
+        return services;
     }
 
     private static HashSet<string> ParseEnvKeys(string content)
