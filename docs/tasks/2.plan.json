@@ -1,0 +1,239 @@
+{
+  "issue": 2,
+  "current_state": [
+    {
+      "path": "docker-compose.yml",
+      "line": 10,
+      "observation": "шапка файла: в стеке только Backend и база, Home Assistant добавляется своим этапом — сервиса homeassistant в файле нет"
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 64,
+      "observation": "Backend читает адрес HA из конфигурации: Ha__BaseUrl: ${HA_BASE_URL}, захардкоженного адреса нет"
+    },
+    {
+      "path": ".env.example",
+      "line": 44,
+      "observation": "HA_BASE_URL=http://homeassistant:8123 — адрес уже указывает на имя сервиса Docker, которого пока нет"
+    },
+    {
+      "path": "docs/decisions/0004-compose-scope-stage-zero.md",
+      "line": 15,
+      "observation": "запись 0004: «Home Assistant остаётся отдельным — он ставится и настраивается вручную»; расходится с критерием #2 «в общем стеке»"
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "line": 17,
+      "observation": "записи не переписываются: отменённое решение получает новую запись, статус прежней меняется в таблице"
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "line": 30,
+      "observation": "тест сверяет каждую ${VAR} из docker-compose.yml с ключами .env.example — новая переменная порта HA попадёт под него автоматически"
+    },
+    {
+      "path": ".github/workflows/ci-heavy.yml",
+      "line": 88,
+      "observation": "CI поднимает стек командой docker compose up --wait без профиля — сервис вне профиля по умолчанию потянул бы образ HA в каждую тяжёлую проверку"
+    },
+    {
+      "path": "docker-compose.override.example.yml",
+      "line": 12,
+      "observation": "пример переопределений знает только postgres и api"
+    },
+    {
+      "path": "README.md",
+      "line": 202,
+      "observation": "таблица команд: «Стек целиком» — docker compose up -d --build; запуска HA в README нет"
+    }
+  ],
+  "approach": {
+    "summary": "Добавить в docker-compose.yml сервис homeassistant с profiles: [ha]: образ ghcr.io/home-assistant/home-assistant с точной версией (2026.10.1), restart: unless-stopped, конфигурация в именованном томе homeassistant-config:/config (вне рабочего дерева — токены и .storage HA не могут попасть в git), порт ${HA_HTTP_PORT:-8123}:8123 публикуется на хост, чтобы веб-интерфейс был доступен из локальной сети по статическому адресу машины. Обычный docker compose up по-прежнему поднимает только postgres и api; docker compose --profile ha up -d поднимает стек с HA в общей сети, и Backend находит его по имени сервиса из HA_BASE_URL. HA_HTTP_PORT — в .env.example. В пример переопределений — закомментированный блок homeassistant для проброса USB-координатора. Новая запись 0027 частично заменяет 0004; статус 0004 в таблице решений. README: раздел запуска с HA и строка в таблице команд. Структурный тест на compose: сервис homeassistant объявлен под профилем ha и с restart: unless-stopped. Статичность адреса в ЛВС, недоступность из интернета и закрытые порты роутера проверяет владелец вручную (ответ на вопрос триажа).",
+    "rejected": [
+      {
+        "option": "Отдельный docker-compose.ha.yml",
+        "reason": "отдельная сеть Docker — Backend не находит HA по имени сервиса; критерий «в общем стеке» не выполняется буквально (решение владельца в сессии)"
+      },
+      {
+        "option": "Сервис HA без профиля",
+        "reason": "ломает смысл записи 0004 и проверку #5: docker compose up на чистой машине и в ci-heavy тянул бы образ HA, который без устройств ничем не управляет"
+      },
+      {
+        "option": "network_mode: host",
+        "reason": "на Docker Desktop под Windows (временная площадка, AR-7) сеть хоста недоступна; к тому же HA выпадает из сети стека, и имя сервиса в HA_BASE_URL перестаёт работать — вопрос переезда на выделенную машину"
+      },
+      {
+        "option": "Bind-mount каталога конфигурации HA в рабочее дерево",
+        "reason": "в .storage HA лежат токены и реальные entity_id; каталог в дереве — риск попасть в git, именованный том вне дерева этот риск снимает"
+      },
+      {
+        "option": "Тег stable вместо точной версии",
+        "reason": "образ меняется без правки репозитория — стек на чистой машине перестаёт быть воспроизводимым; postgres тоже закреплён (16-alpine)"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "да: HA контейнером в общем стеке с restart: unless-stopped, адрес Backend из конфигурации; способ размещения (профиль) выбран владельцем в сессии",
+    "alternative": "отдельный compose-файл — отвергнут владельцем: другая сеть Docker и переписанный критерий",
+    "ripple": "git grep homeassistant / HA_BASE_URL / 0004: .env.example (HA_BASE_URL уже на имя сервиса), docker-compose.yml (Ha__BaseUrl), docs/decisions/README.md (таблица), ci-heavy.yml (compose up без профиля — не меняется, профиль его не задевает), ConfigurationExampleTests (подхватит HA_HTTP_PORT); код src/ не меняется",
+    "workaround": "нет",
+    "council_signs": [],
+    "executor": "step-implement: 8 файлов и больше 40 строк по задаче целиком — порог оркестратора превышен",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "docker-compose.yml",
+      "action": "modify",
+      "why": "сервис homeassistant под профилем ha, том homeassistant-config, шапка файла"
+    },
+    {
+      "path": "docker-compose.override.example.yml",
+      "action": "modify",
+      "why": "таблица синхронизации «новый сервис или порт»: закомментированный пример проброса USB-координатора для homeassistant"
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "новый параметр HA_HTTP_PORT — порт веб-интерфейса HA на хосте"
+    },
+    {
+      "path": "docs/decisions/0027-home-assistant-compose-profile.md",
+      "action": "create",
+      "why": "решение: HA в общем compose под профилем ha; частично заменяет 0004"
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "статус 0004 «частично заменено 0027» и строка 0027"
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "запуск стека с Home Assistant, параметр порта и строка в таблице команд"
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "action": "modify",
+      "why": "структурный тест: homeassistant объявлен под профилем ha и с restart: unless-stopped"
+    },
+    {
+      "path": "docs/tasks/2.md",
+      "action": "modify",
+      "why": "журнал задачи"
+    },
+    {
+      "path": "docs/tasks/2.plan.json",
+      "action": "create",
+      "why": "план задачи"
+    }
+  ],
+  "boundaries": [
+    "docker-compose.yml",
+    "docker-compose.override.example.yml",
+    ".env.example",
+    "docs/decisions/**",
+    "README.md",
+    "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+    "docs/tasks/2.md",
+    "docs/tasks/2.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "HomeAssistantServiceIsOptInAndRestartsAutomatically",
+      "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "new": true,
+      "covers": ["A1", "A1b"],
+      "behavior": "в блоке сервиса homeassistant файла docker-compose.yml есть profiles с ha и restart: unless-stopped; тест падает, если профиль убрать (HA поедет в каждый docker compose up и в ci-heavy) или политику перезапуска сменить"
+    },
+    {
+      "name": "Сценарий: HA живой на хосте и адрес из конфигурации",
+      "file": "docs/tasks/2.md",
+      "new": true,
+      "covers": ["A1", "A2", "A3"],
+      "behavior": "оркестратор на временной площадке: docker compose --profile ha up -d, docker compose ps, curl на localhost:8123, строка Ha__BaseUrl из docker compose --profile ha config, git grep адреса HA по src/ — исходы в «Проверено»"
+    },
+    {
+      "name": "Сценарий владельца: ЛВС, мобильный интернет, роутер",
+      "file": "docs/tasks/2.md",
+      "new": true,
+      "covers": ["A2", "A3", "A4"],
+      "behavior": "владелец: резервирование адреса в DHCP, страница HA с телефона в Wi-Fi открывается и на мобильном интернете не открывается, проброса портов под HA нет — итог строкой в #2 без адресов"
+    },
+    {
+      "name": "Сценарий: в диффе нет адресов и секретов",
+      "file": "docs/tasks/2.md",
+      "new": true,
+      "covers": ["A5"],
+      "behavior": "gitleaks git без находок и пустой grep диффа на IPv4 и MAC"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "criterion": "HA поднят контейнером в общем стеке с restart: unless-stopped",
+      "method": "docker compose --profile ha config — сервис homeassistant с restart: unless-stopped в том же проекте и сети, что api; docker compose --profile ha up -d, затем docker compose ps — homeassistant в состоянии running; тест HomeAssistantServiceIsOptInAndRestartsAutomatically зелёный",
+      "evidence": "вывод docker compose --profile ha config и docker compose ps в журнале; число тестов dotnet test"
+    },
+    {
+      "id": "A1b",
+      "criterion": "Обычный docker compose up на чистой машине HA не тянет (инвариант записи 0004, проверка #5)",
+      "method": "docker compose config --services — ровно postgres и api; docker compose --profile ha config --services — postgres, api, homeassistant",
+      "evidence": "оба вывода в журнале"
+    },
+    {
+      "id": "A2",
+      "criterion": "Адрес HA в локальной сети статический, Backend обращается к нему по значению из конфигурации, а не по захардкоженному адресу",
+      "method": "конфигурация: docker compose --profile ha config показывает Ha__BaseUrl: http://homeassistant:8123 из HA_BASE_URL; git grep по src/ на адрес HA пуст. Статичность адреса в ЛВС: наблюдение владельца — резервирование адреса машины в DHCP роутера, итог строкой в issue без адреса",
+      "evidence": "строка Ha__BaseUrl из вывода config, пустой вывод grep; комментарий владельца в #2"
+    },
+    {
+      "id": "A3",
+      "criterion": "Веб-интерфейс HA отвечает изнутри локальной сети и недоступен из интернета — проверено с мобильного интернета при выключенном Wi-Fi",
+      "method": "с хоста: curl -s -o /dev/null -w '%{http_code}' http://localhost:8123 — 200 или 302; с телефона в Wi-Fi по адресу машины — страница HA открывается; с телефона на мобильном интернете — не открывается (наблюдение владельца)",
+      "evidence": "код ответа curl в журнале; комментарий владельца в #2"
+    },
+    {
+      "id": "A4",
+      "criterion": "Порты на роутере под HA не открыты",
+      "method": "наблюдение владельца в настройках проброса портов роутера",
+      "evidence": "комментарий владельца в #2 без адресов"
+    },
+    {
+      "id": "A5",
+      "criterion": "Реальный адрес, имя хоста и MAC в issue и репозиторий не попадают",
+      "method": "gitleaks git --redact --no-banner — без находок; git diff origin/main...HEAD | grep -E '([0-9]{1,3}\\.){3}[0-9]{1,3}|([0-9A-Fa-f]{2}:){5}' — пусто",
+      "evidence": "вывод gitleaks и пустой вывод grep в журнале"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Профиль снимут по ошибке — HA поедет в каждый docker compose up и в ci-heavy, проверка #5 на чистой машине станет тяжёлой",
+      "mitigation": "структурный тест HomeAssistantServiceIsOptInAndRestartsAutomatically падает без профиля"
+    },
+    {
+      "risk": "Конфигурация HA с токенами и реальными entity_id попадает в git",
+      "mitigation": "именованный том homeassistant-config вне рабочего дерева; gitleaks и grep диффа по A5"
+    },
+    {
+      "risk": "Порт 8123 на Docker Desktop недоступен из ЛВС из-за брандмауэра Windows",
+      "mitigation": "проверка A3 с телефона в Wi-Fi; при отказе — правило брандмауэра на хосте вручную, без правки репозитория, строкой в журнале"
+    },
+    {
+      "risk": "Доступ к HA снаружи (NFR-SEC-2)",
+      "mitigation": "порт публикуется только на хост; проброса на роутере нет — A4; проверка с мобильного интернета — A3"
+    }
+  ],
+  "out_of_scope": [
+    "network_mode: host и автообнаружение устройств — при переезде на выделенную машину",
+    "Служебный пользователь и токен HA — #3",
+    "Подключение устройств и реестр сущностей — #4",
+    "Healthcheck контейнера HA и зависимость api от HA — api работает и без HA (состояние «не сконфигурировано»), профиль необязателен",
+    "Автозапуск Docker после перезагрузки хоста — #6",
+    "Бэкап тома конфигурации HA — #8"
+  ]
+}
