@@ -137,7 +137,9 @@
     ".env.example",
     "tests/Domovoy.Tests/**",
     "docs/tasks/3.md",
-    "docs/tasks/3.plan.json"
+    "docs/tasks/3.plan.json",
+    "src/Domovoy.Ha/HaServiceCollectionExtensions.cs (только запасной вариант risks/7)",
+    "src/Domovoy.Llm/LlmServiceCollectionExtensions.cs (только запасной вариант risks/7)"
   ],
   "flags": {
     "new_dependency": false,
@@ -151,7 +153,7 @@
       "covers": [
         "A4"
       ],
-      "behavior": "WebApplicationFactory<Program> с UseSetting Serilog:MinimumLevel:Default=Verbose, Ha:Token=sampleHaTokenValue7f3a2b через конфигурацию теста (поверх возможных user-secrets разработчика), собирающий ILogEventSink в DI (его подхватывает ReadFrom.Services) и заглушка primary handler клиента ha-probe без сети; GET /health. Положительный контроль: среди событий есть событие EventId 102 от источника, начинающегося с System.Net.Http.HttpClient.ha-probe, — без него тест краснеет, а не проходит вхолостую при неприменённом уровне или sink. Проверка: ни RenderMessage() ни одного события, ни строковое представление ни одного свойства не содержит значения токена. До правки Program.cs тест обязан быть красным (сейчас в тексте сообщения стоит «Authorization: Bearer sampleHaTokenValue7f3a2b») — красный прогон в журнал"
+      "behavior": "WebApplicationFactory<Program> с UseSetting Serilog:MinimumLevel:Default=Verbose, Ha:Token=sampleHaTokenValue7f3a2b через конфигурацию теста (поверх возможных user-secrets разработчика), собирающий ILogEventSink в DI (его подхватывает ReadFrom.Services) и заглушка primary handler клиента ha-probe без сети; GET /health. Положительный контроль: среди событий есть событие EventId 102 от источника, начинающегося с System.Net.Http.HttpClient.ha-probe, — без него тест краснеет, а не проходит вхолостую при неприменённом уровне или sink. Проверка: ни RenderMessage() ни одного события, ни строковое представление ни одного свойства не содержит значения токена. До правки Program.cs тест обязан быть красным (сейчас в тексте сообщения стоит «Authorization: Bearer sampleHaTokenValue7f3a2b») — красный прогон в журнал. Почему GET /health доходит до ha-probe: /health — MapHealthChecks (src/Domovoy.Api/Endpoints/HealthEndpoints.cs:26), единственная проверка ComponentsHealthCheck (src/Domovoy.Api/Program.cs:49-50) опрашивает все IComponentProbe на каждом запросе, кеша нет; воспроизведение плана дало 16 совпадений именно через /health"
     },
     {
       "name": "LlmApiKeyNeverReachesLogsAtVerbose",
@@ -254,7 +256,7 @@
     },
     {
       "risk": "WebApplicationFactory поднимает приложение в Development и подхватывает user-secrets разработчика — реальный токен уйдёт в запрос или в вывод теста",
-      "mitigation": "Ha:Token и Llm:ApiKey задаются конфигурацией теста с приоритетом выше user-secrets, primary handler проб заменён заглушкой — сети нет, значение в тесте только пробное"
+      "mitigation": "Ha:Token и Llm:ApiKey задаются конфигурацией теста с приоритетом выше user-secrets, primary handler проб заменён заглушкой — сети нет, значение в тесте только пробное; сторож подмены — тест HaTokenFromConfigurationIsSentToHomeAssistant: заглушка handler сравнивает полученный Authorization с пробным значением, перекрытие из user-secrets делает его красным (совет по плану, круг 1); сообщения assertion значение полученного заголовка не печатают — только совпало или нет"
     },
     {
       "risk": "глобальная маскировка скрывает значения всех заголовков в Trace-логе — диагностика исходящих запросов беднеет",
@@ -274,7 +276,7 @@
     },
     {
       "risk": "ConfigureHttpClientDefaults + RedactLoggedHeaders на Microsoft.Extensions.Http 8.0.1 не погасит Trace-утечку (не проверено до реализации — покажет только переход теста из красного в зелёный)",
-      "mitigation": "тесты HaTokenNeverReachesLogsAtVerbose и LlmApiKeyNeverReachesLogsAtVerbose решают это до коммита фикса; если умолчание не применится — запасной вариант поклиентный RedactLoggedHeaders в HaServiceCollectionExtensions.cs и LlmServiceCollectionExtensions.cs, но это src/Domovoy.Ha/** (high, группа product_security) и выход за boundaries: расхождение с планом — остановка и возврат к оркестратору, а не молчаливая правка"
+      "mitigation": "тесты HaTokenNeverReachesLogsAtVerbose и LlmApiKeyNeverReachesLogsAtVerbose решают это до коммита фикса. Если умолчание не применится к именованным клиентам — запасной вариант заранее в boundaries: поклиентный RedactLoggedHeaders в src/Domovoy.Ha/HaServiceCollectionExtensions.cs и src/Domovoy.Llm/LlmServiceCollectionExtensions.cs (совет по плану, круг 1, чтобы не останавливаться на середине); применённый вариант и красный/зелёный прогон — в журнал, risk.sh diff пересчитывается"
     }
   ],
   "out_of_scope": [
