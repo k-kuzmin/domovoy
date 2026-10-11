@@ -110,28 +110,36 @@
       "name": "EveryExampleHasIgnoredCounterpart",
       "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
       "new": false,
-      "covers": ["a4"],
+      "covers": [
+        "a4"
+      ],
       "behavior": "существующий тест: для каждого config/*.example.* расширение реального двойника закрыто в .gitignore — реестр с настоящими entity_id не уезжает в репозиторий; должен остаться зелёным после правки"
     },
     {
       "name": "Сценарий: метаданные трёх устройств в примере реестра",
       "file": "docs/tasks/4.md",
       "new": true,
-      "covers": ["a3"],
+      "covers": [
+        "a3"
+      ],
       "behavior": "по docs/rules/implement.md:70 новый автотест на .example не пишется; проверка — греп из a3 с ожидаемым результатом: записи media_player, vacuum и climate-терморегулятора с префиксом example_, у каждой area из areas[].id, domain и непустой actions; телевизор без turn_on, терморегулятор только [read]. Команда и вывод — в журнал, «Проверено»"
     },
     {
       "name": "Сценарий: в репозитории и issue нет реальных entity_id",
       "file": "docs/tasks/4.md",
       "new": true,
-      "covers": ["a4"],
+      "covers": [
+        "a4"
+      ],
       "behavior": "команды из a4 дают пустые выводы грепов, check-ignore печатает правило .gitignore:24, gitleaks без находок; при появлении в примере идентификатора без .example_ греп непустой — сценарий краснеет"
     },
     {
       "name": "Сценарий: в issue записано, что осталось и почему",
       "file": "docs/tasks/4.md",
       "new": true,
-      "covers": ["a5"],
+      "covers": [
+        "a5"
+      ],
       "behavior": "в gh issue view 4 --comments есть комментарий с оставшимися пунктами (свет или розетка, датчик открытия или протечки) и причиной — покупки отложены владельцем; состояние issue — OPEN"
     }
   ],
@@ -163,8 +171,8 @@
     {
       "id": "a3",
       "criterion": "для каждого зафиксированы домен, комната, тип и набор допустимых действий в config/entities.example.yaml под вымышленными идентификаторами",
-      "method": "grep -nE 'entity_id: (media_player|vacuum|climate)\\.example_' config/entities.example.yaml — три записи телевизора, пылесоса, терморегулятора (плюс кондиционер); у каждой из них строки area:, domain:, actions: в блоке записи; значение area — один из areas[].id (kitchen, living_room, bedroom)",
-      "evidence": "цитата трёх блоков config/entities.example.yaml:строка в журнале; «тип» — поле domain по решению владельца (docs/tasks/4.md, «Ответы владельца»)"
+      "method": "awk '/^  - entity_id:/{if(e)print e\"|\"a\"|\"d\"|\"x; e=$3;a=d=x=\"\"} /^    area:/{a=$2} /^    domain:/{d=$2} /^    actions:/{x=$0} END{if(e)print e\"|\"a\"|\"d\"|\"x}' config/entities.example.yaml — строка на каждую запись реестра: entity_id|area|domain|actions. Ожидается: строки media_player.example_living_room_tv, vacuum.example_living_room_robot, climate.example_kitchen_boiler_thermostat; у каждой строки area из areas[].id (kitchen, living_room, bedroom), domain совпадает с префиксом entity_id, actions непустой; у телевизора нет turn_on, у терморегулятора ровно [read]. Отрицательная проба: та же команда на копии примера, где у пылесоса удалена строка actions:, печатает у него пустое последнее поле — сверка это ловит",
+      "evidence": "вывод команды и отрицательной пробы в журнале «Проверено»; «тип» — поле domain по решению владельца (docs/tasks/4.md, «Ответы владельца»)"
     },
     {
       "id": "a4",
@@ -175,8 +183,8 @@
     {
       "id": "a5",
       "criterion": "DoD: частично заблокированная задача — в issue написано, что осталось и почему",
-      "method": "gh issue view 4 --comments — комментарий оркестратора с оставшимися пунктами a1-switch, a1-sensor и подтверждением владельца по a1-count и a2",
-      "evidence": "ссылка на комментарий issue в журнале; задача остаётся открытой (gh issue view 4 --json state — OPEN)"
+      "method": "gh issue view 4 --comments — комментарий оркестратора с оставшимися пунктами a1-switch, a1-sensor и подтверждением владельца по a1-count и a2; тело PR не содержит закрывающих ключевых слов для #4 (grep -iE \"(close[sd]?|fix(e[sd])?|resolve[sd]?) #4\\b\" по телу — пусто); после мерджа gh issue view 4 --json state — OPEN",
+      "evidence": "ссылка на комментарий issue в журнале; пустой греп тела PR; состояние issue OPEN после мерджа"
     }
   ],
   "risks": [
@@ -186,7 +194,7 @@
     },
     {
       "risk": "набор действий пылесоса зависит от пути подключения (polaris-mqtt или Яндекс Умный дом): часть действий, например locate, может не поддерживаться",
-      "mitigation": "пример фиксирует действия, предложенные владельцем, и не называет интеграцию; реальный набор в config/entities.yaml владелец сужает после подключения — это его файл, в «Синхронизация» тела PR"
+      "mitigation": "набор start, pause, return_to_base, locate предложен оркестратором в сессии и принят владельцем ответом «да включаем» (docs/tasks/4.md, «Ответы владельца»); пример интеграцию не называет; реальный набор в config/entities.yaml владелец сужает после подключения — это его файл, в «Синхронизация» тела PR"
     },
     {
       "risk": "запись media_player и vacuum без шаблонов ответа ведёт к фолбэку на второй вызов модели",
