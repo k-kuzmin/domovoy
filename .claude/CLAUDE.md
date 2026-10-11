@@ -538,8 +538,9 @@ MAUI-проект, оплачивается этими минутами на к�
 | Изменилось | Обновить |
 |---|---|
 | Новый инструмент (tool) | описание в системном промпте + тест + документация |
-| Новый параметр конфигурации | `.env.example`, `appsettings.json`, README |
-| Новый сервис или порт | `docker-compose.yml` и `docker-compose.override.example.yml` |
+| Параметр конфигурации: новый, переименованный, удалённый | `.env.example`, `appsettings.json`, README |
+| Сервис, порт или сеть compose: новый, переименованный, удалённый | `docker-compose.yml` и `docker-compose.override.example.yml` |
+| Структура любого `.example`-файла (`.env.example`, `docker-compose.override.example.yml`, `config/*.example.*`) | все парные `.example` той же правкой; локальные `.env`, `docker-compose.override.yml`, `config/*` агенту закрыты — в разделе «Синхронизация» тела PR — что в них добавить, переименовать или убрать, без значений |
 | Новая зависимость между сервисами | health-check, README, схема архитектуры |
 | Изменение контракта API | README, шаблон запроса, тесты |
 | Архитектурное решение, расходящееся с ТЗ | раздел ТЗ + запись в `docs/decisions/` |
