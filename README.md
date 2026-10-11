@@ -24,6 +24,14 @@
 **Этап 0 из 6 — каркас.** Структура решения, интерфейсы, DI-регистрация,
 работающий `/health`. Бизнес-логики нет: реализации портов — заглушки.
 
+- Этап 0. Инфраструктура — [![прогресс этапа 0](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/1?label=)](https://github.com/k-kuzmin/domovoy/milestone/1)
+- Этап 1. Ядро без LLM — [![прогресс этапа 1](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/2?label=)](https://github.com/k-kuzmin/domovoy/milestone/2)
+- Этап 2. LLM-оркестрация — [![прогресс этапа 2](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/3?label=)](https://github.com/k-kuzmin/domovoy/milestone/3)
+- Этап 3. Проактивность, push и публикация наружу — [![прогресс этапа 3](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/4?label=)](https://github.com/k-kuzmin/domovoy/milestone/4)
+- Этап 4. Голос — [![прогресс этапа 4](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/5?label=)](https://github.com/k-kuzmin/domovoy/milestone/5)
+- Этап 5. Мобильное приложение — [![прогресс этапа 5](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/6?label=)](https://github.com/k-kuzmin/domovoy/milestone/6)
+- Этап 6. Память, профиль дома, подтверждения, локальная LLM — [![прогресс этапа 6](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/7?label=)](https://github.com/k-kuzmin/domovoy/milestone/7)
+
 Дорожная карта — в [milestones](https://github.com/k-kuzmin/domovoy/milestones),
 разбивка работ — в [issues](https://github.com/k-kuzmin/domovoy/issues).
 
@@ -296,18 +304,15 @@ push и PR, на случай коммита в обход хуков. Поми�
 
 ## Дорожная карта
 
-| Этап | Содержание | Готово, когда | Прогресс |
-|---|---|---|---|
-| 0 | Инфраструктура, репозиторий, каркас, Docker Compose | `/health` отвечает, стек поднимается на примерах, машина переживает перезагрузку | [![прогресс этапа 0](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/1)](https://github.com/k-kuzmin/domovoy/milestone/1) |
-| 1 | Ядро без LLM: WebSocket к HA, allow-list, быстрый роутер | текстовые команды по шаблонам управляют устройствами | [![прогресс этапа 1](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/2)](https://github.com/k-kuzmin/domovoy/milestone/2) |
-| 2 | LLM-оркестрация: адаптер, инструменты, tool-цикл, SSE, учёт токенов | свободные формулировки приводят к действиям, 70 % запросов в один раунд | [![прогресс этапа 2](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/3)](https://github.com/k-kuzmin/domovoy/milestone/3) |
-| 3 | Проактивность, push, публикация наружу | открытая дверь при уходе даёт уведомление на телефон | [![прогресс этапа 3](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/4)](https://github.com/k-kuzmin/domovoy/milestone/4) |
-| 4 | Голос: faster-whisper, `/voice` | голосовая команда отрабатывает в целевые сроки | [![прогресс этапа 4](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/5)](https://github.com/k-kuzmin/domovoy/milestone/5) |
-| 5 | Мобильное приложение MAUI, Android APK | приложение заменяет отладку через curl | [![прогресс этапа 5](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/6)](https://github.com/k-kuzmin/domovoy/milestone/6) |
-| 6 | Долговременная память, профиль дома, подтверждения, локальная LLM | — | [![прогресс этапа 6](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/7)](https://github.com/k-kuzmin/domovoy/milestone/7) |
-
-Прогресс — доля закрытых задач майлстоуна этапа; бейдж считает GitHub, правки
-README после каждой задачи не нужны.
+| Этап | Содержание | Готово, когда |
+|---|---|---|
+| 0 | Инфраструктура, репозиторий, каркас, Docker Compose | `/health` отвечает, стек поднимается на примерах, машина переживает перезагрузку |
+| 1 | Ядро без LLM: WebSocket к HA, allow-list, быстрый роутер | текстовые команды по шаблонам управляют устройствами |
+| 2 | LLM-оркестрация: адаптер, инструменты, tool-цикл, SSE, учёт токенов | свободные формулировки приводят к действиям, 70 % запросов в один раунд |
+| 3 | Проактивность, push, публикация наружу | открытая дверь при уходе даёт уведомление на телефон |
+| 4 | Голос: faster-whisper, `/voice` | голосовая команда отрабатывает в целевые сроки |
+| 5 | Мобильное приложение MAUI, Android APK | приложение заменяет отладку через curl |
+| 6 | Долговременная память, профиль дома, подтверждения, локальная LLM | — |
 
 Приложение делается пятым, а не первым: промпт и набор инструментов будут
 переписываться ежедневно первые недели — на сервере это `git push`, в
