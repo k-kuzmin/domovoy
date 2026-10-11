@@ -1,0 +1,297 @@
+{
+  "issue": 140,
+  "current_state": [
+    {
+      "path": "README.md",
+      "line": 22,
+      "observation": "Раздел «## Статус»: строка 24 — ручная фраза «**Этап 0 из 6 — каркас.**», строка 27 — текстовая ссылка на https://github.com/k-kuzmin/domovoy/milestones. Картинки прогресса нет; бейджи shields.io убраны в #139."
+    },
+    {
+      "path": "README.md",
+      "line": 6,
+      "observation": "Внешняя картинка shields.io (License) в отрендеренном README идёт через camo.githubusercontent.com (запрос `gh api repos/k-kuzmin/domovoy/readme -H 'Accept: application/vnd.github.html'`). Пробный рендер `gh api markdown -f mode=gfm` адреса https://raw.githubusercontent.com/k-kuzmin/domovoy/status/progress.svg оставляет src без camo — картинка из raw грузится напрямую, а `<picture><source media=\"(prefers-color-scheme: dark)\">` санитайзер переживает, оборачивая в `<themed-picture>`."
+    },
+    {
+      "path": ".github/workflows/gitleaks.yml",
+      "line": 0,
+      "observation": "Стиль: `permissions:` на уровне workflow (`contents: read`), actions закреплены мажорным тегом (`actions/checkout@v7`, `actions/upload-artifact@v7`), не SHA; `${{ ... }}` в `run:` не подставляется — значения идут через `env:`. Триггер `push: branches: ['**']` — но пуш от GITHUB_TOKEN новых прогонов не создаёт, поэтому на ветке status gitleaks не сработает и петли не будет."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 19,
+      "observation": "Образец concurrency (`group: ...`, `cancel-in-progress: true`). Строки 157–190: сценарии `scripts/*.test.sh` запускаются поимённо отдельными шагами с `if: ${{ !cancelled() }}` — новый сценарий без своего шага в CI не пойдёт."
+    },
+    {
+      "path": "scripts/risk.json",
+      "line": 0,
+      "observation": "`.github/**` и `scripts/**` — группа `harness_quality` (medium). В `harness_control` по workflow только `deleted_paths` для gitleaks.yml и `removed_lines` со словами gitleaks/COVERAGE_MINIMUM — новый файл workflow и добавленные строки ci-fast.yml туда не попадают."
+    },
+    {
+      "path": "scripts/review-comments.test.sh",
+      "line": 0,
+      "observation": "Образец сценария: bash, `set -uo pipefail`, счётчики PASSED/FAILED, код 0/1/2, песочница mktemp, в сеть не ходит. `scripts/test-count-invariant.sh` считает только trx-отчёты dotnet, bash-сценарий снимок tests/test-count.baseline не меняет."
+    },
+    {
+      "path": "docs/tasks/140.md",
+      "line": 0,
+      "observation": "Триаж: ready, вопросов нет; ветки status на origin нет (подтверждено `git ls-remote --heads origin`: только main и ветка задачи). Майлстоуны 1–7 — «Этап 0. Инфраструктура» … «Этап 6. Память, профиль дома, подтверждения, локальная LLM», все open; счётчики open/closed: 6/4, 10/0, 16/0, 6/0, 4/0, 8/0, 4/0."
+    }
+  ],
+  "approach": {
+    "summary": "Новый сценарий `scripts/status-progress.sh` (bash + jq + git, всё уже есть на ubuntu-latest и в требованиях обвязки) с двумя подкомандами. `render` читает со stdin JSON майлстоунов — один или несколько массивов подряд, как отдаёт `gh api --paginate`, — отбирает майлстоуны с заголовком `^Этап N.`, сортирует по N, считает процент как floor(closed*100/(open+closed)) (0 % при нуле задач, 100 % только когда закрыто всё) и печатает в stdout одну SVG: строка на этап «Этап N. название — полоса — N %». Заголовки экранируются под XML (&, <, >, \", '), длиннее 60 символов обрезаются с «…»; ширина фиксирована (колонка подписи, колонка полосы, колонка процента), метрики шрифта не нужны. Ни одного этапа не нашлось — код 1 и сообщение в stderr, пустая картинка не публикуется. Тема: одна SVG с прозрачным фоном и нейтральной палитрой — текст #797979 (контраст 4,35:1 и к #ffffff, и к #0d1117 — это максимум, достижимый одним цветом для обеих тем), заполненная полоса #2da44e (3,22:1 / 5,89:1), незаполненная — контур #797979. Новый workflow `.github/workflows/status-progress.yml`: триггеры `issues: [opened, closed, reopened, deleted, transferred, milestoned, demilestoned]`, `milestone: [created, edited, deleted, opened, closed]`, `workflow_dispatch` и `push` в main с `paths:` на сам workflow и сценарий (мердж сам создаёт ветку status, окна битой картинки нет); `permissions: contents: write` и ничего больше; `concurrency: { group: status-progress, cancel-in-progress: false }` — одна фиксированная группа: идёт один прогон, в очереди только последний, и он видит актуальное состояние. Шаги workflow: `actions/checkout@v7` (как в соседних workflow); `gh api --paginate \"repos/$GITHUB_REPOSITORY/milestones?state=all&per_page=100\"` с `GH_TOKEN: ${{ github.token }}` в env → `status-progress.sh render` → progress.svg → `status-progress.sh publish progress.svg`; публикация — подкоманда `publish <файл> [remote=origin]`, вынесенная из workflow, чтобы её проверял сценарий на локальном bare-репозитории: `git ls-remote --exit-code --heads origin status` — есть ветка: `git fetch --depth=1 origin status` и `git worktree add` на FETCH_HEAD; нет: `git worktree add --orphan -b status` (ветка из одного файла, без дерева main); копия progress.svg, `git add`, `git diff --cached --quiet` → выход без коммита; иначе коммит от github-actions[bot] и `git push origin HEAD:refs/heads/status` без force — история status сохраняется. Данные события (`github.event.*`) в `run:` не подставляются нигде: сценарий берёт только ответ API майлстоунов. README: в разделе «Статус» одна картинка `[![Прогресс этапов](https://raw.githubusercontent.com/k-kuzmin/domovoy/status/progress.svg)](https://github.com/k-kuzmin/domovoy/milestones)`; raw отдаёт `Content-Type: image/svg+xml`, `Cache-Control: max-age=300` (проверено `curl -sSI` на публичном SVG), так что обновление видно с задержкой до ~5 минут. Сценарий проверок `scripts/status-progress.test.sh` и шаг для него в ci-fast.yml.",
+    "rejected": [
+      {
+        "option": "Бейджи shields.io `milestones/progress-percent` по одному на этап",
+        "reason": "Пробовали в #139: только число, без полосы; через camo часть из семи картинок не грузится (тело задачи, журнал «Отвергнуто»)."
+      },
+      {
+        "option": "Рисовать SVG на python, node или готовым action генерации картинок",
+        "reason": "jq уже обязателен для обвязки, python в CI есть, но лишний язык в сценарии не нужен; сторонний action — новая зависимость и ещё один `uses:` с правами contents: write (CLAUDE.md, «Зависимости»)."
+      },
+      {
+        "option": "Публикация через REST (Contents API / Git Data API) вместо git",
+        "reason": "Две ветви кода (создание ref и обновление файла) и сравнение sha вручную; git с `diff --cached --quiet` даёт то же наблюдаемое — коммит только при изменении — короче и читается проверяющим без справки по API."
+      },
+      {
+        "option": "Force-push одного коммита в status (ветка всегда из одного коммита)",
+        "reason": "Стирает историю, по которой триаж проверяет «обновление без коммита в main» (наблюдение истории origin/status)."
+      },
+      {
+        "option": "`@media (prefers-color-scheme: dark)` внутри SVG",
+        "reason": "Картинка в `<img>` следует теме ОС/браузера, а тема GitHub задаётся отдельно: при расхождении светлый текст окажется на белом. Нейтральная палитра читается при любом сочетании."
+      },
+      {
+        "option": "SVG с собственным непрозрачным фоном-карточкой",
+        "reason": "Читается везде, но в тёмной теме — белый прямоугольник посреди страницы; нейтральная палитра на прозрачном фоне даёт ту же читаемость без этого."
+      },
+      {
+        "option": "Картинка в каталоге main (коммит в main из workflow)",
+        "reason": "Противоречит критерию «без коммита в main» и упирается в ruleset main (pull_request, required_status_checks)."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да: workflow на события issue/майлстоуна пересчитывает прогресс, рисует одну SVG «Этап N. название — полоса — %», пушит в отдельную ветку status, README ссылается на неё один раз в «Статусе» со ссылкой на майлстоуны. Сверх буквы задачи: триггеры `deleted`, `transferred`, события `milestone` (переименование этапа меняет подпись) и `push` в main по путям workflow и сценария (первая отрисовка при мердже) — все они ведут к той же картинке и ничего не расширяют по правам.",
+    "alternative": "Два SVG (светлый и тёмный) за `<picture><source media=\"(prefers-color-scheme: dark)\">` — пробный рендер `gh api markdown` показал, что GitHub оборачивает это в `<themed-picture>`, следующий теме GitHub. Что увидел бы пользователь: в каждой теме «родной» контраст (~7:1 и выше) вместо 4,35:1 у нейтрального серого; ниже 4,5:1 (WCAG AA для мелкого текста) одним цветом для обеих тем не попасть. Цена: два файла в status, вдвое больше вёрстки и проверок, HTML-блок в README вместо markdown-картинки. Не выбрано, потому что подход владельца в задаче — «рисует одну SVG-картинку», и критерий — «одна картинка»; при 4,35:1 текст читается в обеих темах.",
+    "ripple": "Греп `ci-fast.yml|ci-heavy.yml|gitleaks.yml|workflows` по README.md и docs/pipeline.md: README перечисляет workflow только бейджами в строках 3–5 (бейдж для status-progress не нужен — он не проверка), docs/pipeline.md таблица «Скрипты» перечисляет сценарии обвязки, которые зовёт оркестратор, — status-progress.sh им не является, строка не добавляется. Пуш от GITHUB_TOKEN новых прогонов не запускает: gitleaks.yml (`push: '**'`) на status не сработает, ci-fast/ci-heavy тоже. Ruleset репозитория (`gh api repos/k-kuzmin/domovoy/rulesets/24659919`): условие `~DEFAULT_BRANCH`, правила только на main — пуш в status он не задевает. `default_workflow_permissions: read` — поэтому `contents: write` заявляется явно. Снимок tests/test-count.baseline не меняется (считает только trx). Других вызывающих у нового сценария нет.",
+    "workaround": "Нет. Задержка обновления до ~5 минут (Cache-Control raw) — свойство раздачи GitHub, не обход; `// HACK:` не нужен.",
+    "council_signs": [
+      "правка обвязки: новый workflow с `contents: write` и шаг в .github/workflows/ci-fast.yml (группа harness_quality)",
+      "новая функциональность: автоматическая отрисовка и публикация картинки прогресса"
+    ],
+    "executor": "Субагент: 5 файлов, из них 3 новых (workflow ~70 строк, сценарий ~170, сценарий проверок ~250) — счёт по задаче выше порога «до 3 файлов и ~40 строк».",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": ".github/workflows/status-progress.yml",
+      "action": "create",
+      "why": "Workflow: триггеры issues/milestone/workflow_dispatch/push по путям, `permissions: contents: write`, concurrency одной группой, чтение майлстоунов через `gh api`, отрисовка сценарием, публикация в ветку status без коммита при неизменной картинке. Путь из группы harness_quality (`.github/**`) — заявлено."
+    },
+    {
+      "path": "scripts/status-progress.sh",
+      "action": "create",
+      "why": "Две подкоманды: `render` — JSON майлстоунов со stdin → SVG в stdout (отбор и сортировка этапов, процент, экранирование, обрезка, палитра); `publish` — коммит картинки в ветку status: orphan при отсутствии, без коммита при неизменной картинке, пуш без force. Вынесено из workflow, чтобы проверяться сценарием без сети. Путь из группы harness_quality (`scripts/**`) — заявлено."
+    },
+    {
+      "path": "scripts/status-progress.test.sh",
+      "action": "create",
+      "why": "Сценарии отрисовки на рукописных фикстурах, публикации на локальном bare-репозитории и формы workflow (права, uses, отсутствие github.event/secrets); без сети, по образцу scripts/review-comments.test.sh. Группа harness_quality — заявлено."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "Шаг «Сценарии картинки прогресса» (`bash scripts/status-progress.test.sh`, `if: ${{ !cancelled() }}`) рядом с остальными сценариями, только добавленные строки. Группа harness_quality — заявлено."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Раздел «Статус»: одна картинка из ветки status, обёрнутая ссылкой на майлстоуны. Фраза «Этап 0 из 6 — каркас» и текстовая ссылка остаются (см. «Что не входит»)."
+    }
+  ],
+  "boundaries": [
+    ".github/workflows/status-progress.yml",
+    ".github/workflows/ci-fast.yml",
+    "scripts/status-progress.sh",
+    "scripts/status-progress.test.sh",
+    "README.md"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "семь этапов по порядку номера",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6",
+        "A1"
+      ],
+      "behavior": "Фикстура: майлстоуны «Этап 0…6» в перемешанном порядке плюс один без префикса «Этап N.». В выводе ровно семь строк-этапов, подписи идут в порядке 0,1,…,6, посторонний майлстоун отсутствует. Ломается при сортировке по номеру майлстоуна или без фильтра."
+    },
+    {
+      "name": "процент округляется вниз и не делит на ноль",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6"
+      ],
+      "behavior": "4 из 10 → «40 %», 2 из 3 → «66 %» (не 67: 100 % только при всех закрытых), 0 из 0 → «0 %» с кодом 0, все закрыты (майлстоун state=closed) → «100 %»; ширина заполненной полосы пропорциональна доле (0 при 0 %, полная при 100 %)."
+    },
+    {
+      "name": "заголовок экранируется под XML",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6"
+      ],
+      "behavior": "Заголовок «Этап 2. A & B <c> \"d\"» даёт в SVG `&amp;`, `&lt;`, `&gt;`, `&quot;`, а вывод разбирается `python3 -c` с `xml.dom.minidom.parse` (stdlib) без ошибки. Без экранирования разбор падает."
+    },
+    {
+      "name": "длинный заголовок обрезается многоточием",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6"
+      ],
+      "behavior": "Заголовок длиннее 60 символов выводится первыми символами и «…», общая длина подписи не больше 60; заголовок «Этап 6. Память, профиль дома, подтверждения, локальная LLM» (58 символов) выводится целиком."
+    },
+    {
+      "name": "страницы gh api склеиваются",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6"
+      ],
+      "behavior": "Вход из двух JSON-массивов подряд (как печатает `gh api --paginate`) с этапами 0–3 и 4–6 даёт все семь строк, а не только первую страницу."
+    },
+    {
+      "name": "без этапов — отказ, а не пустая картинка",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A6"
+      ],
+      "behavior": "Вход `[]` и вход без майлстоунов «Этап N.» — код 1, stdout пуст, в stderr сообщение. Негодный JSON — код не 0."
+    },
+    {
+      "name": "палитра читается на обоих фонах GitHub",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A4"
+      ],
+      "behavior": "Из SVG извлекаются все значения fill/stroke текста и полосы; для каждого контраст по формуле WCAG к #ffffff и к #0d1117 не ниже 4,0:1 для текста и 3,0:1 для полосы; у корневого svg нет непрозрачного фонового rect на всю площадь. Ломается при чёрном или белом тексте."
+    },
+    {
+      "name": "publish создаёт ветку status из одного файла",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A2"
+      ],
+      "behavior": "Песочница: bare-репозиторий как origin с веткой main, клон. `publish progress.svg` при отсутствии status создаёт её: `git ls-tree -r --name-only origin/status` — ровно progress.svg, у коммита нет родителей (orphan, дерево main не утекает), ref main в bare-репозитории тот же хеш, что до вызова."
+    },
+    {
+      "name": "publish коммитит изменённую картинку поверх истории",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A2"
+      ],
+      "behavior": "Второй вызов с другим содержимым progress.svg: в status ровно на один коммит больше, родитель нового коммита — прежняя вершина (история не переписана, force не использован), содержимое файла в status — новое; main не изменился."
+    },
+    {
+      "name": "publish без изменений не коммитит",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A5"
+      ],
+      "behavior": "Повторный вызов с тем же содержимым: код 0, число коммитов в status прежнее, вершина та же, в stdout сообщение «картинка не изменилась». Ломается, если коммит делается безусловно или с --allow-empty."
+    },
+    {
+      "name": "workflow: права, закрепление, без данных события",
+      "file": "scripts/status-progress.test.sh",
+      "new": true,
+      "covers": [
+        "A3"
+      ],
+      "behavior": "Читает .github/workflows/status-progress.yml: в файле один блок `permissions:` с единственным ключом `contents: write`; нет `secrets.`; нет `github.event`; каждая строка `uses:` — `actions/checkout@v7` (мажорный тег, как в соседних workflow); есть `concurrency:` с `cancel-in-progress: false`. Краснеет при добавлении любого scope, секрета, незакреплённого action или подстановки события в run."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "criterion": "В разделе «Статус» README — одна картинка с полосой и процентом на каждый этап 0–6, ссылка ведёт на майлстоуны.",
+      "method": "До PR: `grep -n 'raw.githubusercontent.com/k-kuzmin/domovoy/status/progress.svg' README.md` — ровно одна строка, внутри раздела «## Статус», вида `[![…](…/status/progress.svg)](https://github.com/k-kuzmin/domovoy/milestones)`; сценарий «семь этапов по порядку номера» зелёный. После мерджа: наблюдение README на github.com — картинка загружена, семь строк «Этап 0»…«Этап 6» с полосой и процентом, клик ведёт на /milestones.",
+      "evidence": "Вывод grep с номером строки; вывод `bash scripts/status-progress.test.sh` с кодом 0; после мерджа — `curl -sSI https://raw.githubusercontent.com/k-kuzmin/domovoy/status/progress.svg` → `HTTP/1.1 200` и `Content-Type: image/svg+xml`, плюс снимок или описание наблюдения в журнале."
+    },
+    {
+      "id": "A2",
+      "criterion": "Закрытие задачи меняет картинку без коммита в main.",
+      "method": "До PR: сценарии «publish создаёт ветку status из одного файла» и «publish коммитит изменённую картинку поверх истории» зелёные (main в bare-репозитории не меняется). После мерджа (события issues срабатывают только для workflow с default-ветки; до PR в деле не наблюдаемо): закрыть задачу с майлстоуном, затем `gh run list --workflow status-progress.yml --limit 3` — прогон по событию issues успешен; `git fetch origin && git log --oneline -3 origin/status` — новый коммит; `git log -1 --format=%H origin/main` до и после — тот же хеш; процент этапа на картинке вырос.",
+      "evidence": "Вывод `gh run list` с событием `issues` и статусом success; хеш нового коммита в origin/status; совпадающие хеши origin/main до и после; процент до/после из `curl -s …/progress.svg | grep -o '[0-9]* %'`."
+    },
+    {
+      "id": "A3",
+      "criterion": "Права workflow минимальные (`contents: write`, только `GITHUB_TOKEN`), версии actions закреплены.",
+      "method": "`bash scripts/status-progress.test.sh` — сценарий «workflow: права, закрепление, без данных события» зелёный; дополнительно вручную `grep -n -A3 'permissions:'`, `grep -n 'secrets\\.'`, `grep -n 'uses:'`, `grep -n 'github.event'` по .github/workflows/status-progress.yml — один блок с `contents: write`, пусто, только `actions/checkout@v7`, пусто.",
+      "evidence": "Вывод сценария с кодом 0 и вывод четырёх grep: строки permissions и uses с номерами, пустой вывод для `secrets.` и `github.event`."
+    },
+    {
+      "id": "A4",
+      "criterion": "Картинка читается в светлой и тёмной теме GitHub.",
+      "method": "До PR: сценарий «палитра читается на обоих фонах GitHub» зелёный. После мерджа: наблюдение README на github.com в теме Light и Dark (переключение в Settings → Appearance), дополнительно Dark dimmed — подписи и проценты различимы, полосы видны. Тестом наблюдение не заменяется: тест меряет контраст, а не рендер браузера.",
+      "evidence": "Вывод сценария с числами контраста; запись наблюдения в журнале «Проверено» с перечнем тем."
+    },
+    {
+      "id": "A5",
+      "criterion": "Неизменная картинка не плодит коммитов в status (из подхода: публикация без лишних коммитов).",
+      "method": "До PR: сценарий «publish без изменений не коммитит» зелёный. После мерджа: `gh workflow run status-progress.yml` дважды подряд без изменений майлстоунов; `git log --oneline origin/status | wc -l` до и после второго прогона одинаково, в логе прогона — «картинка не изменилась».",
+      "evidence": "Вывод сценария с кодом 0; после мерджа — два числа коммитов в origin/status и строка лога прогона (`gh run view <id> --log | grep 'не изменилась'`)."
+    },
+    {
+      "id": "A6",
+      "criterion": "Отрисовка корректна: порядок, процент, экранирование, отказ без данных (поведение сценария, на которое опираются A1 и A4).",
+      "method": "`bash scripts/status-progress.test.sh` — код 0; шаг «Сценарии картинки прогресса» в ci-fast зелёный на PR.",
+      "evidence": "Вывод сценария с числом прошедших и кодом 0; зелёная проверка CI (fast) на PR."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "При `permissions: contents: write` все остальные scope — none, включая issues; чтение майлстоунов (`GET /repos/{owner}/{repo}/milestones`) может потребовать `issues: read`. Репозиторий публичный, и чтение публичных данных, вероятно, пройдёт, но локально это не проверить: локальный `gh` авторизован владельцем, а не GITHUB_TOKEN.",
+      "mitigation": "Первый прогон (push в main при мердже) это покажет. Красный с 403/404 на майлстоунах — остановиться и вынести человеку: добавление `issues: read` расходится с буквой критерия «contents: write», тихо не добавляется. Записать в журнал и в «Попутно»/тело PR как непроверенное до мерджа."
+    },
+    {
+      "risk": "Workflow с `contents: write` запускается на любое открытие issue в публичном репозитории — кто угодно может инициировать прогон и попытаться внедрить данные через заголовок или тело issue.",
+      "mitigation": "В `run:` нет ни одного `${{ github.event.* }}` (проверка A3 грепом); сценарий берёт данные только из API майлстоунов, которые правит владелец; заголовки экранируются под XML (сценарий «заголовок экранируется»); concurrency одной группой не даёт прогонам наслаиваться; без изменения картинки коммита нет."
+    },
+    {
+      "risk": "Гонка двух прогонов: оба читают старую ветку status и пушат, второй пуш отбит как non-fast-forward, либо старый прогон завершается позже нового и публикует устаревший процент.",
+      "mitigation": "`concurrency: group: status-progress, cancel-in-progress: false` — одновременно идёт один прогон, ожидает только последний, и он читает майлстоуны после завершения предыдущего; пуш без force — если он всё же отбит, прогон красный, а не перезаписывает историю."
+    },
+    {
+      "risk": "До мерджа workflow не проверяется в деле: события issues/milestone и workflow_dispatch работают только для файла на default-ветке; ошибка в шаге публикации (worktree --orphan, права пуша) всплывёт после мерджа.",
+      "mitigation": "Отрисовка и публикация вынесены в сценарий и проверяются без сети (публикация — на локальном bare-репозитории как origin); в деле не проверены только права GITHUB_TOKEN и события. Триггер `push` в main по путям workflow и сценария запускает первый прогон сразу при мердже; оркестратор смотрит его `gh run watch` и проверки A2/A5 до закрытия задачи. Красный первый прогон — починка отдельным PR по docs/rules/fix.md, задача не закрывается."
+    },
+    {
+      "risk": "Кеш: raw.githubusercontent.com отдаёт `Cache-Control: max-age=300` — после закрытия задачи старая картинка видна до ~5 минут; README между мерджем и первым прогоном показывает битую картинку (ветки status ещё нет).",
+      "mitigation": "Задержку не обходить (это свойство раздачи GitHub); в A2 наблюдение делается не раньше чем через 5 минут или `curl` с заголовками. Окно битой картинки закрывает триггер `push` по путям: ветка создаётся в том же прогоне, что и мердж."
+    },
+    {
+      "risk": "Один цвет текста не даёт 4,5:1 сразу к белому и к #0d1117 (максимум 4,35:1), в Dark dimmed (#22272e) контраст ниже.",
+      "mitigation": "Шрифт подписи не мельче 14px с весом 600, контраст текста закреплён сценарием (≥4,0:1 к обоим фонам); Dark dimmed входит в наблюдение A4. Если наблюдение покажет нечитаемость — альтернатива из карточки (два SVG за `<picture>`) выносится человеку, а не делается молча."
+    }
+  ],
+  "out_of_scope": [
+    "Фраза «**Этап 0 из 6 — каркас.**» и текстовая ссылка на milestones в README остаются: фраза описывает, что есть в коде (каркас, заглушки), чего картинка не выражает, и меняется раз за этап, а не после каждой задачи; её автоматизация — отдельная задача по явной просьбе.",
+    "Тёмный вариант картинки и `<picture>` с двумя SVG — альтернатива из карточки, только по решению человека.",
+    "Бейдж самого workflow status-progress в шапке README — это не проверка качества.",
+    "Строка в таблице «Скрипты» docs/pipeline.md — там сценарии обвязки, которые зовёт оркестратор; status-progress.sh к ним не относится.",
+    "Перевод actions на закрепление по SHA — во всех workflow проекта используется мажорный тег; смена политики — отдельным решением.",
+    "Учёт PR в счётчиках майлстоуна: open_issues/closed_issues GitHub считают вместе с PR — картинка показывает то же, что страница майлстоунов."
+  ]
+}
