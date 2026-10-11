@@ -53,6 +53,14 @@ entities:
     domain: media_player
     actions: [turn_off, volume_set, volume_up, volume_down, volume_mute, select_source]
 
+  # Запуск музыки по запросу — отдельное решение (#143); здесь только
+  # управление тем, что уже играет.
+  - entity_id: media_player.example_bedroom_speaker
+    name: Колонка в спальне
+    area: bedroom
+    domain: media_player
+    actions: [media_play, media_pause, media_next_track, media_previous_track, volume_set, volume_mute]
+
   - entity_id: vacuum.example_living_room_robot
     name: Робот-пылесос
     area: living_room
