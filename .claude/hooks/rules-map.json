@@ -48,6 +48,20 @@
       "note": "Правка appsettings*.json или класса *Options. Если появляется новый параметр конфигурации — открой .claude/CLAUDE.md, раздел «Правила синхронизации», строку про параметр конфигурации."
     },
     {
+      "name": "example-sync",
+      "doc": ".claude/CLAUDE.md",
+      "tools": [
+        "Write",
+        "Edit",
+        "MultiEdit"
+      ],
+      "path_any": [
+        ".example"
+      ],
+      "shell_targets_only": true,
+      "note": "Правка .example-файла. Если меняется его структура — открой .claude/CLAUDE.md, раздел «Правила синхронизации», строку про структуру .example-файла: парные примеры и раздел «Синхронизация» тела PR для локальных копий."
+    },
+    {
       "name": "anonymous-endpoint",
       "doc": ".claude/CLAUDE.md",
       "tools": [
