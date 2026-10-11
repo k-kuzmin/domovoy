@@ -24,14 +24,6 @@
 **Этап 0 из 6 — каркас.** Структура решения, интерфейсы, DI-регистрация,
 работающий `/health`. Бизнес-логики нет: реализации портов — заглушки.
 
-- Этап 0. Инфраструктура — [![прогресс этапа 0](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/1?label=)](https://github.com/k-kuzmin/domovoy/milestone/1)
-- Этап 1. Ядро без LLM — [![прогресс этапа 1](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/2?label=)](https://github.com/k-kuzmin/domovoy/milestone/2)
-- Этап 2. LLM-оркестрация — [![прогресс этапа 2](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/3?label=)](https://github.com/k-kuzmin/domovoy/milestone/3)
-- Этап 3. Проактивность, push и публикация наружу — [![прогресс этапа 3](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/4?label=)](https://github.com/k-kuzmin/domovoy/milestone/4)
-- Этап 4. Голос — [![прогресс этапа 4](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/5?label=)](https://github.com/k-kuzmin/domovoy/milestone/5)
-- Этап 5. Мобильное приложение — [![прогресс этапа 5](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/6?label=)](https://github.com/k-kuzmin/domovoy/milestone/6)
-- Этап 6. Память, профиль дома, подтверждения, локальная LLM — [![прогресс этапа 6](https://img.shields.io/github/milestones/progress-percent/k-kuzmin/domovoy/7?label=)](https://github.com/k-kuzmin/domovoy/milestone/7)
-
 Дорожная карта — в [milestones](https://github.com/k-kuzmin/domovoy/milestones),
 разбивка работ — в [issues](https://github.com/k-kuzmin/domovoy/issues).
 
