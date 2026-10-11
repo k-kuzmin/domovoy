@@ -22,6 +22,9 @@ public sealed class ConfigurationExampleTests
     private static readonly Regex HaProfile =
         new(@"^profiles:\s*\[\s*['""]?ha['""]?\s*\]$", RegexOptions.Compiled);
 
+    private static readonly Regex DbOnlyNetwork =
+        new(@"^networks:\s*\[\s*['""]?db['""]?\s*\]$", RegexOptions.Compiled);
+
     private static readonly string[] SecretSettingPaths =
     [
         "Ha:Token",
@@ -137,6 +140,26 @@ public sealed class ConfigurationExampleTests
                 line => line.StartsWith("profiles:", StringComparison.Ordinal),
                 $"сервис {name} входит в стек по умолчанию — профиль выключил бы его из docker compose up");
         }
+    }
+
+    [Fact(DisplayName = "База в compose — в своей сети, Home Assistant до неё не достаёт")]
+    public void PostgresIsIsolatedFromHomeAssistant()
+    {
+        Dictionary<string, List<string>> services = ParseComposeServices(
+            File.ReadAllText(RepositoryLayout.Path("docker-compose.yml")));
+
+        services["postgres"].Should().Contain(
+            line => DbOnlyNetwork.IsMatch(line),
+            "без своей сети база в default — там же, где Home Assistant");
+        services["api"].Should().Contain(
+            line => line.StartsWith("networks:", StringComparison.Ordinal)
+                && line.Contains("default", StringComparison.Ordinal)
+                && line.Contains("db", StringComparison.Ordinal),
+            "Backend ходит и в базу, и к Home Assistant по имени сервиса");
+        services["homeassistant"].Should().NotContain(
+            line => line.StartsWith("networks:", StringComparison.Ordinal)
+                && line.Contains("db", StringComparison.Ordinal),
+            "Home Assistant с внешними интеграциями не должен видеть базу");
     }
 
     /// <summary>

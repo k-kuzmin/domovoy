@@ -45,6 +45,10 @@ services:
     # Для отладки открывать через docker-compose.override.yml.
     expose:
       - '5432'
+    # Своя сеть: Home Assistant с его сторонними интеграциями базу не
+    # видит. internal не ставится — иначе не работает порт для отладки
+    # из docker-compose.override.yml.
+    networks: ['db']
 
   api:
     build:
@@ -88,6 +92,8 @@ services:
 
       HomeProfile__Path: config/home-profile.md
       ResponseTemplates__Path: config/response-templates.yaml
+    # default — к Home Assistant по имени сервиса и в интернет, db — к базе.
+    networks: ['default', 'db']
     ports:
       - '${API_HTTP_PORT:-8080}:8080'
     volumes:
@@ -120,6 +126,9 @@ services:
     # этого порта на роутере нет и быть не должно (запись 0027).
     ports:
       - '${HA_HTTP_PORT:-8123}:8123'
+
+networks:
+  db:
 
 volumes:
   postgres-data:
