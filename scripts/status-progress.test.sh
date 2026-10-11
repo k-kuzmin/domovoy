@@ -709,21 +709,28 @@ else
     printf '%s\n' "$WF" | grep -qF 'status-progress.sh render light' || fail_case 'нет render light'
     printf '%s\n' "$WF" | grep -qF 'status-progress.sh render dark' || fail_case 'нет render dark'
     # Шаги publish: какое условие у шага и есть ли --dry-run. Публикация без
-    # --dry-run допустима только в шаге с условием «не pull_request», вызов
-    # на pull_request — только с --dry-run.
+    # --dry-run допустима только в шаге с условием «не pull_request и ref —
+    # main»; всё остальное — pull_request или запуск из другой ветки — только
+    # с --dry-run. Условие без проверки ref относится к «any».
     steps="$(printf '%s\n' "$WF" | awk '
         /^      - / { cond = "" }
         /^        if:/ { cond = $0 }
         /status-progress\.sh publish/ {
             mode = ($0 ~ /--dry-run/) ? "dry" : "write"
             files = ($0 ~ /progress-light\.svg/ && $0 ~ /progress-dark\.svg/) ? "both" : "partial"
-            if (cond ~ /!= .pull_request./) c = "not-pr"
-            else if (cond ~ /== .pull_request./) c = "pr"
+            if (cond ~ /github\.event_name != .pull_request. && github\.ref == .refs\/heads\/main./) c = "main"
+            else if (cond ~ /github\.event_name == .pull_request. \|\| github\.ref != .refs\/heads\/main./) c = "not-main"
             else c = "any"
             print c, mode, files
         }' | sort)"
-    [ "$steps" = $'not-pr write both\npr dry both' ] ||
+    [ "$steps" = $'main write both\nnot-main dry both' ] ||
         fail_case "шаги publish (условие режим файлы): «$(printf '%s' "$steps" | tr '\n' '|')»"
+    # Группа concurrency публикации — по тому же условию, что и шаг записи:
+    # проверочный прогон из другой ветки не вытесняет ждущую публикацию.
+    case "$group" in
+        *"github.event_name != 'pull_request' && github.ref == 'refs/heads/main'"*) ;;
+        *) fail_case "группа concurrency не по условию шага записи: «$group»" ;;
+    esac
 fi
 end_case
 

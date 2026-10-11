@@ -9,6 +9,8 @@ name: Картинка прогресса этапов
 # показывал бы битую картинку), schedule — страховка от пропущенного или
 # отставшего события. pull_request по тем же путям — проверочный прогон до
 # мерджа: всё то же на настоящем runner, но publish --dry-run, без записи.
+# Запись — только из main: workflow_dispatch из другой ветки тоже идёт
+# проверочным прогоном, код ветки в status не публикуется.
 on:
   issues:
     types: [opened, closed, reopened, deleted, transferred, milestoned, demilestoned]
@@ -34,9 +36,10 @@ permissions:
 
 # Публикующие прогоны идут по одному и не отменяются: в очереди остаётся
 # последний, и он читает задачи после завершения предыдущего. Проверочный
-# прогон PR — в своей группе и публикацию не вытесняет.
+# прогон — PR или запуск из другой ветки — в своей группе и публикацию не
+# вытесняет; условие группы то же, что у шага записи.
 concurrency:
-  group: status-progress-${{ github.event_name == 'pull_request' && 'dry-run' || 'publish' }}
+  group: status-progress-${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'publish' || 'dry-run' }}
   cancel-in-progress: false
 
 jobs:
@@ -67,9 +70,9 @@ jobs:
           bash scripts/status-progress.sh render dark "$RUNNER_TEMP/milestones.json" "$RUNNER_TEMP/issues.json" > "$RUNNER_TEMP/progress-dark.svg"
 
       - name: Публикация в ветку status
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
         run: bash scripts/status-progress.sh publish "$RUNNER_TEMP/progress-light.svg" "$RUNNER_TEMP/progress-dark.svg"
 
       - name: Проверка публикации без записи
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
         run: bash scripts/status-progress.sh publish "$RUNNER_TEMP/progress-light.svg" "$RUNNER_TEMP/progress-dark.svg" --dry-run
