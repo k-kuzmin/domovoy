@@ -20,7 +20,10 @@ namespace Domovoy.Tests;
 /// при сборке (ValidateOnBuild, ValidateScopes), и смена окружения молча
 /// сняла бы её со всех тестов. Убираются только два источника, которые
 /// принадлежат машине, а не репозиторию. Конфигурация тестов — это
-/// appsettings.json из репозитория плюс явные перекрытия самих тестов.
+/// appsettings.json из репозитория плюс явные перекрытия самих тестов —
+/// для значений, читаемых из собранного хоста (options, IConfiguration
+/// после Build). То, что Program.cs читает до Build, — строка
+/// подключения — этой фабрикой не перекрывается.
 /// </summary>
 public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
 {
@@ -43,8 +46,10 @@ public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
     /// <summary>
     /// Источник принадлежит машине разработчика: user-secrets или
     /// переменные окружения без префикса. Префиксные переменные
-    /// (<c>ASPNETCORE_</c>, <c>DOTNET_</c>) — настройки хоста, а не
-    /// приложения, и секретов в них нет.
+    /// (<c>ASPNETCORE_</c>, <c>DOTNET_</c>) остаются: через них хост
+    /// получает свои настройки. Префикс при чтении отрезается, поэтому
+    /// ключ приложения, заданный машине с таким префиксом, до тестов
+    /// дойдёт — это не защищается, а принимается.
     /// </summary>
     internal static bool IsMachineSource(IConfigurationSource source) => source switch
     {
