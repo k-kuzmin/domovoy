@@ -18,11 +18,11 @@ namespace Domovoy.Tests;
 /// маршрутизация приложения, с другой — сам документ, разобранный из
 /// файла. Список анонимных эндпоинтов в тесте проверял бы сам себя.
 /// </summary>
-public sealed class AnonymousEndpointsRuleTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class AnonymousEndpointsRuleTests : IClassFixture<DomovoyApiFactory>
 {
     private readonly WebApplicationFactory<Program> _factory;
 
-    public AnonymousEndpointsRuleTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public AnonymousEndpointsRuleTests(DomovoyApiFactory factory) => _factory = factory;
 
     [Fact(DisplayName = "Анонимные эндпоинты приложения совпадают с таблицей правила 7")]
     public void AnonymousEndpointsMatchRuleSevenTable()

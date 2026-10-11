@@ -20,11 +20,11 @@ namespace Domovoy.Tests;
 /// этапе 5. Без теста агрегация состояний и сериализация ответа
 /// оставались бы непроверенными до тех пор.
 /// </summary>
-public sealed class ComponentHealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFactory>
 {
     private readonly WebApplicationFactory<Program> _factory;
 
-    public ComponentHealthEndpointTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public ComponentHealthEndpointTests(DomovoyApiFactory factory) => _factory = factory;
 
     [Fact(DisplayName = "Подробный /health отдаёт раздельный статус БД, Home Assistant и LLM")]
     public async Task ComponentsAreReportedSeparately()

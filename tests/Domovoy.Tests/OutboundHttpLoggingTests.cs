@@ -26,7 +26,7 @@ namespace Domovoy.Tests;
 /// друг друга — собирающий sink увидел бы чужие запросы, а свои потерял.
 /// </summary>
 [Collection(OutboundHttpLoggingSerialGroup.Name)]
-public sealed class OutboundHttpLoggingTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class OutboundHttpLoggingTests : IClassFixture<DomovoyApiFactory>
 {
     // Пробные значения: те же, что подставляет тяжёлый CI. Настоящими
     // секретами не являются и на правилах gitleaks не срабатывают.
@@ -37,7 +37,7 @@ public sealed class OutboundHttpLoggingTests : IClassFixture<WebApplicationFacto
 
     private readonly WebApplicationFactory<Program> _factory;
 
-    public OutboundHttpLoggingTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public OutboundHttpLoggingTests(DomovoyApiFactory factory) => _factory = factory;
 
     [Fact(DisplayName = "Токен Home Assistant не попадает в лог даже на уровне Verbose")]
     public async Task HaTokenNeverReachesLogsAtVerbose()

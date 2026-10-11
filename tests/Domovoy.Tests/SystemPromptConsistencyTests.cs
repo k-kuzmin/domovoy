@@ -15,11 +15,11 @@ namespace Domovoy.Tests;
 /// проверка проходит вырожденно — и начнёт работать в тот момент, когда
 /// появится первый инструмент, а не когда об этом вспомнят.
 /// </summary>
-public sealed class SystemPromptConsistencyTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SystemPromptConsistencyTests : IClassFixture<DomovoyApiFactory>
 {
     private readonly WebApplicationFactory<Program> _factory;
 
-    public SystemPromptConsistencyTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public SystemPromptConsistencyTests(DomovoyApiFactory factory) => _factory = factory;
 
     [Fact(DisplayName = "Каждый зарегистрированный инструмент присутствует в системном промпте")]
     public void EveryRegisteredToolAppearsInPrompt()
