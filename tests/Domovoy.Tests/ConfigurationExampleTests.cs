@@ -25,6 +25,9 @@ public sealed class ConfigurationExampleTests
     private static readonly Regex DbOnlyNetwork =
         new(@"^networks:\s*\[\s*['""]?db['""]?\s*\]$", RegexOptions.Compiled);
 
+    private static readonly Regex DefaultOnlyNetwork =
+        new(@"^networks:\s*\[\s*['""]?default['""]?\s*\]$", RegexOptions.Compiled);
+
     private static readonly string[] SecretSettingPaths =
     [
         "Ha:Token",
@@ -156,10 +159,12 @@ public sealed class ConfigurationExampleTests
                 && line.Contains("default", StringComparison.Ordinal)
                 && line.Contains("db", StringComparison.Ordinal),
             "Backend ходит и в базу, и к Home Assistant по имени сервиса");
+        // Блочную форму списка разбор не видит (берёт только ключи), поэтому
+        // у Home Assistant допустимы лишь отсутствие сетей или ровно default.
         services["homeassistant"].Should().NotContain(
             line => line.StartsWith("networks:", StringComparison.Ordinal)
-                && line.Contains("db", StringComparison.Ordinal),
-            "Home Assistant с внешними интеграциями не должен видеть базу");
+                && !DefaultOnlyNetwork.IsMatch(line),
+                "Home Assistant с внешними интеграциями не должен видеть базу");
     }
 
     /// <summary>
