@@ -45,7 +45,7 @@ touches_protected_path() {
   [ "${#1}" -gt 32768 ] && probe="$probe ${1: -4096}"
   probe="${probe//\\\\//}"
   case "$probe" in
-    *domovoy.data/migrations*|*directory.packages.props*|*appsettings*.json*|*options.cs*) return 0 ;;
+    *domovoy.data/migrations*|*directory.packages.props*|*appsettings*.json*|*options.cs*|*.example*) return 0 ;;
   esac
   # Эти пути нужны только правилам на СОЗДАНИЕ файла (new_file_only): новое правило в
   # docs/rules/. Правка существующего файла через Edit их не задевает.
