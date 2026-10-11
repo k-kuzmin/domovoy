@@ -89,6 +89,21 @@ public sealed class ConfigurationExampleTests
         }
     }
 
+    [Fact(DisplayName = "HA_TOKEN в .env.example — фиктивное значение, а не пустое и не настоящее")]
+    public void HaTokenExampleIsFictitiousPlaceholder()
+    {
+        Dictionary<string, string> values = ParseEnvValues(
+            File.ReadAllText(RepositoryLayout.Path(".env.example")));
+
+        values.Should().ContainKey("HA_TOKEN", "ключ перечислен в примере (ТЗ 5.1.2)");
+
+        string value = values["HA_TOKEN"];
+
+        value.Should().NotBeNullOrWhiteSpace("ключ перечислен с фиктивным значением, а не пустым");
+        PlaceholderValues.IsUnset(value).Should().BeTrue(
+            "фиктивное значение обязано распознаваться как плейсхолдер — иначе на чистой машине проба HA пойдёт с мусорным токеном");
+    }
+
     [Fact(DisplayName = "У каждого примера конфигурации есть закрытый .gitignore двойник")]
     public void EveryExampleHasIgnoredCounterpart()
     {
@@ -220,9 +235,12 @@ public sealed class ConfigurationExampleTests
         return services;
     }
 
-    private static HashSet<string> ParseEnvKeys(string content)
+    private static HashSet<string> ParseEnvKeys(string content) =>
+        ParseEnvValues(content).Keys.ToHashSet(StringComparer.Ordinal);
+
+    private static Dictionary<string, string> ParseEnvValues(string content)
     {
-        var keys = new HashSet<string>(StringComparer.Ordinal);
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (string line in content.Split('\n'))
         {
@@ -237,11 +255,11 @@ public sealed class ConfigurationExampleTests
 
             if (separator > 0)
             {
-                keys.Add(trimmed[..separator].Trim());
+                values[trimmed[..separator].Trim()] = trimmed[(separator + 1)..].Trim();
             }
         }
 
-        return keys;
+        return values;
     }
 
     private static string? ReadPath(JsonElement root, string path)

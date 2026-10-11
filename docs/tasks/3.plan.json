@@ -1,0 +1,289 @@
+{
+  "issue": 3,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Core/Configuration/HaOptions.cs",
+      "line": 23,
+      "observation": "Token — string? в HaOptions, секция Ha; IsConfigured (строка 41) = !PlaceholderValues.IsUnset(Token): пустое или плейсхолдерное значение даёт «не сконфигурировано», а не падение"
+    },
+    {
+      "path": "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
+      "line": 25,
+      "observation": "HaOptions привязаны к IConfiguration через AddValidatedOptions<HaOptions>(configuration, HaOptions.SectionName) — код не знает происхождения значения"
+    },
+    {
+      "path": "src/Domovoy.Api/Domovoy.Api.csproj",
+      "line": 9,
+      "observation": "UserSecretsId domovoy-api задан; WebApplication.CreateBuilder (Program.cs:15) подключает user-secrets в окружении Development, launchSettings.json ставит Development"
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 73,
+      "observation": "Ha__Token: ${HA_TOKEN} в environment сервиса api; значение подставляется из .env, который также подключён env_file (строки 61-62). Код читает Ha__Token, сырой HA_TOKEN из env_file он не читает"
+    },
+    {
+      "path": ".env.example",
+      "line": 45,
+      "observation": "HA_TOKEN= — пустое значение; критерий задачи и ТЗ 5.1.2 требуют фиктивное. Комментарий на строке 42 («Пусто = не сконфигурировано») и шапка (строки 7-8, «Внешние учётные данные пустые») описывают пустоту"
+    },
+    {
+      "path": "src/Domovoy.Core/Configuration/PlaceholderValues.cs",
+      "line": 47,
+      "observation": "значение, начинающееся с <, { или $, считается плейсхолдером: фиктивное <...> в .env.example сохранит состояние not_configured на чистой машине"
+    },
+    {
+      "path": "src/Domovoy.Ha/HaProbe.cs",
+      "line": 44,
+      "observation": "проба ставит заголовок Authorization: Bearer <Token> на запрос к HA через типизированный HttpClient ha-probe (регистрация — HaServiceCollectionExtensions.cs:24)"
+    },
+    {
+      "path": "src/Domovoy.Api/Logging/SecretMaskingEnricher.cs",
+      "line": 48,
+      "observation": "enricher заменяет значение свойства с чувствительным именем, но не трогает шаблон сообщения: текст, отрендеренный логирующим обработчиком HttpClient, проходит как есть"
+    },
+    {
+      "path": "Directory.Packages.props",
+      "line": 24,
+      "observation": "Microsoft.Extensions.Http 8.0.1: LoggingHttpMessageHandler на уровне Trace пишет заголовки запроса без маскирования, если для клиента не задан RedactLoggedHeaders; в src RedactLoggedHeaders и ConfigureHttpClientDefaults не встречаются (grep пуст)"
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 23,
+      "observation": "Serilog: ReadFrom.Configuration + ReadFrom.Services — уровень задаётся конфигурацией Serilog:MinimumLevel, sink из DI подхватывается; это и даёт тесту способ собрать события на Verbose"
+    },
+    {
+      "path": "src/Domovoy.Llm/LlmProbe.cs",
+      "line": 45,
+      "observation": "тот же механизм: Authorization: Bearer <ApiKey> через клиент llm-probe. Живой прогон на Verbose с Llm__ApiKey=sampleLlmApiKeyValue4c8d1e — 8 совпадений значения в логе"
+    },
+    {
+      "path": ".github/workflows/ci-heavy.yml",
+      "line": 122,
+      "observation": "CI заменяет HA_TOKEN в .env пробным значением и грепает логи старта — на уровне Information из appsettings.json; Debug и Verbose там не проверяются, на пустой HA_TOKEN шаг не опирается"
+    },
+    {
+      "path": "tests/Domovoy.Tests/ComponentHealthEndpointTests.cs",
+      "line": 75,
+      "observation": "тест UnfilledSecretsYieldNotConfigured требует ha = not_configured на конфигурации без секретов — инвариант, который фиктивное значение обязано сохранить"
+    },
+    {
+      "path": "tests/Domovoy.Tests/SecretMaskingEnricherTests.cs",
+      "line": 63,
+      "observation": "готовый образец собирающего ILogEventSink (CollectingSink) — тестов, поднимающих приложение на Verbose и проверяющих логи исходящих HTTP-запросов, нет"
+    }
+  ],
+  "approach": {
+    "summary": "Воспроизведено до плана: dotnet run с Ha__Token=sampleHaTokenValue7f3a2b, Serilog__MinimumLevel__Default=Verbose и запросом /health — 16 строк «Authorization: Bearer sampleHaTokenValue7f3a2b» от System.Net.Http.HttpClient.ha-probe.LogicalHandler и ClientHandler (EventId 102, Request Headers); на Debug — 0. Критерий «не логируется ни на одном уровне» нарушен на Trace. Первопричина — у HttpClientFactory в .NET 8 значения заголовков в Trace-логе не маскируются по умолчанию, а enricher видит только свойства. Фикс первопричины — одно выражение в корне композиции src/Domovoy.Api/Program.cs: builder.Services.ConfigureHttpClientDefaults(http => http.RedactLoggedHeaders(_ => true)) — значения всех заголовков всех исходящих клиентов в логах заменяются, имена заголовков остаются (штатное средство Microsoft.Extensions.Http, без новой зависимости). Сверх этого: .env.example — HA_TOKEN получает фиктивное значение <ha-long-lived-token> (распознаётся PlaceholderValues.IsUnset, на чистой машине по-прежнему not_configured), комментарий у ключа и шапка файла перестают говорить «пусто». Создание служебного пользователя и единственность токена — работа владельца в HA, проверяется его наблюдением, итог без значений в журнал.",
+    "rejected": [
+      {
+        "option": "RedactLoggedHeaders только на двух клиентах HA в HaServiceCollectionExtensions.cs:23-24",
+        "reason": "тот же механизм уже уносит ключ LLM (замерено, 8 совпадений) и унесёт токены будущих клиентов; известную утечку соседнего ключа оставлять нельзя (.claude/CLAUDE.md, «Безопасность», правило 3: «Токены и ключи не логируются никогда, даже на уровне `Debug`»), а поклиентная настройка повторяет забывание при каждом новом AddHttpClient"
+      },
+      {
+        "option": "Расширить SecretMaskingEnricher разбором отрендеренного текста сообщения на «Bearer …»",
+        "reason": "лечит проявление в одном формате, а не причину: значение уже отрендерено в шаблон, разбор текста хрупок и не покрывает другие схемы и заголовки"
+      },
+      {
+        "option": "Поднять минимальный уровень System.Net.Http.HttpClient до Debug в appsettings.json",
+        "reason": "конфигурация переопределяется переменной окружения — включённый оператором Verbose вернёт утечку; это фильтр, а не устранение"
+      },
+      {
+        "option": "Оставить HA_TOKEN пустым",
+        "reason": "критерий задачи и ТЗ 5.1.2 требуют фиктивное значение буквально"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "да: задача требует, чтобы токен HA не логировался ни на одном уровне и ключ стоял в .env.example с фиктивным значением; выбранный фикс закрывает утечку HA на Trace и попутно тем же выражением — ту же утечку ключа LLM, это расширение охвата сверх буквы задачи, названное здесь явно",
+    "alternative": "маскирование только на клиентах HA (HaServiceCollectionExtensions.cs:23-24): токен HA защищён так же, но ключ LLM на Verbose по-прежнему пишется в лог открытым текстом (замерено), а каждый новый клиент нужно не забыть настроить; для владельца разница — видит ли он ключ LLM в Trace-логе. Выбор следует из правила (.claude/CLAUDE.md, «Безопасность», правило 3: «Токены и ключи не логируются никогда, даже на уровне `Debug`»), поэтому развилкой не считается; совет может это оспорить",
+    "ripple": "ConfigureHttpClientDefaults действует на все AddHttpClient решения — по grep: Ha (HaServiceCollectionExtensions.cs:23, 24), Llm (LlmServiceCollectionExtensions.cs:22, 24, 38), Notifications (NotificationsServiceCollectionExtensions.cs:17), Voice (VoiceServiceCollectionExtensions.cs:18, 27). Меняется только Trace-лог заголовков: значения заменяются на *, имена остаются; запросы, ответы, таймауты и обработчики не меняются. RedactLoggedHeaders и ConfigureHttpClientDefaults в src сейчас не используются (grep пуст) — конфликта настроек нет. AddHomeAssistant вызывается только из Program.cs:29 (ast-index usages)",
+    "workaround": "нет: штатная настройка HttpClientFactory из Microsoft.Extensions.Http, без // HACK:",
+    "council_signs": [
+      "общий механизм, у которого может измениться поведение вне сценария задачи: настройка по умолчанию для всех 8 регистраций AddHttpClient (греп в ripple)",
+      "глобальный переключатель: ConfigureHttpClientDefaults в корне композиции"
+    ],
+    "executor": "субагент: Program.cs (~3 строки), .env.example (~6), ConfigurationExampleTests.cs (~20), новый файл тестов (~120) — по задаче целиком больше порога 3 файла и ~40 строк",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "action": "modify",
+      "why": "ConfigureHttpClientDefaults(http => http.RedactLoggedHeaders(_ => true)) рядом с регистрацией слоёв — значения заголовков исходящих запросов не попадают в лог ни на каком уровне; комментарий со ссылкой на правило 3 «Безопасности»"
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "HA_TOKEN=<ha-long-lived-token> вместо пустого; комментарий у ключа (строки 41-42) и шапка (строки 7-8) — фиктивное значение даёт «не сконфигурировано», реальный токен служебного пользователя кладётся только в .env на целевой машине"
+    },
+    {
+      "path": "tests/Domovoy.Tests/OutboundHttpLoggingTests.cs",
+      "action": "create",
+      "why": "регрессионные тесты утечки: приложение на Verbose, исходящие запросы проб HA и LLM, проверка собранных событий; плюс тест, что токен из IConfiguration доходит до запроса к HA"
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "action": "modify",
+      "why": "проверка, что HA_TOKEN в .env.example непуст и распознаётся как плейсхолдер"
+    },
+    {
+      "path": "docs/tasks/3.md",
+      "action": "modify",
+      "why": "журнал: результат воспроизведения, решения, наблюдения владельца о пользователе HA и единственности токена — без значений"
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Api/Program.cs",
+    ".env.example",
+    "tests/Domovoy.Tests/**",
+    "docs/tasks/3.md",
+    "docs/tasks/3.plan.json",
+    "src/Domovoy.Ha/HaServiceCollectionExtensions.cs (только запасной вариант risks/7)",
+    "src/Domovoy.Llm/LlmServiceCollectionExtensions.cs (только запасной вариант risks/7)"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "HaTokenNeverReachesLogsAtVerbose",
+      "file": "tests/Domovoy.Tests/OutboundHttpLoggingTests.cs",
+      "new": true,
+      "covers": [
+        "A4"
+      ],
+      "behavior": "WebApplicationFactory<Program> с UseSetting Serilog:MinimumLevel:Default=Verbose, Ha:Token=sampleHaTokenValue7f3a2b через конфигурацию теста (поверх возможных user-secrets разработчика), собирающий ILogEventSink в DI (его подхватывает ReadFrom.Services) и заглушка primary handler клиента ha-probe без сети; GET /health. Положительный контроль: среди событий есть событие EventId 102 от источника, начинающегося с System.Net.Http.HttpClient.ha-probe, — без него тест краснеет, а не проходит вхолостую при неприменённом уровне или sink. Проверка: ни RenderMessage() ни одного события, ни строковое представление ни одного свойства не содержит значения токена. До правки Program.cs тест обязан быть красным (сейчас в тексте сообщения стоит «Authorization: Bearer sampleHaTokenValue7f3a2b») — красный прогон в журнал. Почему GET /health доходит до ha-probe: /health — MapHealthChecks (src/Domovoy.Api/Endpoints/HealthEndpoints.cs:26), единственная проверка ComponentsHealthCheck (src/Domovoy.Api/Program.cs:49-50) опрашивает все IComponentProbe на каждом запросе, кеша нет; воспроизведение плана дало 16 совпадений именно через /health"
+    },
+    {
+      "name": "LlmApiKeyNeverReachesLogsAtVerbose",
+      "file": "tests/Domovoy.Tests/OutboundHttpLoggingTests.cs",
+      "new": true,
+      "covers": [
+        "A4"
+      ],
+      "behavior": "сценарий вне задачи, который задевает глобальная настройка (docs/rules/implement.md, «Когда пишется регрессионный тест»: «правка общего механизма или переключателя | обязателен на сценарий вне задачи, который правка могла задеть (из `ripple` карточки)»): то же для Llm:ApiKey и клиента llm-probe — положительный контроль на событие EventId 102 от System.Net.Http.HttpClient.llm-probe, значение ключа не встречается ни в тексте, ни в свойствах; красный до правки"
+    },
+    {
+      "name": "HaTokenFromConfigurationIsSentToHomeAssistant",
+      "file": "tests/Domovoy.Tests/OutboundHttpLoggingTests.cs",
+      "new": true,
+      "covers": [
+        "A2"
+      ],
+      "behavior": "Ha:Token задан через источник IConfiguration теста; заглушка primary handler клиента ha-probe запоминает запрос; после GET /health у запроса к HA заголовок Authorization = Bearer <то же значение>. Проверяет, что значение доходит из IConfiguration до вызова HA, и что маскирование трогает только лог, а не сам запрос"
+    },
+    {
+      "name": "HaTokenExampleIsFictitiousPlaceholder",
+      "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "new": true,
+      "covers": [
+        "A3"
+      ],
+      "behavior": "в .env.example есть ключ HA_TOKEN, его значение непусто и PlaceholderValues.IsUnset(значение) == true: пустое значение и похожее на настоящий токен одинаково роняют тест"
+    },
+    {
+      "name": "Сценарий: живой прогон на Verbose и Debug",
+      "file": "docs/tasks/3.md",
+      "new": true,
+      "covers": [
+        "A2",
+        "A4"
+      ],
+      "behavior": "dotnet run --no-launch-profile --project src/Domovoy.Api с ASPNETCORE_ENVIRONMENT=Production, Ha__Token=sampleHaTokenValue7f3a2b, Ha__BaseUrl на закрытый порт localhost, Serilog__MinimumLevel__Default=Verbose, затем Debug; запрос /health; grep -c значения по логу — 0 на обоих уровнях, при этом строка Request Headers на Verbose есть (значение заменено). До фикса на Verbose было 16 — исход в «Проверено»"
+    },
+    {
+      "name": "Сценарий: конфигурация и секреты в репозитории",
+      "file": "docs/tasks/3.md",
+      "new": true,
+      "covers": [
+        "A2",
+        "A3"
+      ],
+      "behavior": "gitleaks dir . --redact --no-banner и gitleaks git --redact --no-banner — без находок; grep '^HA_TOKEN=' .env.example — плейсхолдер; dotnet test — UnfilledSecretsYieldNotConfigured зелёный. docker compose config локально не запускается: env_file подставил бы содержимое настоящего .env в вывод; путь .env → Ha__Token проверяет тяжёлый CI, который поднимает стек на копии .env.example"
+    },
+    {
+      "name": "Сценарий владельца: служебный пользователь и единственный токен",
+      "file": "docs/tasks/3.md",
+      "new": true,
+      "covers": [
+        "A1",
+        "A5"
+      ],
+      "behavior": "владелец в HA: отдельный пользователь (не владелец, без прав администратора, если HA это позволяет) создан для Backend; в его профиле ровно один long-lived token; значение записано только в .env целевой машины и в user-secrets разработчика (dotnet user-secrets list через ! показывает ключ Ha:Token); с этим токеном Backend проходит пробу HA. Итог — строками таблицы «Проверено» журнала, без имён, адресов и значений"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "criterion": "в HA создан отдельный пользователь, используемый только Backend",
+      "method": "наблюдение владельца в веб-интерфейсе HA: Настройки → Люди — отдельный пользователь для Backend, отличный от учётной записи владельца",
+      "evidence": "строка владельца в таблице «Проверено» журнала docs/tasks/3.md без имени пользователя и адресов"
+    },
+    {
+      "id": "A2",
+      "criterion": "long-lived token читается через IConfiguration: локально из dotnet user-secrets, в продакшене из переменной окружения через env_file",
+      "method": "тест HaTokenFromConfigurationIsSentToHomeAssistant зелёный; осмотр кода: HaOptions привязаны к IConfiguration (CoreServiceCollectionExtensions.cs:25), UserSecretsId в Domovoy.Api.csproj:9 при Development; в docker-compose.yml у api .env подключён env_file (строки 61-62) и даёт подстановку Ha__Token: ${HA_TOKEN} (строка 73) — этот путь исполняет тяжёлый CI (ci-heavy.yml:122 кладёт пробный HA_TOKEN в .env и поднимает api); владелец: dotnet user-secrets list через ! показывает ключ Ha:Token",
+      "evidence": "число тестов dotnet test; цитаты файл:строка; зелёный шаг CI «Значения секретов не попадают в логи»; наблюдение владельца в «Проверено» без значения. Значение доезжает до кода как Ha__Token из .env подстановкой в environment — так и записывается, без утверждения, что код читает сырой HA_TOKEN"
+    },
+    {
+      "id": "A3",
+      "criterion": "токена нет ни в одном файле репозитория, gitleaks чист, ключ перечислен в .env.example с фиктивным значением",
+      "method": "gitleaks dir . --redact --no-banner и gitleaks git --redact --no-banner — no leaks found (в issue устаревшее gitleaks detect, замена зафиксирована триажем); grep -n '^HA_TOKEN=' .env.example — непустое плейсхолдерное значение; тест HaTokenExampleIsFictitiousPlaceholder зелёный",
+      "evidence": "вывод gitleaks в журнале; цитата .env.example:45; число тестов"
+    },
+    {
+      "id": "A4",
+      "criterion": "токен не логируется ни на одном уровне, включая Debug (проверено grep по логам старта)",
+      "method": "тесты HaTokenNeverReachesLogsAtVerbose и LlmApiKeyNeverReachesLogsAtVerbose: красные до правки Program.cs, зелёные после; живой прогон на Verbose и Debug с запросом /health — grep -c sampleHaTokenValue7f3a2b по логу равен 0 на обоих уровнях; существующий шаг CI «Значения секретов не попадают в логи» зелёный",
+      "evidence": "текст красного прогона и зелёный прогон в журнале; числа grep -c до (16 на Verbose) и после (0) в «Проверено»; статус шага CI"
+    },
+    {
+      "id": "A5",
+      "criterion": "ни один другой клиент этим токеном не пользуется",
+      "method": "наблюдение владельца в HA (решение владельца 2026-10-11 в журнале): у служебного пользователя ровно один long-lived token, и записан он только у Backend — в .env целевой машины и в user-secrets для локального запуска",
+      "evidence": "строка владельца в таблице «Проверено» журнала без значений"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "фиктивное значение HA_TOKEN не распознаётся как плейсхолдер — на чистой машине проба HA пойдёт с мусорным токеном, состояние станет error вместо not_configured, docker compose up на примере перестанет давать штатный результат",
+      "mitigation": "значение начинается с < (PlaceholderValues.cs:47); тест HaTokenExampleIsFictitiousPlaceholder требует IsUnset == true; живой docker compose up на .env.example и curl /health в «Проверено»"
+    },
+    {
+      "risk": "тест логов проходит вхолостую: уровень Verbose или собирающий sink не применились, событий заголовков нет — отсутствие токена ничего не доказывает",
+      "mitigation": "положительный контроль на событие EventId 102 от клиента пробы в каждом тесте; красный прогон до правки Program.cs обязателен и записывается в журнал"
+    },
+    {
+      "risk": "WebApplicationFactory поднимает приложение в Development и подхватывает user-secrets разработчика — реальный токен уйдёт в запрос или в вывод теста",
+      "mitigation": "Ha:Token и Llm:ApiKey задаются конфигурацией теста с приоритетом выше user-secrets, primary handler проб заменён заглушкой — сети нет, значение в тесте только пробное; сторож подмены — тест HaTokenFromConfigurationIsSentToHomeAssistant: заглушка handler сравнивает полученный Authorization с пробным значением, перекрытие из user-secrets делает его красным (совет по плану, круг 1); сообщения assertion значение полученного заголовка не печатают — только совпало или нет"
+    },
+    {
+      "risk": "глобальная маскировка скрывает значения всех заголовков в Trace-логе — диагностика исходящих запросов беднеет",
+      "mitigation": "имена заголовков, метод, адрес, коды и тайминги остаются; значения заголовков в логе — ровно то, что правило 3 «Безопасности» запрещает для секретов, а отличать секретные заголовки от прочих поимённо — то же забывание, от которого уходим"
+    },
+    {
+      "risk": "чья-то поклиентная настройка RedactLoggedHeaders в будущем перекроет умолчание и вернёт утечку",
+      "mitigation": "тесты HaTokenNeverReachesLogsAtVerbose и LlmApiKeyNeverReachesLogsAtVerbose проверяют поведение, а не наличие строки в Program.cs — регресс краснеет"
+    },
+    {
+      "risk": "направление зависимостей: правка в Api не должна тянуть периферию в Core",
+      "mitigation": "правка только в Program.cs (корень композиции, Microsoft.Extensions.Http входит в общий фреймворк ASP.NET Core); dotnet test --filter FullyQualifiedName~Architecture зелёный"
+    },
+    {
+      "risk": "уровень по диффу вырастет до high при medium по плану: risk.sh в режиме plan слова не считает, а новый файл тестов неизбежно несёт слова high-списка scripts/risk.json — Ha:Token, Bearer — и префиксы ApiKey, authoriz (Llm:ApiKey, Authorization); это триггер «уровень по диффу high при уровне по плану ниже»",
+      "mitigation": "заявлено здесь до реализации: оркестратор после risk.sh plan вправе вести задачу маршрутом high (совет с прагматиком, 2 круга ревью диффа, резюме человеку) или позвать человека на плане, а не узнать об этом на шаге пересчёта по диффу"
+    },
+    {
+      "risk": "ConfigureHttpClientDefaults + RedactLoggedHeaders на Microsoft.Extensions.Http 8.0.1 не погасит Trace-утечку (не проверено до реализации — покажет только переход теста из красного в зелёный)",
+      "mitigation": "тесты HaTokenNeverReachesLogsAtVerbose и LlmApiKeyNeverReachesLogsAtVerbose решают это до коммита фикса. Если умолчание не применится к именованным клиентам — запасной вариант заранее в boundaries: поклиентный RedactLoggedHeaders в src/Domovoy.Ha/HaServiceCollectionExtensions.cs и src/Domovoy.Llm/LlmServiceCollectionExtensions.cs (совет по плану, круг 1, чтобы не останавливаться на середине); применённый вариант и красный/зелёный прогон — в журнал, risk.sh diff пересчитывается"
+    }
+  ],
+  "out_of_scope": [
+    "Создание пользователя и токена в HA — руками владельца; агенту секреты и HA закрыты (user-secrets — команда человека)",
+    "Права служебного пользователя в HA (не администратор и т. п.) — ни в критерии задачи, ни в FR-HA-2 не заданы; если владелец захочет зафиксировать — отдельная задача",
+    "Попутно: адрес исходящего запроса ntfy будет содержать топик, а HttpClientFactory пишет URI на уровне Information — маскирование заголовков это не закрывает; NtfyPushSender сейчас заглушка (этап 3), уходит в раздел «Попутно» тела PR",
+    "Попутно: шаг CI «Значения секретов не попадают в логи» гоняется на уровне Information — расширение его на Verbose трогает .github/workflows (обвязка), задачей не делается; уровень Verbose покрывают новые тесты",
+    "LLM_API_KEY и NTFY_TOPIC в .env.example остаются пустыми — критерий задачи касается только ключа HA"
+  ]
+}

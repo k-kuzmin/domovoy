@@ -12,11 +12,11 @@ namespace Domovoy.Tests;
 /// конфигурации без секретов и отвечает, а незаполненные учётные данные
 /// дают состояние «не сконфигурировано», а не падение.
 /// </summary>
-public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class HealthEndpointTests : IClassFixture<DomovoyApiFactory>
 {
     private readonly WebApplicationFactory<Program> _factory;
 
-    public HealthEndpointTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public HealthEndpointTests(DomovoyApiFactory factory) => _factory = factory;
 
     [Fact(DisplayName = "Анонимный /health отвечает на конфигурации без секретов")]
     public async Task LivenessRespondsWithoutSecrets()

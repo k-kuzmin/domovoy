@@ -24,6 +24,14 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .Enrich.FromLogContext()
     .Enrich.With<SecretMaskingEnricher>());
 
+// Логирующий обработчик HttpClientFactory на уровне Trace пишет
+// заголовки исходящих запросов, а среди них Authorization с токеном HA
+// и ключом LLM. Enricher до уже отрендеренного текста не достаёт, поэтому
+// значения заголовков маскируются у всех клиентов сразу: правило
+// «токены не логируются никогда» не должно зависеть от того, не забыл ли
+// кто-то настроить очередной AddHttpClient.
+builder.Services.ConfigureHttpClientDefaults(http => http.RedactLoggedHeaders(_ => true));
+
 builder.Services.AddDomovoyCore(builder.Configuration);
 builder.Services.AddDomovoyData(builder.Configuration);
 builder.Services.AddHomeAssistant();
