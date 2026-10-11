@@ -21,7 +21,7 @@
 | [0001](0001-placeholder-hostnames.md) | В репозитории только плейсхолдеры вместо реальных хостов | принято |
 | [0002](0002-split-health-endpoint.md) | `/health` разделён на анонимный и защищённый | принято |
 | [0003](0003-validate-shape-not-secrets.md) | Валидация конфигурации проверяет форму, не наличие секретов | принято |
-| [0004](0004-compose-scope-stage-zero.md) | В docker-compose только состав этапа 0 | принято |
+| [0004](0004-compose-scope-stage-zero.md) | В docker-compose только состав этапа 0 | частично заменено [0027](0027-home-assistant-compose-profile.md) |
 | [0005](0005-postgresql-only.md) | PostgreSQL без варианта SQLite | принято |
 | [0006](0006-fluentassertions-7.md) | FluentAssertions закреплён на версии 7.x | принято |
 | [0007](0007-src-tests-layout.md) | Проекты разложены по `src/` и `tests/` | принято |
@@ -44,3 +44,4 @@
 | [0024](0024-line-comments-via-named-scenario.md) | Построчные замечания ревью достаёт поимённый сценарий, а не `gh api` | частично заменено [0026](0026-human-led-pipeline.md) |
 | [0025](0025-anonymous-device-pairing-endpoint.md) | Обмен кода привязки на токен устройства — анонимный эндпоинт | принято |
 | [0026](0026-human-led-pipeline.md) | Бота нет: конвейер ведёт человек с агентом в Claude CLI | принято |
+| [0027](0027-home-assistant-compose-profile.md) | Home Assistant в общем compose под профилем `ha` | принято |

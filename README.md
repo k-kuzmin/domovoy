@@ -148,6 +148,38 @@ LLM доступен на `GET /api/v1/health` под токеном устро�
 примера: наружу порт базы не публикуется, но при реальной эксплуатации
 `POSTGRES_PASSWORD` меняется.
 
+### Стек с Home Assistant
+
+Home Assistant объявлен в том же `docker-compose.yml`, но под профилем `ha`:
+обычный `docker compose up` его не поднимает и образ не тянет
+([0027](docs/decisions/0027-home-assistant-compose-profile.md)). С профилем HA
+встаёт в общую сеть стека, и Backend находит его по имени сервиса из
+`HA_BASE_URL`. База живёт в отдельной сети `db` вместе с Backend — HA её не
+видит.
+
+```bash
+docker compose --profile ha up -d --build
+docker compose --profile ha down
+```
+
+Чтобы HA поднимался всегда, без ключа, — раскомментировать в `.env` строку
+`COMPOSE_PROFILES=ha`. Порт веб-интерфейса на хосте — `HA_HTTP_PORT`
+(по умолчанию 8123).
+
+**Первый запуск.** До первичной настройки страница создания владельца HA
+открыта любому в локальной сети. Поэтому сразу после первого
+`docker compose --profile ha up -d` пройти настройку с самой машины:
+`http://localhost:8123` (или порт из `HA_HTTP_PORT`).
+
+Веб-интерфейс опубликован на все интерфейсы хоста, чтобы открываться с
+телефона в домашней сети. Наружу HA не выставляется (NFR-SEC-2): на роутере
+под него нет ни проброса порта, ни UPnP-сопоставления, и это проверяется
+вручную — с телефона на мобильном интернете страница открываться не должна.
+
+Конфигурация HA — устройства, пользователи, токены — лежит в именованном томе
+`homeassistant-config`, вне рабочего дерева. **`docker compose down -v` и
+`docker volume prune` удаляют этот том**: HA после них настраивается заново.
+
 ## Локальная разработка
 
 Проекты собираются под `net8.0`. SDK 9 подходит: целевой пакет `net8.0`
@@ -200,6 +232,8 @@ dotnet user-secrets list
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
 | Стек целиком | `docker compose up -d --build` |
+| Стек с Home Assistant | `docker compose --profile ha up -d --build` |
+| Остановить стек с Home Assistant | `docker compose --profile ha down` |
 
 ## API
 

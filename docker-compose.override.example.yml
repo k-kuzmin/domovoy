@@ -11,11 +11,22 @@
 
 services:
   postgres:
-    # Порт базы наружу — только для отладки с хоста.
+    # Порт базы — только для отладки с хоста и только на loopback: на всех
+    # интерфейсах база открылась бы ЛВС в обход сети db (запись 0027).
     ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
 
   api:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       Serilog__MinimumLevel__Default: Debug
+
+  # Home Assistant поднимается под профилем ha: docker compose --profile ha up -d.
+  # USB-координатор (Zigbee, Z-Wave) пробрасывается в контейнер здесь, а не
+  # в основном файле: путь устройства свой у каждой машины. Путь ниже —
+  # плейсхолдер; на Linux устойчивое имя лежит в /dev/serial/by-id/.
+  # Docker Desktop под Windows напрямую USB-устройства в контейнер не отдаёт.
+  #
+  # homeassistant:
+  #   devices:
+  #     - /dev/serial/by-id/<имя-координатора>:/dev/ttyUSB0

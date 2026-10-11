@@ -7,10 +7,14 @@
 #   docker compose up -d --build
 #   curl -s http://localhost:8080/health
 #
-# Здесь только Backend и база — состав этапа 0. Home Assistant,
-# faster-whisper и ntfy добавляются своими этапами: их образы в этом
-# файле сейчас означали бы «docker compose up тянет несколько гигабайт
-# и не работает без реального Home Assistant».
+# По умолчанию поднимаются только Backend и база. Home Assistant
+# объявлен здесь же, но под профилем ha (запись 0027): обычный
+# docker compose up его образ не тянет, а с профилем он встаёт в общую
+# сеть стека, и Backend находит его по имени сервиса из HA_BASE_URL:
+#
+#   docker compose --profile ha up -d
+#
+# faster-whisper и ntfy добавляются своими этапами (запись 0004).
 #
 # Локальные переопределения — docker-compose.override.yml, он закрыт
 # .gitignore. Пример: docker-compose.override.example.yml.
@@ -41,6 +45,10 @@ services:
     # Для отладки открывать через docker-compose.override.yml.
     expose:
       - '5432'
+    # Своя сеть: Home Assistant с его сторонними интеграциями базу не
+    # видит. internal не ставится — иначе не работает порт для отладки
+    # из docker-compose.override.yml.
+    networks: ['db']
 
   api:
     build:
@@ -84,6 +92,8 @@ services:
 
       HomeProfile__Path: config/home-profile.md
       ResponseTemplates__Path: config/response-templates.yaml
+    # default — к Home Assistant по имени сервиса и в интернет, db — к базе.
+    networks: ['default', 'db']
     ports:
       - '${API_HTTP_PORT:-8080}:8080'
     volumes:
@@ -99,5 +109,27 @@ services:
       retries: 3
       start_period: 30s
 
+  homeassistant:
+    # Точная версия, а не stable: стек на чистой машине воспроизводим.
+    image: ghcr.io/home-assistant/home-assistant:2026.10.1
+    # Только по явному запросу: без устройств HA ничем не управляет,
+    # а образ тяжёлый (записи 0004 и 0027).
+    profiles: ['ha']
+    # Автозапуск после перезагрузки машины обязателен (AR-5).
+    restart: unless-stopped
+    volumes:
+      # Именованный том вне рабочего дерева: в .storage HA лежат токены
+      # и реальные entity_id, в git они попасть не могут.
+      - homeassistant-config:/config
+    # Веб-интерфейс публикуется на хост, чтобы он был доступен из
+    # локальной сети. Наружу HA не выставляется (NFR-SEC-2): проброса
+    # этого порта на роутере нет и быть не должно (запись 0027).
+    ports:
+      - '${HA_HTTP_PORT:-8123}:8123'
+
+networks:
+  db:
+
 volumes:
   postgres-data:
+  homeassistant-config:
