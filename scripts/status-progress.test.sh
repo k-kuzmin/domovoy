@@ -456,14 +456,18 @@ g clone -q "$ORIGIN" "$CLONE" 2>/dev/null
 MAIN_TIP="$(g -C "$ORIGIN" rev-parse refs/heads/main)"
 
 # Предохранитель: origin клона обязан быть bare-репозиторием песочницы.
-origin_url="$(g -C "$CLONE" remote get-url origin)"
-origin_real="$(cd "$origin_url" 2>/dev/null && pwd -P || true)"
-sandbox_real="$(cd "$ORIGIN" && pwd -P)"
-if [ -z "$origin_real" ] || [ "$origin_real" != "$sandbox_real" ]; then
-    printf 'origin клона песочницы — «%s», а не %s: публикация не запускается.\n' \
-        "$origin_url" "$ORIGIN" >&2
-    exit 2
-fi
+# Зовётся перед каждым вызовом publish.
+SANDBOX_ORIGIN_REAL="$(cd "$ORIGIN" && pwd -P)"
+assert_sandbox_origin() {
+    local url real
+    url="$(g -C "$CLONE" remote get-url origin 2>/dev/null || true)"
+    real="$(cd "$url" 2>/dev/null && pwd -P || true)"
+    if [ -z "$real" ] || [ "$real" != "$SANDBOX_ORIGIN_REAL" ]; then
+        printf 'origin клона песочницы — «%s», а не %s: публикация не запускается.\n' \
+            "$url" "$ORIGIN" >&2
+        exit 2
+    fi
+}
 
 LIGHT="$SANDBOX/files/progress-light.svg"
 DARK="$SANDBOX/files/progress-dark.svg"
@@ -475,6 +479,7 @@ printf '<svg>тёмная 1</svg>\n' > "$DARK"
 publish_as() {
     local event="$1"
     shift
+    assert_sandbox_origin
     (
         cd "$CLONE" || exit 99
         if [ -n "$event" ]; then
@@ -603,6 +608,19 @@ expect_out 'картинка не изменилась'
 [ "$(status_count)" = 2 ] || fail_case "коммитов в status $(status_count), ожидалось 2"
 [ "$(status_tip)" = "$SECOND_TIP" ] || fail_case 'вершина status сдвинулась'
 expect_main_unchanged
+end_case
+
+# Проверочный прогон PR, не меняющий картинку, всё равно проверяет пуш:
+# иначе авторизация на PR проверялась бы только при изменившемся проценте.
+begin_case 'publish --dry-run без изменений: код 0, пуш проверен, ничего не записано'
+before="$(refs_snapshot)"
+publish "$LIGHT" "$DARK" --dry-run
+expect_status 0
+expect_first_line_git_version
+expect_out 'картинка не изменилась'
+printf '%s\n' "$ERR" | grep -qiE 'up.to.date|Everything' ||
+    fail_case 'в выводе нет ответа git push --dry-run'
+expect_refs_unchanged "$before"
 end_case
 
 begin_case 'publish без файлов и с отсутствующим файлом — отказ без записи'
