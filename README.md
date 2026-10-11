@@ -154,7 +154,8 @@ Home Assistant объявлен в том же `docker-compose.yml`, но под
 обычный `docker compose up` его не поднимает и образ не тянет
 ([0027](docs/decisions/0027-home-assistant-compose-profile.md)). С профилем HA
 встаёт в общую сеть стека, и Backend находит его по имени сервиса из
-`HA_BASE_URL`.
+`HA_BASE_URL`. База живёт в отдельной сети `db` вместе с Backend — HA её не
+видит.
 
 ```bash
 docker compose --profile ha up -d --build
