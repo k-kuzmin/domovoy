@@ -44,11 +44,19 @@ entities:
     domain: light
     actions: [turn_on, turn_off, toggle, set_brightness]
 
-  - entity_id: switch.example_living_room_tv
+  # Включение (Wake-on-LAN) в набор не входит: из контейнера за NAT
+  # широковещательный пакет до локальной сети может не доходить (#51).
+  - entity_id: media_player.example_living_room_tv
     name: Телевизор
     area: living_room
-    domain: switch
-    actions: [turn_on, turn_off]
+    domain: media_player
+    actions: [turn_off, volume_set, volume_up, volume_down, volume_mute, select_source]
+
+  - entity_id: vacuum.example_living_room_robot
+    name: Робот-пылесос
+    area: living_room
+    domain: vacuum
+    actions: [start, pause, return_to_base, locate]
 
   - entity_id: sensor.example_bedroom_temperature
     name: Температура в спальне
@@ -80,6 +88,14 @@ entities:
     area: bedroom
     domain: climate
     actions: [turn_on, turn_off, set_temperature]
+
+  # Терморегулятор котла пока только читается: управление котлом
+  # откроется отдельным решением.
+  - entity_id: climate.example_kitchen_boiler_thermostat
+    name: Терморегулятор котла
+    area: kitchen
+    domain: climate
+    actions: [read]
 
   # Замки, ворота, сигнализация и газ требуют подтверждения вторым
   # сообщением независимо от формулировки запроса (раздел 4.3 ТЗ).
