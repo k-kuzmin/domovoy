@@ -670,6 +670,37 @@ else
 fi
 end_case
 
+# ==================================================================
+# README: picture со светлой и тёмной картинкой из ветки status.
+# ==================================================================
+RAW='https://raw.githubusercontent.com/k-kuzmin/domovoy/status'
+begin_case 'README: picture со светлой и тёмной картинкой'
+RM="$(tr -d '\r' < "$README")"
+section="$(printf '%s\n' "$RM" | awk '/^## Статус$/ { inside = 1; next } inside && /^## / { exit } inside')"
+[ -n "$section" ] || fail_case 'в README нет раздела «## Статус»'
+n_link="$(printf '%s\n' "$section" | grep -cF '<a href="https://github.com/k-kuzmin/domovoy/milestones">' || true)"
+[ "$n_link" = 1 ] || fail_case "ссылок на milestones обёрткой картинки: $n_link, ожидалась 1"
+n_pic="$(printf '%s\n' "$section" | grep -cF '<picture>' || true)"
+[ "$n_pic" = 1 ] || fail_case "элементов picture: $n_pic, ожидался 1"
+# Имена файлов — те, что пишет workflow: светлая из render light, тёмная из render dark.
+light_name="progress-light.svg"
+dark_name="progress-dark.svg"
+if [ -f "$WORKFLOW" ]; then
+    WF="$(tr -d '\r' < "$WORKFLOW")"
+    light_name="$(printf '%s\n' "$WF" | sed -n 's/.*render light .*[/"]\(progress-[a-z]*\.svg\)".*/\1/p' | head -1)"
+    dark_name="$(printf '%s\n' "$WF" | sed -n 's/.*render dark .*[/"]\(progress-[a-z]*\.svg\)".*/\1/p' | head -1)"
+    [ -n "$light_name" ] && [ -n "$dark_name" ] || fail_case 'в workflow не нашлись имена файлов render'
+fi
+printf '%s\n' "$section" | grep -qF "<source media=\"(prefers-color-scheme: dark)\" srcset=\"$RAW/$dark_name\">" ||
+    fail_case "нет <source> тёмной темы с $RAW/$dark_name"
+printf '%s\n' "$section" | grep -qE "<img [^>]*src=\"$RAW/$light_name\"" ||
+    fail_case "нет <img> со светлой $RAW/$light_name"
+in_section="$(printf '%s\n' "$section" | grep -cF 'status/progress-' || true)"
+in_readme="$(printf '%s\n' "$RM" | grep -cF 'status/progress-' || true)"
+[ "$in_section" = "$in_readme" ] || fail_case 'ссылки на картинки есть вне раздела «Статус»'
+printf '%s\n' "$RM" | grep -qF 'Этап 0 из 6' && fail_case 'в README остался абзац «Этап 0 из 6»'
+end_case
+
 # ------------------------------------------------------------------
 # Итог
 # ------------------------------------------------------------------

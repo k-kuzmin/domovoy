@@ -21,8 +21,12 @@
 
 ## Статус
 
-**Этап 0 из 6 — каркас.** Структура решения, интерфейсы, DI-регистрация,
-работающий `/health`. Бизнес-логики нет: реализации портов — заглушки.
+<a href="https://github.com/k-kuzmin/domovoy/milestones">
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/k-kuzmin/domovoy/status/progress-dark.svg">
+<img alt="Прогресс этапов" src="https://raw.githubusercontent.com/k-kuzmin/domovoy/status/progress-light.svg">
+</picture>
+</a>
 
 Дорожная карта — в [milestones](https://github.com/k-kuzmin/domovoy/milestones),
 разбивка работ — в [issues](https://github.com/k-kuzmin/domovoy/issues).
