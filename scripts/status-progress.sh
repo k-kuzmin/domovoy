@@ -20,6 +20,10 @@
 #     этап остаётся на картинке со своим процентом. Процент — по состоянию
 #     самих задач, а не по счётчикам майлстоуна (те — кеш и могут отставать от
 #     события `issues: closed`); элементы с полем `pull_request` не считаются.
+#     Номера этапов обязаны идти подряд от 0 без повторов, а заголовок,
+#     начатый как этап («Этап 3 — …»), — быть в форме «Этап N.»; иначе
+#     отказ: пропавший этап виден красным прогоном, а не картинкой без строки.
+#     Пропажу последнего этапа целиком эта проверка не видит.
 #     Округление вниз: 100 % — только когда закрыто всё, 0 задач — 0 %.
 #     Из задач читаются только `state`, `milestone.number` и наличие
 #     `pull_request`: заголовки и тела задач пишет кто угодно, на картинку они
@@ -90,6 +94,20 @@ def caption: if length > 60 then .[0:59] + "…" else . end;
   | map({ number, title, n: (.title | stage_no) })
   | sort_by(.n, .number)) as $stages
 | if ($stages | length) == 0 then error("нет ни одного майлстоуна «Этап N.»") else . end
+# Набор этапов — ровно 0..N без дыр и повторов: майлстоун, переименованный
+# мимо формы «Этап N.», или дубль номера дают отказ, а не картинку на строку
+# меньше или больше.
+| ($ms
+  | map(select(type == "object" and (.title | type) == "string") | .title
+        | select(test("^Этап\\s*[0-9]") and (test("^Этап [0-9]+\\.") | not)))) as $malformed
+| if ($malformed | length) > 0
+  then error("заголовок начат как этап, но не в форме «Этап N.»: \($malformed | join("; "))") else . end
+| ($stages | map(.n)) as $ns
+| ($ns | group_by(.) | map(select(length > 1) | .[0] | tostring)) as $dups
+| if ($dups | length) > 0 then error("этап \($dups | join(", ")) повторяется") else . end
+| ([range(0; ($ns | max) + 1)] - $ns | map(tostring)) as $missing
+| if ($missing | length) > 0
+  then error("нет этапа \($missing | join(", ")): номера этапов идут подряд от 0") else . end
 | ($is
   | map(select(type == "object" and .pull_request == null
                and (.milestone | type) == "object"))) as $issues
@@ -135,7 +153,7 @@ cmd_render() {
     # посередине не оставляет в stdout половину SVG. Причину печатает jq.
     svg="$(J -nr --slurpfile ms_pages "$ms_file" --slurpfile is_pages "$is_file" \
         --argjson pal "$palette" "$SVG_PROGRAM")" ||
-        die 'картинка не нарисована: этапов нет или данные негодны'
+        die 'картинка не нарисована: набор этапов или данные негодны'
     printf '%s\n' "$svg"
 }
 

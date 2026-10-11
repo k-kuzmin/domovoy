@@ -126,6 +126,12 @@ expect_err_not_empty() {
     fi
 }
 
+expect_err() {
+    if ! printf '%s\n' "$ERR" | grep -qF -- "$1"; then
+        fail_case "в stderr нет: $1"
+    fi
+}
+
 # jq на Windows печатает CRLF; в CI его нет, но сравнения строк не должны
 # зависеть от машины, на которой идёт прогон.
 J() { jq "$@" | tr -d '\r'; }
@@ -280,8 +286,10 @@ end_case
 # ==================================================================
 # Экранирование и обрезка заголовка.
 # ==================================================================
+# Этапы 0 и 1 — заполнители: номера этапов обязаны идти подряд от 0.
 FX_MS_ESC="$SANDBOX/milestones-escape.json"
-J -n '[{ number: 1, title: "Этап 2. A & B <c> \"d\" '"'"'e'"'"'", state: "open" }]' > "$FX_MS_ESC"
+J -n '[{ number: 3, title: "Этап 0. x", state: "open" }, { number: 2, title: "Этап 1. y", state: "open" },
+       { number: 1, title: "Этап 2. A & B <c> \"d\" '"'"'e'"'"'", state: "open" }]' > "$FX_MS_ESC"
 printf '[]\n' > "$SANDBOX/issues-empty-array.json"
 
 for theme in light dark; do
@@ -304,8 +312,10 @@ end_case
 
 LONG_TITLE='Этап 3. Очень длинное название этапа, которое никак не помещается в колонку подписи'
 FX_MS_LONG="$SANDBOX/milestones-long.json"
+# Этапы 0–2, 4 и 5 — заполнители: номера этапов обязаны идти подряд от 0.
 J -n --arg t "$LONG_TITLE" --arg s6 "$STAGE6_TITLE" \
-    '[{ number: 1, title: $t, state: "open" }, { number: 2, title: $s6, state: "open" }]' > "$FX_MS_LONG"
+    '[{ number: 1, title: $t, state: "open" }, { number: 2, title: $s6, state: "open" }]
+     + [0, 1, 2, 4, 5 | { number: (. + 10), title: "Этап \(.). x", state: "open" }]' > "$FX_MS_LONG"
 
 begin_case 'длинный заголовок обрезается многоточием, 58 символов — целиком'
 render light "$FX_MS_LONG" "$SANDBOX/issues-empty-array.json"
@@ -354,6 +364,35 @@ render light "$SANDBOX/ms-no-stages.json" "$FX_IS"
 expect_status 1
 expect_out_empty
 expect_err_not_empty
+end_case
+
+# Набор этапов с дырой или дублем — не картинка на строку меньше или больше,
+# а отказ: README обещает каждый этап 0–6. В stderr — номер этапа, иначе
+# отказ мог случиться по другой причине.
+begin_case 'пропущен «Этап 4.» — код 1, пустой stdout, номер в stderr'
+J '[.[] | select(.title | startswith("Этап 4.") | not)]' "$FX_MS" > "$SANDBOX/ms-gap.json"
+render light "$SANDBOX/ms-gap.json" "$FX_IS"
+expect_status 1
+expect_out_empty
+expect_err 'нет этапа 4'
+end_case
+
+begin_case 'два «Этап 2.» — код 1, пустой stdout, номер в stderr'
+J '. + [{ number: 10, title: "Этап 2. Дубль", state: "open" }]' "$FX_MS" > "$SANDBOX/ms-dup.json"
+render light "$SANDBOX/ms-dup.json" "$FX_IS"
+expect_status 1
+expect_out_empty
+expect_err 'этап 2 повторяется'
+end_case
+
+# Заголовок, начатый как этап, но не в форме «Этап N.» — опечатка, а не
+# посторонний майлстоун: иначе последний этап пропадал бы молча.
+begin_case 'заголовок «Этап 6 — …» без точки — код 1, пустой stdout, заголовок в stderr'
+J '[.[] | if .number == 3 then .title = "Этап 6 — Память" else . end]' "$FX_MS" > "$SANDBOX/ms-typo.json"
+render light "$SANDBOX/ms-typo.json" "$FX_IS"
+expect_status 1
+expect_out_empty
+expect_err 'Этап 6 — Память'
 end_case
 
 printf '[{ "number": 1, "title": "Этап 0. x"' > "$SANDBOX/broken.json"
