@@ -387,9 +387,15 @@ if ($Install) {
     }
     if ($provisionCode -ne 0) { Stop-WithError "провижининг дистрибутива: код $provisionCode" }
     $null = Invoke-Wsl @('--terminate', $Distro)
-    $enabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', 'docker.service', 'containerd.service')
+    # По одному юниту: is-enabled со списком даёт код 0, если включён хоть
+    # один. Признак — вывод enabled, как в -Check.
+    $disabled = New-Object System.Collections.Generic.List[string]
+    foreach ($unit in 'docker.service', 'containerd.service') {
+        $isEnabled = (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)).Text
+        if ($isEnabled -ne 'enabled') { $disabled.Add("$unit «$isEnabled»") }
+    }
     $null = Invoke-Wsl @('--terminate', $Distro)
-    if ($enabled.Code -ne 0) { Stop-WithError "docker или containerd не в автозапуске: $($enabled.Text)" }
+    if ($disabled.Count) { Stop-WithError "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
     Write-Output 'docker.service и containerd.service в автозапуске systemd дистрибутива'
 
     # 3–4. Задачи; -Force заменяет прежние.
