@@ -10,6 +10,8 @@
     powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install          # терминал администратора
     powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -DryRun  # что было бы сделано
     powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check            # только чтение
+    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall        # откат, терминал администратора
+    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall -DryRun
 
   -Install (повторный запуск ничего не дублирует; дистрибутив при нём
   кратко перезапускается — wsl --terminate в шаге 2, — и если держалка или
@@ -61,6 +63,23 @@
   дистрибутива по своему адресу в ЛВС, поэтому оно всегда SKIP, в итог и
   код не входит, а проверяется с устройства в домашней сети.
 
+  -Uninstall — откат на Docker Desktop (терминал администратора):
+    1. если дистрибутив работает — docker compose --profile ha stop внутри
+       него, в клоне; отказ — выход до любых удалений. Не работает — стек
+       не трогается (дистрибутив ради этого не запускается);
+    2. задачи domovoy-engine и domovoy-measure-boot снимаются, работающая
+       держалка перед этим останавливается;
+    3. расписание бэкапа — ops/backup/install-schedule.ps1 -Install
+       -LogonType Interactive; не встало — задача снимается, чтобы ночью не
+       будить движок WSL, и код ненулевой;
+    4. wsl --terminate domovoy-engine;
+    5. правило firewall domovoy-engine-ports удаляется;
+    6. .wslconfig возвращается из .wslconfig.domovoy-backup или, при отметке
+       .wslconfig.domovoy-absent, удаляется; копия и отметка расходуются.
+  Дистрибутив не удаляется: в нём тома стека. wsl --unregister domovoy-engine
+  уничтожает их — только руками владельца. wsl --shutdown, без которого
+  возврат .wslconfig не применится, -Uninstall не выполняет.
+
   Предусловия, которые сценарий не проверяет: в BIOS «восстановление после
   пропадания питания — включиться»; BitLocker без PIN до загрузки.
 #>
@@ -68,6 +87,7 @@
 param(
     [switch]$Install,
     [switch]$Check,
+    [switch]$Uninstall,
     [switch]$DryRun,
     [string]$WslConfigPath = (Join-Path $env:USERPROFILE '.wslconfig'),
     [string]$DistroDir = (Join-Path $env:LOCALAPPDATA 'domovoy-engine'),
@@ -96,10 +116,11 @@ function Stop-WithError([string]$Message, [int]$Code = 1) {
     exit $Code
 }
 
-if ($Install -and $Check) { Stop-WithError 'укажите один режим: -Install или -Check' 2 }
-if (-not $Install -and -not $Check) { Stop-WithError 'укажите режим: -Install или -Check' 2 }
-if ($DryRun -and -not $Install) { Stop-WithError '-DryRun — только с -Install' 2 }
-if ($AssumeEngineState -and -not $DryRun) { Stop-WithError '-AssumeEngineState — только с -Install -DryRun' 2 }
+$modeCount = @($Install, $Check, $Uninstall | Where-Object { $_ }).Count
+if ($modeCount -gt 1) { Stop-WithError 'укажите один режим: -Install, -Check или -Uninstall' 2 }
+if ($modeCount -eq 0) { Stop-WithError 'укажите режим: -Install, -Check или -Uninstall' 2 }
+if ($DryRun -and $Check) { Stop-WithError '-DryRun — только с -Install или -Uninstall' 2 }
+if ($AssumeEngineState -and -not $DryRun) { Stop-WithError '-AssumeEngineState — только с -DryRun' 2 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $envFile = Join-Path $root '.env'
@@ -268,6 +289,141 @@ $apiPort = Get-Port 'API_HTTP_PORT'
 $haPort = Get-Port 'HA_HTTP_PORT'
 $project = Get-Setting 'COMPOSE_PROJECT_NAME'
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+if ($Uninstall) {
+    # Откат на Docker Desktop. Состояние читается до любых действий: стек
+    # останавливается, только пока дистрибутив работает, — запускать его
+    # ради остановки сценарий не станет.
+    $registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
+    if ($AssumeEngineState) {
+        $engineRunning = $AssumeEngineState -eq 'Running'
+    }
+    else {
+        $engineRunning = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
+    }
+    $stopArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'docker', 'compose', '--profile', 'ha', 'stop')
+    $interactiveArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Install', '-LogonType', 'Interactive')
+    if ($DryRun) { $interactiveArgs += '-DryRun' }
+    $wslBackup = "$WslConfigPath.domovoy-backup"
+    $wslAbsent = "$WslConfigPath.domovoy-absent"
+    $wslAction = 'keep'
+    if (Test-Path -LiteralPath $wslBackup -PathType Leaf) { $wslAction = 'restore' }
+    elseif (Test-Path -LiteralPath $wslAbsent -PathType Leaf) { $wslAction = 'remove' }
+
+    if ($DryRun) {
+        # ASCII, как строки сухого прогона -Install.
+        Write-Output "uninstall.distro: $Distro"
+        Write-Output ('uninstall.distro.registered: {0}' -f $registered)
+        Write-Output ('uninstall.engine.running: {0}' -f [bool]$engineRunning)
+        if ($engineRunning) { Write-Output ('uninstall.stack.stop: wsl.exe {0}' -f ($stopArgs -join ' ')) }
+        else { Write-Output 'uninstall.stack.stop: none (distro not running; its containers start again with the distro - restart: unless-stopped)' }
+        foreach ($taskName in $KeeperTask, $MeasureTask) {
+            Write-Output "uninstall.task.unregister: $taskName"
+        }
+        Write-Output ('uninstall.backup: install-schedule.ps1 {0}' -f (($interactiveArgs | Select-Object -Skip 6) -join ' '))
+        $schedule = Invoke-Native (Get-Process -Id $PID).Path $interactiveArgs
+        foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
+        foreach ($line in $schedule.ErrLines) { Write-Output "backup.stderr: $line" }
+        Write-Output "backup.exitcode: $($schedule.Code)"
+        Write-Output "uninstall.terminate: wsl.exe --terminate $Distro"
+        Write-Output "uninstall.firewall.remove: $RuleName"
+        if ($wslAction -eq 'restore') { Write-Output ('uninstall.wslconfig: restore from {0}' -f (Split-Path -Leaf $wslBackup)) }
+        elseif ($wslAction -eq 'remove') { Write-Output ('uninstall.wslconfig: remove (marker {0})' -f (Split-Path -Leaf $wslAbsent)) }
+        else { Write-Output 'uninstall.wslconfig: keep (no .domovoy-backup copy and no .domovoy-absent marker)' }
+        Write-Output "uninstall.distro.kept: $Distro - stack volumes inside; remove by hand: wsl --unregister $Distro (destroys the volumes)"
+        Write-Output 'DryRun: nothing changed'
+        if ($schedule.Code -ne 0) { exit 1 }
+        exit 0
+    }
+
+    if (-not (Test-Administrator)) {
+        Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
+    }
+
+    # 1. Стек внутри движка — stop, тома целы. Отказ — до любых удалений.
+    if ($engineRunning) {
+        $env:WSL_UTF8 = '1'
+        & $wslExe @stopArgs
+        $stopCode = $LASTEXITCODE
+        if ($stopCode -ne 0) {
+            Stop-WithError "docker compose --profile ha stop внутри ${Distro}: код $stopCode — ничего не удалено; без остановки после перезагрузки поднялись бы два стека"
+        }
+        Write-Output "стек внутри $Distro остановлен (stop, тома целы)"
+    }
+    elseif ($registered) {
+        Write-Output "дистрибутив $Distro не работает — стек внутри не останавливался: при ручном запуске дистрибутива контейнеры поднимутся сами (restart: unless-stopped)"
+    }
+
+    # 2. Задачи автозапуска: держалка сначала останавливается, потом снимается.
+    foreach ($taskName in $KeeperTask, $MeasureTask) {
+        $taskNow = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($taskNow) {
+            if ([string]$taskNow.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName }
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            Write-Output "задача $taskName удалена"
+        }
+        else {
+            Write-Output "задачи $taskName нет"
+        }
+    }
+
+    # 3. Расписание бэкапа — под Docker Desktop, Interactive (README, раздел
+    # бэкапа). Не встало — задача S4U снимается: ночью она будила бы движок
+    # WSL.
+    $hostExe = (Get-Process -Id $PID).Path
+    & $hostExe @interactiveArgs
+    $scheduleCode = $LASTEXITCODE
+    $backupProblem = ''
+    if ($scheduleCode -ne 0) {
+        & $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleScript -Uninstall
+        $backupProblem = "расписание бэкапа под Docker Desktop не поставлено (install-schedule.ps1 -LogonType Interactive, код $scheduleCode); задача $BackupTask снята (код $LASTEXITCODE), чтобы ночью не будить движок WSL. Поставить: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -LogonType Interactive"
+    }
+
+    # 4. Дистрибутив гасится, но не удаляется: в нём тома стека.
+    if ($registered) {
+        $terminated = Invoke-Wsl @('--terminate', $Distro)
+        if ($terminated.Code -ne 0) { Write-Warning "wsl --terminate ${Distro}: код $($terminated.Code): $(Format-Native $terminated)" }
+        else { Write-Output "дистрибутив $Distro остановлен" }
+    }
+
+    # 5. Правило firewall.
+    if (Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue) {
+        Remove-NetFirewallHyperVRule -Name $RuleName
+        Write-Output "правило $RuleName удалено"
+    }
+    else {
+        Write-Output "правила $RuleName нет"
+    }
+
+    # 6. .wslconfig: копия и отметка расходуются — следующий -Install
+    # сохранит файл заново, а не оставит устаревшую копию.
+    if ($wslAction -eq 'restore') {
+        Move-Item -LiteralPath $wslBackup -Destination $WslConfigPath -Force
+        Remove-Item -LiteralPath $wslAbsent -Force -ErrorAction SilentlyContinue
+        Write-Output "${WslConfigPath}: возвращён из копии .domovoy-backup"
+    }
+    elseif ($wslAction -eq 'remove') {
+        Remove-Item -LiteralPath $WslConfigPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $wslAbsent -Force
+        Write-Output "${WslConfigPath}: удалён — до -Install его не было (отметка .domovoy-absent)"
+    }
+    else {
+        Write-Output "${WslConfigPath}: не тронут — нет ни копии .domovoy-backup, ни отметки .domovoy-absent"
+    }
+
+    Write-Output @"
+
+Дистрибутив $Distro не удалён: в нём тома стека. Удалить вручную, когда
+данные не нужны: wsl --unregister $Distro — тома уничтожаются без возврата.
+
+Дальше (README, «Откат на Docker Desktop»): убрать функцию docker() из
+~/.bashrc и открыть новую оболочку Git Bash; wsl --shutdown — применяет
+.wslconfig, гасит все дистрибутивы; docker desktop start;
+docker compose --profile ha start.
+"@
+    if ($backupProblem) { Stop-WithError $backupProblem }
+    exit 0
+}
 
 if ($Install) {
     # Объекты задач и параметры правила собираются до любых действий; сухой

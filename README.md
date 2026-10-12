@@ -387,15 +387,25 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 
 **Откат на Docker Desktop:**
 
-1. `Stop-ScheduledTask domovoy-engine` и `wsl --terminate domovoy-engine`.
-2. Вернуть `.wslconfig`:
-   - из копии `.wslconfig.domovoy-backup`;
-   - если рядом лежит отметка `.wslconfig.domovoy-absent`, файла до
-     установки не было — удалить `.wslconfig`.
+1. Терминал PowerShell от администратора, в каталоге клона:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall -DryRun  # что будет сделано
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall
+   ```
+
+   `-Uninstall` останавливает стек внутри движка (`stop`, тома целы), снимает
+   задачи `domovoy-engine` и `domovoy-measure-boot` — иначе после
+   перезагрузки рядом с Docker Desktop поднялся бы второй стек, — ставит
+   расписание бэкапа под Docker Desktop (`-LogonType Interactive`), гасит
+   дистрибутив, удаляет правило firewall и возвращает `.wslconfig` из копии
+   или удаляет его по отметке. Дистрибутив с томами остаётся:
+   `wsl --unregister domovoy-engine` уничтожает их — только решением
+   владельца.
+2. Убрать функцию `docker()` из `~/.bashrc` и открыть новую оболочку —
+   иначе `docker` уйдёт в движок WSL.
 3. `wsl --shutdown`, `docker desktop start`,
    `docker compose --profile ha start`.
-4. Расписание бэкапа:
-   `install-schedule.ps1 -LogonType Interactive`.
 
 Удаление Docker Desktop и его томов — после приёмки и только решением
 владельца.
@@ -455,6 +465,7 @@ dotnet user-secrets list
 | Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
 | Движок в WSL: проверка автозапуска | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check` |
+| Движок в WSL: откат на Docker Desktop | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall` (администратор) |
 | Тесты сценариев движка | `bash deploy/windows/engine-setup.test.sh` |
 | Состояние расписания бэкапа | `powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check` |
 | Бэкап вне расписания | `bash ops/backup/backup.sh`; движок в WSL — `wsl.exe -d domovoy-engine --exec bash ops/backup/backup.sh` |

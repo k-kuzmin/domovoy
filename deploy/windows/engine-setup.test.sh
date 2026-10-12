@@ -13,7 +13,8 @@
 #     cygpath первыми в PATH);
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
 #     pwsh 7; engine-setup.ps1 -Install -DryRun печатает собранные задачи,
-#     правило и .wslconfig и ничего не создаёт; measure-boot.ps1 против
+#     правило и .wslconfig и ничего не создаёт; -Uninstall -DryRun печатает
+#     план отката и не трогает .wslconfig, копию и отметку; measure-boot.ps1 против
 #     локальной заглушки /health на python (порт на 127.0.0.1, журнал во
 #     временном каталоге).
 #
@@ -336,6 +337,8 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 2 ] || { fail "$name" "без режима код $rc, ожидался 2"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -DryRun
   [ "$rc" -eq 2 ] || { fail "$name" "-Check -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Install -Uninstall -DryRun
+  [ "$rc" -eq 2 ] || { fail "$name" "-Install -Uninstall код $rc, ожидался 2"; show_out; return; }
   # Подменённое состояние — только для сухого прогона. Проба через -Check:
   # при сломанной защите он лишь читает хост, а -Install без -DryRun тест
   # не запускает.
@@ -355,6 +358,95 @@ test_engine_setup_dry_run() {
     grep -q '^backup\.stderr: .*BACKUP_DIR' "$work/out.$shell" || { fail "$name" "текст отказа не показан отдельной строкой stderr"; show_out; return; }
     if grep -q '^backup\.install-schedule:' "$work/out.$shell"; then fail "$name" "stderr попал в строки stdout"; show_out; return; fi
     has "$shell" 'backup.exitcode: 1' || { fail "$name" "нет кода расписания"; show_out; return; }
+    ok "$name"
+  done
+}
+
+uninstall_dry_run() {
+  local shell="$1"
+  shift
+  run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" \
+    -Uninstall -DryRun -WslConfigPath "$(cygpath -w "$work/wslconfig")" "$@"
+  tr -d '\r' <"$work/out" >"$work/out.$shell"
+}
+
+# Файлы .wslconfig, копия и отметка — байт в байт как до сухого прогона.
+wslconfig_files_untouched() {
+  local f
+  for f in wslconfig wslconfig.domovoy-backup wslconfig.domovoy-absent; do
+    if [ -e "$work/before/$f" ]; then
+      cmp -s "$work/before/$f" "$work/$f" || { echo "$f изменён или удалён"; return 1; }
+    elif [ -e "$work/$f" ]; then
+      echo "$f создан"; return 1
+    fi
+  done
+}
+
+snapshot_wslconfig() {
+  rm -rf -- "$work/before" && mkdir -p "$work/before"
+  local f
+  for f in wslconfig wslconfig.domovoy-backup wslconfig.domovoy-absent; do
+    [ -e "$work/$f" ] && cp "$work/$f" "$work/before/$f"
+  done
+  return 0
+}
+
+# Откат (-Uninstall): стек останавливается до снятия задач, задачи
+# автозапуска снимаются, бэкап — под Docker Desktop (Interactive),
+# .wslconfig возвращается из копии или удаляется по отметке, дистрибутив
+# с томами остаётся. Проверяется сухим прогоном: он ничего не меняет.
+test_engine_setup_uninstall_dry_run() {
+  local name=engine_setup_uninstall_dry_run
+  if ! is_windows; then skip "$name" "не Windows — задачи собирает модуль ScheduledTasks"; return; fi
+  if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
+  local dest="$work/backups" shell line why
+  mkdir -p "$dest"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+
+  for shell in "${shells[@]}"; do
+    name="engine_setup_uninstall_dry_run/$shell"
+    # Движок работает, есть копия прежнего .wslconfig.
+    rm -f "$work/wslconfig"*
+    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig.domovoy-backup"
+    snapshot_wslconfig
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    for line in 'uninstall.engine.running: True' \
+      'uninstall.task.unregister: domovoy-engine' 'uninstall.task.unregister: domovoy-measure-boot' \
+      'backup.LogonType: Interactive' 'backup.exitcode: 0' \
+      'uninstall.terminate: wsl.exe --terminate domovoy-engine' 'uninstall.firewall.remove: domovoy-engine-ports' \
+      'uninstall.wslconfig: restore from wslconfig.domovoy-backup' 'DryRun: nothing changed'; do
+      has "$shell" "$line" || { fail "$name" "нет «$line»"; show_out; return; }
+    done
+    grep -q '^uninstall\.stack\.stop: wsl\.exe -d domovoy-engine -u root --cd .* --exec docker compose --profile ha stop$' "$work/out.$shell" \
+      || { fail "$name" "стек не останавливается командой stop внутри движка"; show_out; return; }
+    # stop, а не down: тома стека остаются.
+    if grep -q '^uninstall\.stack\.stop: .* down' "$work/out.$shell"; then fail "$name" "стек сносится down"; show_out; return; fi
+    grep -qi '^backup\.Execute: .*\\bash\.exe$' "$work/out.$shell" || { fail "$name" "бэкап не через bash Git for Windows"; show_out; return; }
+    grep -q '^uninstall\.distro\.kept: .*wsl --unregister domovoy-engine' "$work/out.$shell" \
+      || { fail "$name" "не сказано, что дистрибутив с томами остаётся и как его удалить"; show_out; return; }
+    why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
+
+    # Движок не работает, до -Install .wslconfig не было — отметка.
+    rm -f "$work/wslconfig"*
+    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    : >"$work/wslconfig.domovoy-absent"
+    snapshot_wslconfig
+    uninstall_dry_run "$shell" -AssumeEngineState Stopped
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    has "$shell" 'uninstall.engine.running: False' || { fail "$name" "состояние Stopped не учтено"; show_out; return; }
+    grep -q '^uninstall\.stack\.stop: none ' "$work/out.$shell" || { fail "$name" "стек останавливается в неработающем дистрибутиве"; show_out; return; }
+    has "$shell" 'uninstall.wslconfig: remove (marker wslconfig.domovoy-absent)' || { fail "$name" "отметка не учтена"; show_out; return; }
+    why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
+
+    # Ни копии, ни отметки — .wslconfig не трогается.
+    rm -f "$work/wslconfig"*
+    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    snapshot_wslconfig
+    uninstall_dry_run "$shell" -AssumeEngineState Stopped
+    has "$shell" 'uninstall.wslconfig: keep (no .domovoy-backup copy and no .domovoy-absent marker)' || { fail "$name" "решение о .wslconfig не то"; show_out; return; }
+    why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
     ok "$name"
   done
 }
@@ -457,6 +549,7 @@ test_wsl_conf_is_merged
 test_docker_wsl_passes_arguments
 test_ps1_encoding_and_parse
 test_engine_setup_dry_run
+test_engine_setup_uninstall_dry_run
 test_measure_boot
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
