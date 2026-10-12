@@ -239,8 +239,8 @@ dotnet user-secrets list
 | Миграции: применить | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
-| Стек целиком | `docker compose up -d --build` |
-| Стек с Home Assistant | `docker compose --profile ha up -d --build` |
+| Стек целиком | `docker compose up -d --build --wait` |
+| Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
 
 ## API

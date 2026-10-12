@@ -299,7 +299,7 @@ gitleaks git --redact --no-banner                # вся история
 gitleaks dir . --redact --no-banner              # рабочий каталог
 
 # Стек
-docker compose up -d --build
+docker compose up -d --build --wait
 docker compose logs -f api
 docker compose down
 curl -s http://localhost:18080/health
