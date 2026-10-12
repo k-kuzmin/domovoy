@@ -132,7 +132,7 @@
     {
       "path": "deploy/windows/engine-setup.ps1",
       "action": "create",
-      "why": "Воспроизводимая настройка движка на Windows 11, для переезда на другой ПК. -Install создаёт дистрибутив, провижинит его, регистрирует задачи (порт замера — из API_HTTP_PORT, иначе 18080), пишет .wslconfig и правило firewall. -Check только читает: ненулевой код при любом незакрытом звене, дистрибутив не запускается. Без имён пользователя, хоста и адресов в тексте."
+      "why": "Воспроизводимая настройка движка на Windows 11, для переезда на другой ПК. -Install создаёт дистрибутив, провижинит его, регистрирует задачи (порт замера — из API_HTTP_PORT, иначе 18080), пишет .wslconfig и правило firewall. -Check только читает: ненулевой код при любом незакрытом звене, дистрибутив не запускается. Без имён пользователя, хоста и адресов в тексте. -Install последним шагом вызывает ops/backup/install-schedule.ps1 с запуском без входа (S4U) — расписание бэкапа #8 ставится установкой, отдельного шага у владельца нет; -Check включает его -Check."
     },
     {
       "path": "deploy/windows/provision-engine.sh",
@@ -152,7 +152,7 @@
     {
       "path": "README.md",
       "action": "modify",
-      "why": "Раздел «Автозапуск после перезагрузки (Windows, WSL2)»: предусловия (BIOS, BitLocker без PIN); -Install и -Check; окно переезда по #8 и откат на Docker Desktop; функция docker() для Git Bash и её пределы; порты API_HTTP_PORT/HA_HTTP_PORT (по умолчанию 18080/8123); параметры замера; две проверочные перезагрузки, первая — именно «Перезагрузка», а не «Завершение работы» при быстром запуске. Кроме того, правка раздела #8 о расписании бэкапа: запуск через wsl.exe, без условия входа."
+      "why": "Раздел «Автозапуск после перезагрузки (Windows, WSL2)»: предусловия (BIOS, BitLocker без PIN); -Install и -Check; окно переезда по #8 и откат на Docker Desktop; функция docker() для Git Bash и её пределы; порты API_HTTP_PORT/HA_HTTP_PORT (по умолчанию 18080/8123); параметры замера; две проверочные перезагрузки, первая — именно «Перезагрузка», а не «Завершение работы» при быстром запуске. Кроме того, правка раздела #8 о расписании бэкапа: запуск через wsl.exe, без условия входа. Из раздела #8 убирается абзац «пока #6 не закрыта, задача не ставится» и зависимость от входа пользователя."
     },
     {
       "path": "docs/decisions/0028-docker-engine-in-wsl.md",
@@ -173,6 +173,16 @@
       "path": "tests/Domovoy.Tests/HealthEndpointTests.cs",
       "action": "modify",
       "why": "Тест LivenessRecoversWhenComponentRecovers: /health пересчитывается на каждом запросе и возвращается в 200 после восстановления компонента без перезапуска процесса. Это закрывает сценарий «api стартовал раньше postgres после перезагрузки»."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "action": "modify",
+      "why": "параметр -LogonType S4U|Interactive (по умолчанию S4U после переезда); действие задачи — backup.sh через движок в WSL (docker CLI, которым пользуется обёртка); тест сухого прогона в ops/backup/backup.test.sh на S4U"
+    },
+    {
+      "path": "ops/backup/backup.test.sh",
+      "action": "modify",
+      "why": "сухой прогон install-schedule.ps1: ожидается LogonType S4U"
     }
   ],
   "boundaries": [
@@ -181,7 +191,9 @@
     "docs/decisions/0028-*.md",
     "docs/decisions/README.md",
     "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
-    "tests/Domovoy.Tests/HealthEndpointTests.cs"
+    "tests/Domovoy.Tests/HealthEndpointTests.cs",
+    "ops/backup/install-schedule.ps1",
+    "ops/backup/backup.test.sh"
   ],
   "flags": {
     "new_dependency": false,
@@ -234,6 +246,15 @@
         "docker-autostart"
       ],
       "behavior": "bash -n deploy/windows/provision-engine.sh и bash -n deploy/windows/docker-wsl.sh — код 0. [System.Management.Automation.Language.Parser]::ParseFile для обоих .ps1 — ноль ошибок разбора. grep -n '8080' по deploy/windows — пусто. Это синтаксическая проверка, а не поведенческая: поведение провижининга проверяет -Check после -Install у владельца."
+    },
+    {
+      "name": "install_schedule_dry_run_s4u",
+      "file": "ops/backup/backup.test.sh",
+      "new": true,
+      "covers": [
+        "backup-schedule"
+      ],
+      "behavior": "Сухой прогон install-schedule.ps1 (-DryRun) печатает свойства собранного принципала: LogonType S4U по умолчанию и Interactive при -LogonType Interactive; строка берётся из объекта New-ScheduledTaskPrincipal, а не из литерала. При реализации проверяется, что тест краснеет при подмене типа входа в скрипте. Живое срабатывание после ночи без входа — способ проверки пункта, не этот тест."
     }
   ],
   "acceptance": [
@@ -266,6 +287,12 @@
       "criterion": "время от включения питания до ответа /health измерено и записано в issue",
       "method": "Из строки measure-boot для перезагрузки по питанию: время POST (FwPOSTTime) плюс секунды от старта ОС (Kernel-General 12) до первого ответа 200 формы стека. Если FwPOSTTime пуст, время POST — секундомер владельца от подачи питания до логотипа Windows. Сумма не включает загрузчик между POST и стартом ядра, поэтому в той же перезагрузке по питанию владелец сверяет её с полным временем. Полное время — от момента подачи питания по часам с секундами (телефон) до момента первого ответа 200 в журнале measure-boot (часы хоста синхронизированы). Расхождение записывается.",
       "evidence": "Комментарий владельца в issue #6: полное время от подачи питания до 200 (по часам) как итоговое число; рядом разложение FwPOSTTime + ОС-до-200 и расхождение суммы с полным временем в секундах"
+    },
+    {
+      "id": "backup-schedule",
+      "criterion": "остаток #8: бэкап БД и конфигурации HA выполняется по расписанию на внешний носитель — задачу ставит установщик развёртывания, без входа пользователя",
+      "method": "после engine-setup.ps1 -Install и ночи без входа пользователя: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check — LogonType S4U, LastTaskResult 0, в хвосте backup.log строка «успех:» с меткой этой ночи",
+      "evidence": "вывод -Check (путь к носителю в issue не переносится); комментарий в #8 и закрытие #8"
     }
   ],
   "risks": [
