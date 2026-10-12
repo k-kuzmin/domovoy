@@ -8,7 +8,12 @@
 #   - в deploy/windows нет зашитого порта API — порт берётся из
 #     API_HTTP_PORT или из значения по умолчанию в docker-compose.yml;
 #   - provision-engine.sh дописывает /etc/wsl.conf, а не затирает его
-#     (функция на временном файле);
+#     (функция на временном файле); юнит MSS clamp — текст и вызовы
+#     systemctl (подменён), юнит во временном каталоге;
+#   - -Check и замер стучатся на 127.0.0.1, а не localhost;
+#   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1), профиль
+#     правила firewall и настройка firewall Hyper-V для VM WSL — функциями
+#     сценария, извлечёнными из AST;
 #   - docker-wsl.sh передаёт аргументы wsl.exe как есть (подделки wsl.exe и
 #     cygpath первыми в PATH);
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
@@ -132,6 +137,51 @@ test_wsl_conf_is_merged() {
   ensure "$file"
   got="$(cat "$file")"
   [ "$got" = $'[boot]\nsystemd=true' ] || { fail "$name" "повтор → «$got»"; return; }
+  ok "$name"
+}
+
+# Юнит MSS clamp: текст с правилом TCPMSS по PMTU в mangle FORWARD, -C перед
+# -A (повторный старт не дублирует), oneshot с RemainAfterExit; systemctl
+# подменён, юнит — во временном каталоге. Повтор с тем же текстом не
+# перезаписывает файл и не делает daemon-reload. main вызывает функцию.
+test_mss_clamp_unit() {
+  local name=mss_clamp_unit unit="$work/mss.service" log="$work/systemctl.log" rule line
+  clamp() {
+    (
+      # shellcheck source=/dev/null
+      . "$here/provision-engine.sh"
+      systemctl() { printf '%s\n' "$*" >>"$log"; }
+      ensure_mss_clamp "$unit"
+    )
+  }
+  rm -f "$unit" "$log"
+  clamp || { fail "$name" "код $?"; return; }
+  rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
+  grep -qxF "ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptables -t mangle -A FORWARD $rule'" "$unit" \
+    || { fail "$name" "нет правила с -C … || … -A"; sed 's/^/    | /' "$unit"; return; }
+  for line in 'Type=oneshot' 'RemainAfterExit=yes' 'Before=docker.service' 'WantedBy=multi-user.target'; do
+    grep -qxF "$line" "$unit" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$unit"; return; }
+  done
+  [ "$(tail -c 1 "$unit" | od -An -tx1 | tr -d ' \n')" = 0a ] || { fail "$name" "юнит не кончается переводом строки"; return; }
+  [ "$(tr '\n' '|' <"$log")" = 'daemon-reload|enable domovoy-mss-clamp.service|start domovoy-mss-clamp.service|' ] \
+    || { fail "$name" "вызовы systemctl не те"; sed 's/^/    | /' "$log"; return; }
+  rm -f "$log"
+  clamp
+  if grep -qx 'daemon-reload' "$log"; then fail "$name" "повтор с тем же юнитом делает daemon-reload"; return; fi
+  grep -qx 'enable domovoy-mss-clamp.service' "$log" || { fail "$name" "повтор не включает юнит"; return; }
+  sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_mss_clamp' || { fail "$name" "main не вызывает ensure_mss_clamp"; return; }
+  ok "$name"
+}
+
+# -Check и замер стучатся на 127.0.0.1: localhost на хосте с движком висит —
+# Windows пробует сначала ::1, а ::1 правило Hyper-V не принимает.
+test_no_localhost_url() {
+  local name=no_localhost_url
+  if grep -n '//localhost' "$here/engine-setup.ps1" "$here/measure-boot.ps1" >"$work/out"; then
+    fail "$name" "адрес localhost в сценариях"; show_out; return
+  fi
+  grep -q "'http://127.0.0.1:{0}/health'" "$here/measure-boot.ps1" || { fail "$name" "замер не на 127.0.0.1"; return; }
+  grep -q "Get-Health ('http://127.0.0.1:{0}/health'" "$here/engine-setup.ps1" || { fail "$name" "-Check не на 127.0.0.1"; return; }
   ok "$name"
 }
 
@@ -769,6 +819,42 @@ test_rule_profile_private_only() {
   ok "$name"
 }
 
+# Вывод внешних программ в UTF-8: Invoke-Native и Invoke-Passthru ставят
+# кодировку до вызова и возвращают в finally; каждый прямой вызов
+# & $wslExe — тоже, внутри try с Restore в finally. Для собственного
+# PowerShell кодировка не переключается: Set-NativeOutputEncoding отдаёт $null.
+test_native_output_encoding() {
+  local name=native_output_encoding shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $script = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+      foreach ($fn in "Invoke-Native", "Invoke-Passthru") {
+        $def = $script.Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq $fn }, $true)
+        $try = $def.Body.Find({ param($a) $a -is [System.Management.Automation.Language.TryStatementAst] }, $true)
+        if (-not $try) { "$fn без try"; exit 1 }
+        $before = $def.Body.Extent.Text.Substring(0, $try.Extent.StartOffset - $def.Body.Extent.StartOffset)
+        if ($before -notmatch "Set-NativeOutputEncoding \`$Exe") { "$fn не ставит кодировку до вызова"; exit 1 }
+        if ($try.Finally.Extent.Text -notmatch "Restore-NativeOutputEncoding") { "$fn не возвращает кодировку в finally"; exit 1 }
+      }
+      $direct = @($script.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -and $a.InvocationOperator -eq "Ampersand" -and $a.CommandElements[0].Extent.Text -eq "`$wslExe" }, $true))
+      if ($direct.Count -lt 3) { "прямых вызовов wsl.exe $($direct.Count), ожидалось не меньше 3"; exit 1 }
+      foreach ($call in $direct) {
+        $p = $call.Parent
+        while ($p -and -not ($p -is [System.Management.Automation.Language.TryStatementAst])) { $p = $p.Parent }
+        if (-not $p -or -not $p.Finally -or $p.Finally.Extent.Text -notmatch "Restore-NativeOutputEncoding") { "строка $($call.Extent.StartLineNumber): & `$wslExe без Restore в finally"; exit 1 }
+        $block = $p.Parent
+        $index = [array]::IndexOf(@($block.Statements), $p)
+        if ($index -lt 1 -or @($block.Statements)[$index - 1].Extent.Text -notmatch "Set-NativeOutputEncoding \`$wslExe") { "строка $($call.Extent.StartLineNumber): & `$wslExe без Set-NativeOutputEncoding перед try"; exit 1 }
+      }
+      if ($null -ne (Set-NativeOutputEncoding (Get-Process -Id $PID).Path)) { "кодировка переключена для собственного PowerShell"; exit 1 }' \
+      Set-NativeOutputEncoding
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 # Звено -Check «firewall Hyper-V для VM WSL»: OK только при Enabled True и
 # DefaultInboundAction Block; NotConfigured хранилища по умолчанию — не OK.
 test_vm_firewall_problems() {
@@ -903,6 +989,8 @@ test_measure_boot() {
 test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
+test_mss_clamp_unit
+test_no_localhost_url
 test_docker_wsl_passes_arguments
 test_ps1_encoding_and_parse
 test_engine_setup_dry_run
@@ -910,6 +998,7 @@ test_engine_setup_uninstall_dry_run
 test_engine_setup_migrate_dry_run
 test_rule_profile_private_only
 test_vm_firewall_problems
+test_native_output_encoding
 test_measure_boot
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"

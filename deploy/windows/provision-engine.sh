@@ -77,9 +77,9 @@ install_docker() {
 
 # ensure_mss_clamp — юнит systemd, ставящий правило при каждом старте
 # дистрибутива (правила iptables не переживают перезапуск). -C перед -A —
-# повторный старт правило не дублирует.
+# повторный старт правило не дублирует. Путь юнита — аргументом, для теста.
 ensure_mss_clamp() {
-  local unit=/etc/systemd/system/domovoy-mss-clamp.service
+  local unit="${1:-/etc/systemd/system/domovoy-mss-clamp.service}"
   local rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
   local content
   content="[Unit]
