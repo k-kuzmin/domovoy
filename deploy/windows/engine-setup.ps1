@@ -180,8 +180,15 @@ function Get-WslConfigPlan([string]$Path) {
         }
         return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = $mode.Groups[1].Value; Content = $current }
     }
-    if ($current -match '(?im)^\s*\[wsl2\]\s*$') {
-        $content = [regex]::Replace($current, '(?im)^(\s*\[wsl2\]\s*)$', "`$1`r`nnetworkingMode=mirrored", 1)
+    # Вставка — перед переводом строки после [wsl2] и тем же переводом, что
+    # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
+    # только перед LF.
+    $wsl2 = '(?im)^([ \t]*\[wsl2\][ \t]*)(?=\r?$)'
+    if ($current -match $wsl2) {
+        $newline = if ($current.Contains("`r`n")) { "`r`n" } else { "`n" }
+        # Экземпляр, а не [regex]::Replace: у статического четвёртый аргумент —
+        # RegexOptions, а не число замен.
+        $content = ([regex]$wsl2).Replace($current, "`$1${newline}networkingMode=mirrored", 1)
     }
     elseif ($current.Trim()) {
         $content = $current.TrimEnd() + "`r`n`r`n[wsl2]`r`nnetworkingMode=mirrored`r`n"
@@ -312,6 +319,9 @@ if ($Install) {
         else {
             Write-Output ('wslconfig.exists: {0}' -f $wslConfig.Exists)
             Write-Output ('wslconfig.changed: {0}' -f $wslConfig.Changed)
+            # Байт в байт, как запишет -Install: строки ниже делятся по
+            # переводу строки и лишний CR не показывают.
+            Write-Output ('wslconfig.base64: {0}' -f [Convert]::ToBase64String((New-Object Text.UTF8Encoding($false)).GetBytes($wslConfig.Content)))
             foreach ($line in ($wslConfig.Content -split "`r?`n")) {
                 if ($line) { Write-Output "wslconfig.line: $line" }
             }

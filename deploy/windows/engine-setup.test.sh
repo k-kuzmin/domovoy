@@ -211,6 +211,18 @@ dry_run() {
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
 
+# Содержимое .wslconfig из сухого прогона байт в байт против ожидаемого.
+wslconfig_bytes_are() {
+  local name="$1" expected="$2"
+  sed -n 's/^wslconfig\.base64: //p' "$work/out.${shells[0]}" | base64 -d >"$work/wslconfig.got" 2>/dev/null
+  printf '%s' "$expected" >"$work/wslconfig.expected"
+  cmp -s "$work/wslconfig.got" "$work/wslconfig.expected" && return 0
+  fail "$name" "содержимое .wslconfig не то (od -c: получено / ожидалось)"
+  od -c "$work/wslconfig.got" | sed 's/^/    | /'
+  od -c "$work/wslconfig.expected" | sed 's/^/    | /'
+  return 1
+}
+
 test_engine_setup_dry_run() {
   local name=engine_setup_dry_run
   if ! is_windows; then skip "$name" "не Windows — задачи собирает модуль ScheduledTasks"; return; fi
@@ -276,7 +288,14 @@ test_engine_setup_dry_run() {
   dry_run "${shells[0]}"
   [ "$(grep '^wslconfig.line: ' "$work/out.${shells[0]}" | tr '\n' '|')" = 'wslconfig.line: [wsl2]|wslconfig.line: networkingMode=mirrored|wslconfig.line: memory=4GB|' ] \
     || { fail "$name" "прежние строки .wslconfig не сохранены"; show_out; return; }
+  # Байтовое сравнение: строки wslconfig.line делятся по \r?\n, а dry_run
+  # срезает CR — лишний CR после [wsl2] виден только здесь.
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=mirrored\r\nmemory=4GB\r\n' || return
   cmp -s "$work/wslconfig" "$work/wslconfig.before" || { fail "$name" "сухой прогон изменил .wslconfig"; return; }
+  # Файл с LF остаётся с LF: перевод строки берётся из самого файла.
+  printf '[wsl2]\nmemory=4GB\n' >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=mirrored\nmemory=4GB\n' || return
   printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
   has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "mirrored уже задан, а файл меняется"; show_out; return; }
