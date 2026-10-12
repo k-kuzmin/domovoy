@@ -402,6 +402,13 @@ sys.exit(0 if member.issym() and member.linkname == "themes" and "themes/example
          and not any(n.startswith("themes-link/") for n in names) else 1)
 EOF
     then fail "$name" "ссылки на каталог нет в архиве ссылкой"; return; fi
+    # Относительная ссылка внутрь тома проходит и распаковку: extract
+    # с filter="data" её принимает.
+    mkdir -p "$work/dirlink-restored"
+    "$py" "$module" extract "$work/dirlink-restored" <"$work/dirlink.tar.gz" >"$work/out" 2>"$work/err"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then fail "$name" "extract: код $rc: $(cat "$work/err")"; return; fi
+    [ -L "$work/dirlink-restored/themes-link" ] || { fail "$name" "ссылка не распакована"; return; }
     ok "$name"
   fi
 
@@ -431,6 +438,41 @@ EOF
   ok "$name"
 }
 
+test_archive_refuses_links_extract_would_reject() {
+  # Ссылку с абсолютной целью или выходящую за пределы тома extract
+  # (filter="data") отвергает вместе со всем архивом. archive обязан
+  # отказать сам: иначе бэкап записывается успешным, а не восстанавливается.
+  local variant kind target name config outside
+  for variant in absolute-file absolute-dir outside-relative; do
+    name="archive_refuses_links_extract_would_reject/$variant"
+    config="$work/badlink-$variant"
+    rm -rf -- "$config" "$work/outside-example"
+    mkdir -p "$config/.storage" "$config/sub" "$work/outside-example/dir"
+    cp "$registry" "$config/.storage/core.entity_registry"
+    echo 'example' >"$work/outside-example/f.txt"
+    # Абсолютная цель — в форме, которую python считает абсолютной: в Git
+    # Bash путь /tmp/… для python на Windows не абсолютный (нет диска).
+    outside="$work/outside-example"
+    if command -v cygpath >/dev/null 2>&1; then outside="$(cygpath -m "$outside")"; fi
+    case "$variant" in
+      absolute-file) kind=file; target="$outside/f.txt" ;;
+      absolute-dir) kind=dir; target="$outside/dir" ;;
+      outside-relative) kind=file; target="../../outside-example/f.txt" ;;
+    esac
+    if ! "$py" -c 'import os,sys; os.symlink(os.path.normpath(sys.argv[1]), sys.argv[2], target_is_directory=sys.argv[3] == "dir")' \
+      "$target" "$config/sub/link-example" "$kind" 2>/dev/null; then
+      skip "$name" "симлинки в этом окружении недоступны"
+      continue
+    fi
+    run archive "$config"
+    if [ "$rc" -ne 2 ]; then fail "$name" "ожидался код 2, получен $rc: $(cat "$work/err")"; continue; fi
+    grep -q 'ссылка, которую восстановление не распакует' "$work/err" || { fail "$name" "нет сообщения: $(cat "$work/err")"; continue; }
+    if grep -q 'link-example\|outside-example' "$work/err"; then fail "$name" "в сообщении имя или цель ссылки"; continue; fi
+    no_entity_ids || { fail "$name" "в выводе есть entity_id"; continue; }
+    ok "$name"
+  done
+}
+
 test_count_counts_only_enabled
 test_compare_reports_missing_entity
 test_compare_full_states_and_disabled_ignored
@@ -442,6 +484,7 @@ test_archive_counts_registry_from_archived_bytes
 test_archive_skips_vanished_file_but_not_registry
 test_archive_reads_replaced_file_whole
 test_archive_keeps_directory_links_and_survives_vanished_directory
+test_archive_refuses_links_extract_would_reject
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]

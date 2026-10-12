@@ -208,7 +208,28 @@ def add_registry(tar: tarfile.TarFile, path: str, arcname: str) -> int:
     return enabled
 
 
-def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str) -> None:
+def check_link(info: tarfile.TarInfo, config_dir: str) -> None:
+    """Ссылка проходит то же правило, что у extract (filter="data").
+
+    Ссылку с абсолютной целью или выходящую за пределы тома extract
+    отвергает вместе со всем архивом: бэкап с ней записался бы успешным, а
+    восстановление из него упало бы. Поэтому отказ — здесь, при снятии.
+    Корень — сам том: realpath проходит по его настоящим ссылкам, то есть
+    по тому дереву, которое распаковка воссоздаёт. Имя ссылки в сообщение
+    не пишется: str(FilterError) его содержит. OSError — сбой realpath
+    (петля ссылок при строгом realpath): распаковку такой ссылки никто не
+    обещает, отказ осторожный; общий обработчик main напечатал бы путь.
+    """
+    try:
+        tarfile.data_filter(info, config_dir)
+    except (tarfile.FilterError, OSError) as err:
+        raise CheckError(
+            f"в томе HA ссылка, которую восстановление не распакует ({type(err).__name__}): "
+            "ссылки тома должны быть относительными и вести внутрь тома"
+        ) from None
+
+
+def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str, config_dir: str) -> None:
     """Обычный файл или ссылка; исчезнувший после обхода — пропуск.
 
     HA пишет временные файлы рядом с .storage и удаляет их: такой файл
@@ -228,7 +249,9 @@ def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str) -> None:
         mode = os.lstat(path).st_mode
         # Сокеты и FIFO в архив не идут: восстанавливать в них нечего.
         if stat.S_ISLNK(mode):
-            tar.add(path, arcname=arcname, recursive=False)
+            info = tar.gettarinfo(path, arcname=arcname)
+            check_link(info, config_dir)
+            tar.addfile(info)
         elif stat.S_ISREG(mode):
             with open(path, "rb") as handle:
                 info = tar.gettarinfo(arcname=arcname, fileobj=handle)
@@ -270,7 +293,7 @@ def archive(config_dir: str) -> int:
                     path = os.path.join(root, name)
                     if os.path.islink(path):
                         arcname = os.path.normpath(os.path.join(relative_root, name)).replace(os.sep, "/")
-                        add_ordinary(tar, path, arcname)
+                        add_ordinary(tar, path, arcname, config_dir)
                 names = set(files)
                 databases = {name for name in names if is_sqlite(os.path.join(root, name))}
                 sidecars = {db + suffix for db in databases for suffix in SQLITE_SIDECARS}
@@ -287,7 +310,7 @@ def archive(config_dir: str) -> int:
                     elif arcname == REGISTRY_ARCNAME:
                         registry_enabled = add_registry(tar, path, arcname)
                     else:
-                        add_ordinary(tar, path, arcname)
+                        add_ordinary(tar, path, arcname, config_dir)
             if registry_enabled is None:
                 raise CheckError(f"реестр сущностей HA: в томе нет {REGISTRY_ARCNAME}")
     finally:
