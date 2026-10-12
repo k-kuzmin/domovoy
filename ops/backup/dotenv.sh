@@ -3,8 +3,11 @@
 #
 # .env не исполняется: в нём значения вида <ha-long-lived-token>, которые
 # source превратил бы в перенаправления. Читаются только строки ровно
-# KEY=значение; последняя строка с ключом побеждает, CR в конце снимается,
-# обрамляющие кавычки — тоже.
+# KEY=значение; последняя строка с ключом побеждает, CR в конце снимается.
+# Дальше — как compose: значение в кавычках — текст между ними, после
+# закрывающей допустим только комментарий ` # …`; без кавычек хвостовой
+# комментарий (пробел или таб перед #) и пробелы по краям снимаются,
+# a#b остаётся a#b. Та же логика — Get-DotEnvValue в install-schedule.ps1.
 
 # dotenv_value <файл> <ключ> — значение из файла; нет файла или строки — пусто.
 dotenv_value() {
@@ -16,10 +19,14 @@ dotenv_value() {
       "$key="*) value="${line#"$key="}" ;;
     esac
   done <"$file"
-  if [ "${#value}" -ge 2 ]; then
-    case "$value" in
-      \"*\" | \'*\') value="${value:1:${#value}-2}" ;;
-    esac
+  value="${value#"${value%%[![:blank:]]*}"}"
+  local double_quoted='^"([^"]*)"[[:blank:]]*(#.*)?$'
+  local single_quoted="^'([^']*)'[[:blank:]]*(#.*)?\$"
+  if [[ "$value" =~ $double_quoted ]] || [[ "$value" =~ $single_quoted ]]; then
+    value="${BASH_REMATCH[1]}"
+  else
+    value="${value%%[[:blank:]]#*}"
+    value="${value%"${value##*[![:blank:]]}"}"
   fi
   printf '%s' "$value"
 }

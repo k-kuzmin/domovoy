@@ -65,8 +65,10 @@ $envFile = Join-Path $root '.env'
 $backupScript = Join-Path $root 'ops\backup\backup.sh'
 
 # Значение ключа из .env без исполнения файла — как ops/backup/dotenv.sh:
-# последняя строка KEY=…, обрамляющие кавычки снимаются, плейсхолдер в
-# угловых скобках — не задано.
+# последняя строка KEY=…; значение в кавычках — текст между ними, после
+# закрывающей допустим только комментарий « # …»; без кавычек хвостовой
+# комментарий (пробел или таб перед #) и пробелы по краям снимаются, как
+# в compose; плейсхолдер в угловых скобках — не задано.
 function Get-DotEnvValue([string]$Path, [string]$Key) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
     $value = ''
@@ -75,13 +77,12 @@ function Get-DotEnvValue([string]$Path, [string]$Key) {
             $value = $line.Substring($Key.Length + 1)
         }
     }
-    $value = $value.TrimEnd("`r")
-    if ($value.Length -ge 2) {
-        $first = $value[0]
-        $last = $value[$value.Length - 1]
-        if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
-            $value = $value.Substring(1, $value.Length - 2)
-        }
+    $value = $value.TrimEnd("`r").TrimStart(' ', "`t")
+    if ($value -cmatch '^"([^"]*)"[ \t]*(#.*)?$' -or $value -cmatch "^'([^']*)'[ \t]*(#.*)?$") {
+        $value = $Matches[1]
+    }
+    else {
+        $value = ($value -creplace '[ \t]#.*$', '').TrimEnd(' ', "`t")
     }
     if ($value -match '<.*>') { return '' }
     return $value

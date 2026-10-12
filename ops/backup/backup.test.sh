@@ -351,6 +351,46 @@ env_path() {
 
 clone_backup() { env -u BACKUP_DIR -u BACKUP_MAX_SIZE_GB "$@"; }
 
+# Разбор значения .env — как у compose; одна таблица для dotenv.sh и
+# Get-DotEnvValue в install-schedule.ps1: «значение в .env» → «результат».
+# Только ASCII: вывод powershell идёт в кодировке консоли.
+dotenv_raw=(
+  'D:/example-backups # usb disk'
+  $'D:/example-backups\t# usb disk'
+  'D:/example-backups   '
+  '  D:/example-backups'
+  '"D:/example-backups" # usb disk'
+  "'D:/example-backups'"
+  '"D:/example backups # not a comment"'
+  'D:/example#backups'
+  '"D:/example-backups'
+)
+dotenv_expected=(
+  'D:/example-backups'
+  'D:/example-backups'
+  'D:/example-backups'
+  'D:/example-backups'
+  'D:/example-backups'
+  'D:/example-backups'
+  'D:/example backups # not a comment'
+  'D:/example#backups'
+  '"D:/example-backups'
+)
+
+test_dotenv_value_like_compose() {
+  local name=dotenv_value_like_compose i got
+  # shellcheck source=ops/backup/dotenv.sh
+  . "$here/dotenv.sh"
+  for i in "${!dotenv_raw[@]}"; do
+    printf 'HA_TOKEN=x\r\nBACKUP_DIR=%s\r\n' "${dotenv_raw[i]}" >"$work/dotenv-case"
+    got="$(dotenv_value "$work/dotenv-case" BACKUP_DIR)"
+    if [ "$got" != "${dotenv_expected[i]}" ]; then
+      fail "$name" "«${dotenv_raw[i]}» → «$got», ожидалось «${dotenv_expected[i]}»"; return
+    fi
+  done
+  ok "$name"
+}
+
 test_backup_reads_settings_from_env_file() {
   local name=backup_destination_from_env_file
   local fake_path
@@ -579,6 +619,21 @@ test_install_schedule_dry_run() {
     fi
   done
   ok "$name"
+
+  # BACKUP_DIR из .env разбирается так же, как dotenv.sh.
+  name=install_schedule_dotenv_like_compose
+  local i
+  for shell in "${shells[@]}"; do
+    for i in "${!dotenv_raw[@]}"; do
+      fake_clone "$(printf 'HA_TOKEN=x\r\nBACKUP_DIR=%s\r\n' "${dotenv_raw[i]}")"
+      run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      if ! tr -d '\r' <"$work/out" | grep -qxF "BACKUP_DIR: ${dotenv_expected[i]}"; then
+        fail "$name/$shell" "«${dotenv_raw[i]}» не разобран в «${dotenv_expected[i]}»"; show_out; return
+      fi
+    done
+  done
+  ok "$name"
+  fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
 
   name=install_schedule_custom_time
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 04:15
@@ -1002,6 +1057,7 @@ test_restore_project_refuses_while_other_ha_runs_static
 test_restore_refuses_manifest_without_ha_count
 test_backup_drops_leftover_verify_databases
 test_backup_max_size_prunes_oldest_before_writing
+test_dotenv_value_like_compose
 test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
 test_restore_check_defaults_to_latest_backup
