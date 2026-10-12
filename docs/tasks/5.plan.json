@@ -85,10 +85,20 @@
       "path": ".claude/CLAUDE.md",
       "line": 545,
       "observation": "«`.env` агенту ещё и закрыт правами» — в этом прогоне cp .env.example .env в клоне во временном каталоге отбит правилом deny; буквальный прогон последовательности агенту недоступен, его выполняет человек через `!`"
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 98,
+      "observation": "публикация '${API_HTTP_PORT:-8080}:8080' — слева порт на хосте (переменная, по умолчанию 8080), справа порт в контейнере. Греп git grep -n 8080 (кроме docs/tasks/2.md — история): порт на хосте — .env.example:22, docker-compose.yml:8 (комментарий) и :98 (значение по умолчанию), README.md:146, .claude/CLAUDE.md:305, docs/rules/implement.md:81, .github/workflows/ci-heavy.yml:93, :101, :133, src/Domovoy.Api/Properties/launchSettings.json:7 (dotnet run вне docker на том же хосте); порт в контейнере — docker-compose.yml:65 (ASPNETCORE_HTTP_PORTS), :98 (правая часть), :106 (healthcheck изнутри контейнера), src/Domovoy.Api/Dockerfile:43-44 (ENV ASPNETCORE_HTTP_PORTS, EXPOSE); упоминания в docs/tasks/5.md и в этом плане — тексты задачи. docker-compose.override.example.yml порт api не публикует — правки не требует"
+    },
+    {
+      "path": ".env.example",
+      "line": 22,
+      "observation": "API_HTTP_PORT=8080 (комментарий строки 21 — «Порт, на котором Backend слушает на хосте»). На машине владельца 8080 занят другим сервисом (решение владельца 2026-10-12, журнал): curl localhost:8080 может уйти по IPv6 не в стек"
     }
   ],
   "approach": {
-    "summary": "Три части. (1) CI как повторяемая проверка на чистой ВМ: в работе compose файла .github/workflows/ci-heavy.yml шаг копирования приводится к буквальной последовательности критерия — только cp .env.example .env и cp config/entities.example.yaml config/entities.yaml (строки 77-85); подъём остаётся docker compose up --detach --build --wait --wait-timeout 300 (строка 88: без --detach шаг CI не завершится, без --wait проверка /health гонится со стартом); проверка анонимного /health ужесточается до ровно \"status\":\"degraded\" с HTTP 200 (на примерах без секретов healthy недостижим, а unhealthy — отказ) и дополняется проверкой RestartCount контейнера api = 0 через docker inspect (а не падение приложения); при реализации, до PR, работа compose прогоняется 5 раз подряд на одном коммите (gh workflow run или повторный запуск работы) — если RestartCount хоть раз не 0 при итоговом healthy, проверка счётчика пересматривается с записью в журнал, а не остаётся источником ложного красного; добавляется шаг git status сразу после «Подъём стека» (строка 88), до проверки /health и до шага «В логах старта нет секретов» (строка 107 пишет api.log в корень дерева, маски *.log в .gitignore нет — позже шага он дал бы «?? api.log»): git status --ignored --porcelain содержит строки «!! .env» и «!! config/entities.yaml», git status --porcelain пуст, git ls-files перечисляет .env.example и config/entities.example.yaml. Шаги про секреты в логах не меняются. (2) Живой прогон по README на чистом окружении делает человек через `!` — агенту закрыт .env (.claude/CLAUDE.md:545), — в одноразовом контейнере docker:dind, а не во втором клоне на хосте: на машине владельца уже поднят стек domovoy на 8080 с томом postgres-data, второй клон с тем же именем проекта пересоздал бы его контейнеры. Команды — одноразовые, без интерактивного терминала, чтобы шли через `!` и вывод оставался в стенограмме: docker run -d --privileged --name domovoy-clean docker:dind; until docker exec domovoy-clean docker info >/dev/null 2>&1; do sleep 2; done (демон dind готов); docker exec domovoy-clean sh -c 'apk add --no-cache git curl && docker compose version' (подготовка «чистой машины», не шаг README); затем блок README «Быстрый старт» одним docker exec domovoy-clean sh -c '…' — строки блока подряд, как есть, через && (так буквально проверяется, что печатает curl сразу после up -d); затем docker exec domovoy-clean sh -c 'cd domovoy && docker compose ps && git status --ignored --short'; в конце docker rm -f -v domovoy-clean. Прогон 1 — до правок, по README из main: собирает расхождения, вывод — в журнал. Прогон 2 — после правок, по README из ветки задачи (в строке clone добавляется --branch feat/5-example-stack-clean-machine — единственное отличие от текста README); затем в новом контейнере последовательность критерия: clone, два cp, docker compose up -d --wait — ключи -d --wait вместо foreground up названы отклонением от буквы: foreground up держит единственный шелл `!`. Гейт: PR не открывается, пока вывод прогона 2 (docker compose ps и git status --ignored --short) не лежит в журнале docs/tasks/5.md, «Проверено». (3) README «Быстрый старт» приводится к реальности: docker compose up -d --build --wait вместо up -d --build, если прогон 1 подтвердит пустой ответ curl сразу после up -d (README.md:145); строка 154 — «скопированные файлы config/ и .env закрыты .gitignore»; строка 249 — на этапе каркаса любой запрос к /api/v1, кроме POST /auth/device, получает 401: предъявленный токен отклоняется, привязка устройств не реализована (DeviceTokenAuthenticationHandler.cs:48, тест PresentedTokenIsRejected в HealthEndpointTests.cs:68); POST /auth/device анонимный и отвечает 501. Расхождения, которые найдёт прогон 1 сверх этих, правятся в README той же задачей; если они выходят за README и ci-heavy.yml — это расхождение с планом: запись в журнал в момент решения и пересчёт risk.sh по диффу; если их больше, чем укладывается в PR, — предложение разбиения владельцу (решение владельца в docs/tasks/5.md).",
+    "summary": "Четыре части. (0) Порт API на хосте по умолчанию — 18080 вместо 8080 (решение владельца 2026-10-12: 8080 на его машине занят). Меняется только порт на хосте: API_HTTP_PORT=18080 в .env.example:22, значение по умолчанию '${API_HTTP_PORT:-18080}:8080' в docker-compose.yml:98, curl в комментарии шапки docker-compose.yml:8, README.md:146, .claude/CLAUDE.md:305 (блок «Команды»), docs/rules/implement.md:81, три curl в ci-heavy.yml (:93, :101, :133 — .env в CI копируется из примера, значит стек публикуется на 18080), applicationUrl в src/Domovoy.Api/Properties/launchSettings.json:7 — dotnet run на том же хосте упирается в тот же занятый 8080, а implement.md:79-81 даёт одну команду curl для обоих способов запуска; одна адресная строка для обоих проще. Порт в контейнере остаётся 8080: ASPNETCORE_HTTP_PORTS (docker-compose.yml:65, Dockerfile:43), EXPOSE (Dockerfile:44), правая часть публикации и healthcheck контейнера (docker-compose.yml:106 — curl изнутри контейнера, хостовый порт ему не виден): внутри контейнера конфликта нет, а смена ломала бы образ без пользы. Приёмка порта — git grep -n 'localhost:8080' пуст вне docs/tasks/ (кроме истории docs/tasks/2.md) и docker compose config печатает published 18080, target 8080. Прогон 1 (README из main) остаётся на 8080 как есть; прогон 2 и CI — на 18080. (1) CI как повторяемая проверка на чистой ВМ: в работе compose файла .github/workflows/ci-heavy.yml шаг копирования приводится к буквальной последовательности критерия — только cp .env.example .env и cp config/entities.example.yaml config/entities.yaml (строки 77-85); подъём остаётся docker compose up --detach --build --wait --wait-timeout 300 (строка 88: без --detach шаг CI не завершится, без --wait проверка /health гонится со стартом); проверка анонимного /health ужесточается до ровно \"status\":\"degraded\" с HTTP 200 (на примерах без секретов healthy недостижим, а unhealthy — отказ) и дополняется проверкой RestartCount контейнера api = 0 через docker inspect (а не падение приложения); при реализации, до PR, работа compose прогоняется 5 раз подряд на одном коммите (gh workflow run или повторный запуск работы) — если RestartCount хоть раз не 0 при итоговом healthy, проверка счётчика пересматривается с записью в журнал, а не остаётся источником ложного красного; добавляется шаг git status сразу после «Подъём стека» (строка 88), до проверки /health и до шага «В логах старта нет секретов» (строка 107 пишет api.log в корень дерева, маски *.log в .gitignore нет — позже шага он дал бы «?? api.log»): git status --ignored --porcelain содержит строки «!! .env» и «!! config/entities.yaml», git status --porcelain пуст, git ls-files перечисляет .env.example и config/entities.example.yaml. Шаги про секреты в логах не меняются. (2) Живой прогон по README на чистом окружении делает человек через `!` — агенту закрыт .env (.claude/CLAUDE.md:545), — в одноразовом контейнере docker:dind, а не во втором клоне на хосте: на машине владельца уже поднят стек domovoy на 8080 с томом postgres-data, второй клон с тем же именем проекта пересоздал бы его контейнеры. Команды — одноразовые, без интерактивного терминала, чтобы шли через `!` и вывод оставался в стенограмме: docker run -d --privileged --name domovoy-clean docker:dind; until docker exec domovoy-clean docker info >/dev/null 2>&1; do sleep 2; done (демон dind готов); docker exec domovoy-clean sh -c 'apk add --no-cache git curl && docker compose version' (подготовка «чистой машины», не шаг README); затем блок README «Быстрый старт» одним docker exec domovoy-clean sh -c '…' — строки блока подряд, как есть, через && (так буквально проверяется, что печатает curl сразу после up -d); затем docker exec domovoy-clean sh -c 'cd domovoy && docker compose ps && git status --ignored --short'; в конце docker rm -f -v domovoy-clean. Прогон 1 — до правок, по README из main: собирает расхождения, вывод — в журнал. Прогон 2 — после правок, по README из ветки задачи (в строке clone добавляется --branch feat/5-example-stack-clean-machine — единственное отличие от текста README); затем в новом контейнере последовательность критерия: clone, два cp, docker compose up -d --wait — ключи -d --wait вместо foreground up названы отклонением от буквы: foreground up держит единственный шелл `!`. Гейт: PR не открывается, пока вывод прогона 2 (docker compose ps и git status --ignored --short) не лежит в журнале docs/tasks/5.md, «Проверено». (3) README «Быстрый старт» приводится к реальности: docker compose up -d --build --wait вместо up -d --build, если прогон 1 подтвердит пустой ответ curl сразу после up -d (README.md:145); строка 154 — «скопированные файлы config/ и .env закрыты .gitignore»; строка 249 — на этапе каркаса любой запрос к /api/v1, кроме POST /auth/device, получает 401: предъявленный токен отклоняется, привязка устройств не реализована (DeviceTokenAuthenticationHandler.cs:48, тест PresentedTokenIsRejected в HealthEndpointTests.cs:68); POST /auth/device анонимный и отвечает 501. Расхождения, которые найдёт прогон 1 сверх этих, правятся в README той же задачей; если они выходят за README и ci-heavy.yml — это расхождение с планом: запись в журнал в момент решения и пересчёт risk.sh по диффу; если их больше, чем укладывается в PR, — предложение разбиения владельцу (решение владельца в docs/tasks/5.md).",
     "rejected": [
       {
         "option": "Оставить CI на пути README (5 файлов) и проверить последовательность критерия один раз руками",
@@ -115,43 +125,80 @@
         "reason": "проба docker compose config показала, что CRLF из клона на Windows в значения не попадает — дефекта нет"
       },
       {
+        "option": "Сменить и порт внутри контейнера на 18080",
+        "reason": "конфликт только на хосте; внутренний порт виден лишь сети compose и healthcheck контейнера, смена трогала бы Dockerfile, ASPNETCORE_HTTP_PORTS и healthcheck без наблюдаемой пользы"
+      },
+      {
+        "option": "Оставить launchSettings.json на 8080 или дать dotnet run отдельный порт",
+        "reason": "8080 занят на том же хосте — dotnet run упрётся в тот же конфликт; отдельный порт разведёт адрес /health в документации на два (implement.md:79-81 даёт один curl на оба способа). Одновременный запуск стека и dotnet run на одном порту конфликтовал и раньше (оба 8080) — состояние не ухудшается"
+      },
+      {
+        "option": "Смена порта отдельной задачей",
+        "reason": "владелец выбрал сделать её в #5 (2026-10-12, журнал)"
+      },
+      {
         "option": "Деталь «не сконфигурировано» в анонимном /health",
         "reason": "расходится с записью 0002 (docs/decisions/0002-split-health-endpoint.md); отвергнуто в журнале docs/tasks/5.md, «Отвергнуто»"
       }
     ]
   },
   "fork_card": {
-    "matches_request": "да: последовательность критерия прогоняется буквально (человеком в чистом контейнере и CI на чистой ВМ), /health и «не сконфигурировано» проверяются по ответу degraded и отсутствию перезапусков, git status --ignored — отдельным шагом, README приводится к результату прогона. Отклонения от буквы: в CI checkout вместо git clone и ключи --detach --wait у docker compose up — без них шаг CI не завершится; буквальный вариант покрывает прогон человека",
+    "matches_request": "да: последовательность критерия прогоняется буквально (человеком в чистом контейнере и CI на чистой ВМ), /health и «не сконфигурировано» проверяются по ответу degraded и отсутствию перезапусков, git status --ignored — отдельным шагом, README приводится к результату прогона; порт на хосте 18080 — расширение задачи решением владельца, не из текста issue. Отклонения от буквы: в CI checkout вместо git clone и ключи --detach --wait у docker compose up — без них шаг CI не завершится; буквальный вариант покрывает прогон человека",
     "alternative": "оставить CI на пятифайловом пути README и проверить двухфайловую последовательность один раз руками: владелец получил бы тот же зелёный CI, но регресс последовательности критерия ловился бы только следующим ручным прогоном; цена выбранного — ноль секунд CI: копируется меньше файлов",
-    "ripple": "греп по .github/workflows: шаги работы compose на имена не ссылаются, required-проверка — работа «Тяжёлые проверки пройдены» (ci-heavy.yml:199), её имя и имя работы compose не меняются. Шаг «Значения секретов не попадают в логи» (ci-heavy.yml:116) правит .env sed'ом, а шаги на строках 107 и 137 пишут api.log и secret-probe.log в корень дерева — новый шаг git status стоит сразу после «Подъём стека» (строка 88), до всех трёх; других записей в дерево до него нет (греп '> *[a-z-]+\\.(log|txt)' по ci-heavy.yml — строки 107, 137, 148). README «Быстрый старт» дублируется комментарием docker-compose.yml:4-8 (cp .env.example .env; up -d --build) — если в README появится --wait, комментарий приводится к тому же той же правкой. Код продукта не меняется",
+    "ripple": "греп по .github/workflows: шаги работы compose на имена не ссылаются, required-проверка — работа «Тяжёлые проверки пройдены» (ci-heavy.yml:199), её имя и имя работы compose не меняются. Шаг «Значения секретов не попадают в логи» (ci-heavy.yml:116) правит .env sed'ом, а шаги на строках 107 и 137 пишут api.log и secret-probe.log в корень дерева — новый шаг git status стоит сразу после «Подъём стека» (строка 88), до всех трёх; других записей в дерево до него нет (греп '> *[a-z-]+\\.(log|txt)' по ci-heavy.yml — строки 107, 137, 148). README «Быстрый старт» дублируется комментарием docker-compose.yml:4-8 (cp .env.example .env; up -d --build) — если в README появится --wait, комментарий приводится к тому же той же правкой. Порт: все вхождения 8080 по git grep перечислены в «Как устроено сейчас» (docker-compose.yml:98) с разбором хост/контейнер; ConfigurationExampleTests.ComposeVariablesAreDocumentedInEnvExample сверяет имена переменных, а не значения — имя API_HTTP_PORT не меняется. Локальный .env владельца с API_HTTP_PORT=8080 перекрывает новое значение по умолчанию — в разделе «Синхронизация» тела PR: поменять API_HTTP_PORT в локальном .env, без значений секретов. Код продукта (src/**/*.cs) не меняется",
     "workaround": "нет: ни подавления проверки, ни расширения допустимых состояний; проверка /health ужесточается, а не ослабляется",
     "council_signs": [
-      "правка обвязки: .github/workflows/ci-heavy.yml — группа harness_quality в scripts/risk.json"
+      "правка обвязки: .github/workflows/ci-heavy.yml, .claude/CLAUDE.md, docs/rules/implement.md — группа harness_quality в scripts/risk.json",
+      "глобальный переключатель: порт API на хосте по умолчанию (docker-compose.yml:98, .env.example:22, launchSettings.json:7) — греп 8080 в «Как устроено сейчас»"
     ],
-    "executor": "оркестратор сам по правкам: 2-3 существующих файла (ci-heavy.yml ~25 строк, README.md ~6 строк, при --wait — комментарий docker-compose.yml:4-8), якоря файл:строка в плане; ci-heavy.yml правится через Edit. Живые прогоны 1 и 2 — человек через `!`, вывод переносится в журнал",
+    "executor": "субагент step-implement: 7 существующих файлов (ci-heavy.yml ~28 строк, README.md ~6, docker-compose.yml 2-4, .env.example 1, .claude/CLAUDE.md 1, docs/rules/implement.md 1, launchSettings.json 1) — больше порога 3 файлов, счёт по задаче целиком; якоря файл:строка в плане; обвязка (.github, .claude, docs/rules) правится через Edit. Живые прогоны 1 и 2 — человек через `!`, вывод переносится в журнал",
     "fork": false
   },
   "files": [
     {
       "path": ".github/workflows/ci-heavy.yml",
       "action": "modify",
-      "why": "работа compose: копирование по критерию (два файла вместо пяти, строки 77-85), /health ровно degraded + RestartCount api = 0 (строки 90-95), новый шаг git status --ignored сразу после «Подъём стека» (строка 88), до шагов, пишущих api.log и secret-probe.log в дерево. Путь группы harness_quality (scripts/risk.json) — заявлено здесь явно"
+      "why": "три curl на localhost:18080 (строки 93, 101, 133); работа compose: копирование по критерию (два файла вместо пяти, строки 77-85), /health ровно degraded + RestartCount api = 0 (строки 90-95), новый шаг git status --ignored сразу после «Подъём стека» (строка 88), до шагов, пишущих api.log и secret-probe.log в дерево. Путь группы harness_quality (scripts/risk.json) — заявлено здесь явно"
     },
     {
       "path": "README.md",
       "action": "modify",
-      "why": "«Быстрый старт»: ожидание готовности перед curl (строка 145, по итогу прогона 1), точность фразы о закрытых .gitignore файлах (строка 154), 401 без токена вместо «все отвечают 501» (строка 249), прочие расхождения, найденные прогоном 1"
+      "why": "curl на localhost:18080 (строка 146); «Быстрый старт»: ожидание готовности перед curl (строка 145, по итогу прогона 1), точность фразы о закрытых .gitignore файлах (строка 154), 401 без токена вместо «все отвечают 501» (строка 249), прочие расхождения, найденные прогоном 1"
     },
     {
       "path": "docker-compose.yml",
       "action": "modify",
-      "why": "только комментарий шапки (строки 4-8) — повторяет команды «Быстрого старта»; меняется той же правкой, если README получает --wait, иначе файл не трогается. Группа product (scripts/risk.json, medium)"
+      "why": "значение по умолчанию порта на хосте '${API_HTTP_PORT:-18080}:8080' (строка 98) и curl в комментарии шапки (строка 8); комментарий строк 4-8 — ещё и --wait, если его получает README. Правая часть :8080, строки 65 и 106 не меняются. Группа product (scripts/risk.json, medium)"
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "API_HTTP_PORT=18080 (строка 22) — порт на хосте. Парные .example: docker-compose.override.example.yml порт api не публикует, правки не требует; локальный .env владельца — раздел «Синхронизация» тела PR. Группа product (*.example*)"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "блок «Команды», строка 305: curl -s http://localhost:18080/health. Путь группы harness_quality (.claude/**) — заявлено здесь явно"
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "action": "modify",
+      "why": "«Живая проверка», строка 81: curl на localhost:18080. Путь группы harness_quality (docs/rules/**) — заявлено здесь явно"
+    },
+    {
+      "path": "src/Domovoy.Api/Properties/launchSettings.json",
+      "action": "modify",
+      "why": "applicationUrl http://localhost:18080 (строка 7): dotnet run на том же хосте упирается в тот же занятый 8080, адрес /health в документации — один на оба способа запуска"
     }
   ],
   "boundaries": [
     ".github/workflows/ci-heavy.yml",
     "README.md",
-    "docker-compose.yml"
+    "docker-compose.yml",
+    ".env.example",
+    ".claude/CLAUDE.md",
+    "docs/rules/implement.md",
+    "src/Domovoy.Api/Properties/launchSettings.json"
   ],
   "flags": {
     "new_dependency": false,
@@ -185,6 +232,15 @@
         "a4-gitignore"
       ],
       "behavior": "git status --ignored --porcelain содержит «!! .env» и «!! config/entities.yaml», git status --porcelain пуст, git ls-files печатает .env.example и config/entities.example.yaml. Отрицательная проба до коммита: в одноразовом клоне без строки .env в .gitignore проверка выходит с ненулевым кодом"
+    },
+    {
+      "name": "Сценарий: порт API на хосте 18080, в контейнере 8080",
+      "file": "docs/tasks/5.md",
+      "new": true,
+      "covers": [
+        "a6-port"
+      ],
+      "behavior": "по docs/rules/implement.md:70 на конфигурацию автотест не пишется; проверка — команды из a6-port: git grep 'localhost:8080' вне docs/tasks/ пуст, docker compose config на .env из примера печатает published 18080 и target 8080, CI-шаги на localhost:18080 зелёные (на старом 8080 curl в CI не достучался бы — шаг /health красный). Команды и вывод — журнал, «Проверено»"
     },
     {
       "name": "UnfilledSecretsYieldNotConfigured",
@@ -227,7 +283,7 @@
     {
       "id": "a2-health",
       "criterion": "GET /health отвечает",
-      "method": "curl -s -o /dev/stdout -w ' %{http_code}' http://localhost:8080/health — ожидается {\"status\":\"degraded\"} 200; в CI — новый шаг «Анонимный /health: degraded на примерах, api без перезапусков»",
+      "method": "curl -s -o /dev/stdout -w ' %{http_code}' http://localhost:18080/health (прогон 2 и CI; прогон 1 по README из main — на 8080) — ожидается {\"status\":\"degraded\"} 200; в CI — новый шаг «Анонимный /health: degraded на примерах, api без перезапусков»",
       "evidence": "строка «ответ: {\"status\":\"degraded\"}» в логе прогона CI; вывод curl прогона 2 в журнале"
     },
     {
@@ -247,6 +303,12 @@
       "criterion": "шаги воспроизведены строго по README, без обращения к автору; расхождения README и реальности исправлены",
       "method": "прогон 1 человеком по README из main в docker:dind: каждая команда «Быстрого старта» копируется из README как есть, любое отличие результата от написанного в README (в том числе пустой вывод curl сразу после up -d) — строка расхождения в журнале. Прогон 2 по README из ветки задачи — ни одного расхождения и ни одной команды сверх README (кроме установки git и curl в самом контейнере dind — подготовка «чистой машины», не шаг README). Ограничение: прогон делает владелец, то есть автор; «без обращения к автору» выполняется как «только по тексту README, без знания сверх него»",
       "evidence": "в журнале «Проверено»: список расхождений прогона 1 с правкой README по каждому (README.md:строка) и вывод прогона 2 без расхождений. Гейт: PR не открывается, пока вывод прогона 2 (docker compose ps и git status --ignored --short) не лежит в журнале — этим же закрываются a1-up и a4-gitignore"
+    },
+    {
+      "id": "a6-port",
+      "criterion": "решение владельца 2026-10-12 (не из текста issue): порт API на хосте по умолчанию 18080, порт в контейнере 8080",
+      "method": "git grep -n 'localhost:8080' -- . ':!docs/tasks/' — пусто; git grep -n '8080' -- . ':!docs/tasks/' — только порт в контейнере: docker-compose.yml:65, правая часть :98, :106, src/Domovoy.Api/Dockerfile:43-44; docker compose config (на .env из примера, человеком или в CI) — у api published: \"18080\", target: 8080; в CI шаги /health и 401 зелёные на localhost:18080",
+      "evidence": "вывод обоих git grep и фрагмент ports из docker compose config в журнале «Проверено»; зелёный прогон работы compose"
     }
   ],
   "risks": [
@@ -257,6 +319,18 @@
     {
       "risk": "агент не может выполнить cp .env.example .env (правило deny), поэтому живые прогоны зависят от человека",
       "mitigation": "оркестратор передаёт человеку готовый список команд для `!` и переносит фактический вывод в журнал; без прогона 2 пункты a1-up, a4-gitignore и a5-readme закрыты только CI, и это называется в резюме и PR"
+    },
+    {
+      "risk": "локальный .env владельца содержит API_HTTP_PORT=8080 и перекрывает новое значение по умолчанию — после мерджа его стек останется на 8080, а документация укажет 18080",
+      "mitigation": "раздел «Синхронизация» тела PR: поменять API_HTTP_PORT в локальном .env (без значений секретов); агент .env не правит"
+    },
+    {
+      "risk": "пропущенное вхождение 8080 как порта на хосте — документация или CI стучится не туда",
+      "mitigation": "приёмка a6-port: git grep после правки, ожидаемый остаток перечислен построчно; CI на localhost:18080 краснеет, если публикация не совпала"
+    },
+    {
+      "risk": "правка .claude/CLAUDE.md и docs/rules/implement.md — правка обвязки",
+      "mitigation": "заявлено в «Файлы» и признаках совета; правка ограничена одним URL в каждом файле, через Edit"
     },
     {
       "risk": "в образе docker:dind может не оказаться плагина compose — прогон упадёт на шаге, которого нет в README",
