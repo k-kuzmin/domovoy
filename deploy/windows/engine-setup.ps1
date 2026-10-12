@@ -304,6 +304,8 @@ if ($Uninstall) {
     $stopArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'docker', 'compose', '--profile', 'ha', 'stop')
     $interactiveArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Install', '-LogonType', 'Interactive')
     if ($DryRun) { $interactiveArgs += '-DryRun' }
+    # Один список на план и на действие: что напечатано, то и снимается.
+    $autostartTasks = @($KeeperTask, $MeasureTask)
     $wslBackup = "$WslConfigPath.domovoy-backup"
     $wslAbsent = "$WslConfigPath.domovoy-absent"
     $wslAction = 'keep'
@@ -317,7 +319,7 @@ if ($Uninstall) {
         Write-Output ('uninstall.engine.running: {0}' -f [bool]$engineRunning)
         if ($engineRunning) { Write-Output ('uninstall.stack.stop: wsl.exe {0}' -f ($stopArgs -join ' ')) }
         else { Write-Output 'uninstall.stack.stop: none (distro not running; its containers start again with the distro - restart: unless-stopped)' }
-        foreach ($taskName in $KeeperTask, $MeasureTask) {
+        foreach ($taskName in $autostartTasks) {
             Write-Output "uninstall.task.unregister: $taskName"
         }
         Write-Output ('uninstall.backup: install-schedule.ps1 {0}' -f (($interactiveArgs | Select-Object -Skip 6) -join ' '))
@@ -355,7 +357,7 @@ if ($Uninstall) {
     }
 
     # 2. Задачи автозапуска: держалка сначала останавливается, потом снимается.
-    foreach ($taskName in $KeeperTask, $MeasureTask) {
+    foreach ($taskName in $autostartTasks) {
         $taskNow = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($taskNow) {
             if ([string]$taskNow.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName }
