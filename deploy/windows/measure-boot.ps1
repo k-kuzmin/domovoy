@@ -10,7 +10,7 @@
   пользователь может менять. Дистрибутив WSL задаче не нужен, она только
   опрашивает порт с хоста:
 
-    http://localhost:<Port>/health — каждые -IntervalSeconds (5 с),
+    http://127.0.0.1:<Port>/health — каждые -IntervalSeconds (5 с),
     пока не придёт ответ 200 формы стека или не выйдет -TimeoutMinutes (30).
 
   -Port задаётся при регистрации: API_HTTP_PORT из .env клона, без него —
@@ -92,10 +92,11 @@ Add-Type -AssemblyName System.Net.Http
 $handler = New-Object System.Net.Http.HttpClientHandler
 $handler.UseProxy = $false
 $client = New-Object System.Net.Http.HttpClient($handler)
-# Отказ соединения на закрытый порт Windows ждёт около 2 с, а localhost
-# сначала пробуется как ::1 — запас на оба адреса.
+# Отказ соединения на закрытый порт Windows ждёт около 2 с — запас.
 $client.Timeout = [TimeSpan]::FromSeconds(10)
-$url = 'http://localhost:{0}/health' -f $Port
+# 127.0.0.1, не localhost: IPv6-петля ::1 до движка WSL не проходит
+# (правило Hyper-V её не принимает), и запрос висел бы до тайм-аута.
+$url = 'http://127.0.0.1:{0}/health' -f $Port
 
 $firstResponse = $null
 $firstCode = ''

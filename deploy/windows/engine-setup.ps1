@@ -1629,10 +1629,12 @@ else {
 # /health с хоста через петлю. Петля в mirrored при правиле только на
 # LocalSubnet в опыте 2026-10-12 отвечала тайм-аутом; правило дополнено
 # 127.0.0.1 (::1 правило Hyper-V не принимает).
-$loop = Get-Health ('http://localhost:{0}/health' -f $apiPort)
-if ($loop.Stack) { Add-Result 'OK' "/health на localhost:$apiPort" '200 формы стека' }
-elseif ($loop.Code) { Add-Result 'FAIL' "/health на localhost:$apiPort" "код $($loop.Code)$(if ($loop.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
-else { Add-Result 'FAIL' "/health на localhost:$apiPort" "нет ответа: $($loop.Error)" }
+# Адрес — 127.0.0.1, не localhost: ::1 в правило Hyper-V не задаётся, и
+# localhost, который Windows пробует сначала как ::1, висит до тайм-аута.
+$loop = Get-Health ('http://127.0.0.1:{0}/health' -f $apiPort)
+if ($loop.Stack) { Add-Result 'OK' "/health на 127.0.0.1:$apiPort" '200 формы стека' }
+elseif ($loop.Code) { Add-Result 'FAIL' "/health на 127.0.0.1:$apiPort" "код $($loop.Code)$(if ($loop.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
+else { Add-Result 'FAIL' "/health на 127.0.0.1:$apiPort" "нет ответа: $($loop.Error)" }
 
 # Доступ из ЛВС с хоста не проверяется: в mirrored хост не достаёт до
 # слушателя дистрибутива по своему же адресу в ЛВС (hostAddressLoopback по
