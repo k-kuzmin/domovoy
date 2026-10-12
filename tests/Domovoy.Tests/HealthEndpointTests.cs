@@ -1,7 +1,12 @@
 using System.Net;
 using System.Text.Json;
+using Domovoy.Core.Abstractions;
+using Domovoy.Core.Models;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Domovoy.Tests;
 
@@ -50,6 +55,38 @@ public sealed class HealthEndpointTests : IClassFixture<DomovoyApiFactory>
         body.Should().NotContain("llm");
     }
 
+    [Fact(DisplayName = "Анонимный /health возвращается в 200, когда компонент поднялся, без перезапуска процесса")]
+    public async Task LivenessRecoversWhenComponentRecovers()
+    {
+        // После перезагрузки хоста демон поднимает контейнеры без учёта
+        // depends_on, и api может стартовать раньше базы. Вечного 503 это
+        // давать не должно: проверки пересчитываются на каждом запросе.
+        var probe = new SwitchableProbe(ComponentState.Unreachable);
+        using WebApplicationFactory<Program> host = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IComponentProbe>();
+                services.AddSingleton<IComponentProbe>(probe);
+            }));
+        using HttpClient client = host.CreateClient();
+
+        using (HttpResponseMessage down = await client.GetAsync(new Uri("/health", UriKind.Relative)))
+        {
+            down.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+                "недоступный компонент — Unhealthy, анонимный /health отдаёт 503");
+        }
+
+        probe.State = ComponentState.Ok;
+
+        using HttpResponseMessage up = await client.GetAsync(new Uri("/health", UriKind.Relative));
+
+        up.StatusCode.Should().Be(HttpStatusCode.OK,
+            "тот же процесс без перезапуска видит поднявшийся компонент на следующем запросе");
+        string body = await up.Content.ReadAsStringAsync();
+        using JsonDocument document = JsonDocument.Parse(body);
+        document.RootElement.GetProperty("status").GetString().Should().Be("healthy");
+    }
+
     [Theory(DisplayName = "Эндпоинты API требуют аутентификации")]
     [InlineData("/api/v1/health")]
     [InlineData("/api/v1/state")]
@@ -75,5 +112,24 @@ public sealed class HealthEndpointTests : IClassFixture<DomovoyApiFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
             "схема, пропускающая всех «пока не реализовано», однажды доезжает до продакшена");
+    }
+
+    /// <summary>Проба, состояние которой тест переключает между запросами.</summary>
+    private sealed class SwitchableProbe : IComponentProbe
+    {
+        private volatile ComponentState _state;
+
+        public SwitchableProbe(ComponentState state) => _state = state;
+
+        public ComponentState State
+        {
+            get => _state;
+            set => _state = value;
+        }
+
+        public string ComponentName => "db";
+
+        public Task<ComponentHealth> CheckAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new ComponentHealth { State = _state, Description = "управляемая проба теста" });
     }
 }
