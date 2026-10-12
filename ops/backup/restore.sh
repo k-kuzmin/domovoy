@@ -200,12 +200,14 @@ else
   tar -xzOf "$from/ha-config.tar.gz" .storage/core.entity_registry \
     | dc exec -T homeassistant sh -c 'cat >/tmp/registry.backup.json' \
     || fail "реестр сущностей из бэкапа не передан в контейнер HA"
-  # Токен берётся из окружения контейнера api и не выходит из него: ни в
-  # командную строку хоста, ни в вывод.
+  # Токен берётся из окружения контейнера api и не выходит из него: заголовок
+  # печатает встроенная printf оболочки контейнера (dash), а curl читает его
+  # со stdin (-H @-). Поэтому токена нет ни в командной строке хоста, ни в
+  # argv процессов контейнера, ни в выводе.
   # shellcheck disable=SC2016
-  api_code_cmd='curl -s -o /dev/null --max-time 10 -w "%{http_code}" -H "Authorization: Bearer $Ha__Token" http://homeassistant:8123/api/'
+  api_code_cmd='printf "Authorization: Bearer %s\n" "$Ha__Token" | curl -s -o /dev/null --max-time 10 -w "%{http_code}" -H @- http://homeassistant:8123/api/'
   # shellcheck disable=SC2016
-  states_cmd='curl -sS --fail --max-time 30 -H "Authorization: Bearer $Ha__Token" http://homeassistant:8123/api/states'
+  states_cmd='printf "Authorization: Bearer %s\n" "$Ha__Token" | curl -sS --fail --max-time 30 -H @- http://homeassistant:8123/api/states'
   deadline=$((SECONDS + 300))
   code='000'
   while :; do
