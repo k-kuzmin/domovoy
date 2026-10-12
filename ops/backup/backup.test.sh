@@ -209,6 +209,16 @@ fake_backup_dir() {
   printf 'format 1\nha_registry_enabled 3\n' >"$1/manifest.txt"
 }
 
+test_restore_refuses_manifest_without_ha_count() {
+  local name=restore_refuses_manifest_without_ha_count
+  fake_backup_dir "$work/no-ha-count"
+  printf 'format 1\ndb_table public.example 1\n' >"$work/no-ha-count/manifest.txt"
+  run bash ops/backup/restore.sh --from "$work/no-ha-count" --check
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0"; return; fi
+  grep -q 'в манифесте нет числа сущностей HA' "$work/out" || { fail "$name" "отказ без названной причины"; show_out; return; }
+  ok "$name"
+}
+
 test_restore_project_refuses_while_other_ha_runs_static() {
   local name=restore_project_refuses_while_other_ha_runs/static
   # Подделка docker: работает homeassistant проекта example-other, всё
@@ -601,6 +611,7 @@ test_backup_artifacts_are_ignored_in_tree
 test_backup_refuses_destination_inside_repository
 test_backup_refuses_missing_destination
 test_restore_project_refuses_while_other_ha_runs_static
+test_restore_refuses_manifest_without_ha_count
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"

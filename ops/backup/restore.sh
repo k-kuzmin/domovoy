@@ -100,7 +100,7 @@ done
 # Манифест: «db_table <таблица> <число>» и «ha_registry_enabled <число>».
 grep -qx 'format 1' "$from/manifest.txt" || { echo "restore: неизвестный формат манифеста" >&2; exit 1; }
 expected_tables="$(grep '^db_table ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2- | sort || true)"
-expected_ha="$(grep '^ha_registry_enabled ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2)"
+expected_ha="$(grep '^ha_registry_enabled ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2 || true)"
 [[ "$expected_ha" =~ ^[0-9]+$ ]] || { echo "restore: в манифесте нет числа сущностей HA" >&2; exit 1; }
 
 files=()
