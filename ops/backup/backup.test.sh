@@ -308,9 +308,47 @@ print(sum(1 for e in fixture if e.get("disabled_by") is None and e["entity_id"] 
 test_backup_creates_complete_backup() {
   local name=ha_registry_and_recorder_survive_backup/backup
   mkdir "$work/dest"
+  # Писатель в базу на всё время бэкапа — как api, который пишет, пока
+  # снимается дамп. Числа манифеста обязаны описывать дамп, иначе
+  # restore.sh --check ниже откажет при исправном восстановлении. Писатель
+  # ограничен флагом и числом итераций: убийство docker compose exec на
+  # хосте сессию в контейнере не останавливает.
+  psql_in "$src_project" <<'SQL' || { fail "$name" "таблицы писателя не созданы"; return 1; }
+CREATE TABLE domovoy_churn(v int);
+CREATE TABLE domovoy_churn_stop(v int);
+SQL
+  psql_in "$src_project" >/dev/null 2>&1 <<'SQL' &
+DO $$
+BEGIN
+  FOR i IN 1..20000 LOOP
+    EXIT WHEN EXISTS (SELECT 1 FROM domovoy_churn_stop);
+    INSERT INTO domovoy_churn VALUES (i);
+    COMMIT;
+    PERFORM pg_sleep(0.01);
+  END LOOP;
+END
+$$;
+SQL
+  local writer=$! churn_live='' deadline=$((SECONDS + 60))
+  until [ "$(psql_in "$src_project" -c 'SELECT count(*) > 0 FROM domovoy_churn')" = t ]; do
+    [ "$SECONDS" -lt "$deadline" ] || { fail "$name" "писатель не начал писать"; return 1; }
+    sleep 1
+  done
   run bash ops/backup/backup.sh "$work/dest"
+  local backup_rc=$rc
+  psql_in "$src_project" -c 'INSERT INTO domovoy_churn_stop VALUES (1)' >/dev/null
+  wait "$writer"
+  churn_live="$(psql_in "$src_project" -c 'SELECT count(*) FROM domovoy_churn')"
+  rc=$backup_rc
   if [ "$rc" -ne 0 ]; then fail "$name" "backup.sh: код $rc"; show_out; return 1; fi
   backup="$(single_backup_in "$work/dest")" || { fail "$name" "ровно одного полного бэкапа нет"; return 1; }
+  # Писатель действительно писал во время бэкапа и после дампа: иначе тест
+  # не проверяет расхождение живой базы с дампом.
+  local churn_dumped
+  churn_dumped="$(sed -n 's/^db_table public\.domovoy_churn \([0-9]*\)$/\1/p' "$backup/manifest.txt")"
+  if ! [[ "$churn_dumped" =~ ^[0-9]+$ ]] || [ "$churn_dumped" -eq 0 ] || [ "$churn_live" -le "$churn_dumped" ]; then
+    fail "$name" "писатель не писал во время бэкапа: в манифесте «$churn_dumped», в живой базе «$churn_live»"; return 1
+  fi
   grep -qx 'db_table public.domovoy_marker 1' "$backup/manifest.txt" \
     || { fail "$name" "в манифесте нет строки маркерной таблицы"; return 1; }
   grep -qx "ha_registry_enabled $expected_ha" "$backup/manifest.txt" \

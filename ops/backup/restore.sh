@@ -152,6 +152,18 @@ dc up -d --wait --wait-timeout 180 postgres </dev/null || fail "postgres не п
 dc exec -T postgres sh -c \
   'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --exit-on-error' \
   <"$from/db.dump" || fail "pg_restore не выполнился"
+# База против манифеста — сразу после pg_restore, пока api не запущен и
+# ничего в неё не записал.
+actual_tables="$(dc exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -At -F " " -v ON_ERROR_STOP=1' \
+  <ops/backup/table-counts.sql | tr -d '\r' | sort)" || fail "подсчёт строк в восстановленной базе не выполнился"
+if [ "$actual_tables" != "$expected_tables" ]; then
+  # Называется таблица и числа, содержимое строк не печатается.
+  diff <(echo "$expected_tables") <(echo "$actual_tables") \
+    | sed -n 's/^< /  в манифесте: /p; s/^> /  восстановлено: /p' >&2 || true
+  fail "БД: восстановленные таблицы расходятся с манифестом"
+fi
+echo "БД: таблицы совпадают с манифестом ($(grep -c . <<<"$expected_tables" || true) таблиц)"
 
 # 2. Том HA — до первого старта HA, во временном контейнере с тем же томом.
 dc run -d --no-deps --name "$helper" --entrypoint sleep homeassistant 3600 </dev/null >/dev/null \
@@ -174,19 +186,7 @@ echo "HA: реестр восстановлен, $restored_ha не отключ�
 # оставшийся от прошлой проверки; при неизменном коде сборка берётся из кеша.
 dc up -d --build </dev/null || fail "стек не поднялся"
 
-# 4. База против манифеста.
-actual_tables="$(dc exec -T postgres sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -At -F " " -v ON_ERROR_STOP=1' \
-  <ops/backup/table-counts.sql | tr -d '\r' | sort)" || fail "подсчёт строк в восстановленной базе не выполнился"
-if [ "$actual_tables" != "$expected_tables" ]; then
-  # Называется таблица и числа, содержимое строк не печатается.
-  diff <(echo "$expected_tables") <(echo "$actual_tables") \
-    | sed -n 's/^< /  в манифесте: /p; s/^> /  восстановлено: /p' >&2 || true
-  fail "БД: восстановленные таблицы расходятся с манифестом"
-fi
-echo "БД: таблицы совпадают с манифестом ($(grep -c . <<<"$expected_tables" || true) таблиц)"
-
-# 5. HA API: состояния восстановленного HA против реестра бэкапа.
+# 4. HA API: состояния восстановленного HA против реестра бэкапа.
 if [ "$ha_api_check" = 'skip' ]; then
   echo "HA: проверка HA API пропущена (--ha-api-check skip)"
 else
@@ -226,7 +226,7 @@ else
   echo "HA: $result сущностей реестра в состояниях"
 fi
 
-# 6. Анонимный /health. В режиме --check внешние компоненты (LLM, ntfy)
+# 5. Анонимный /health. В режиме --check внешние компоненты (LLM, ntfy)
 # в изолированной сети недоступны, поэтому статус печатается, а не
 # требуется «healthy»: проверяется, что восстановленный api поднялся и
 # отвечает.

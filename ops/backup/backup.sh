@@ -15,7 +15,9 @@
 #      базы sqlite (рекордер, zigbee.db) кладутся онлайн-копией, HA не
 #      останавливается (AR-6);
 #   3. manifest.txt — число строк по таблицам и число не отключённых
-#      записей реестра сущностей HA, только числа;
+#      записей реестра сущностей HA, только числа; строки считаются по
+#      дампу, восстановленному во временную базу, реестр — по его копии в
+#      архиве, а не по живым данным;
 #   4. проверка целостности дампа и архива;
 #   5. каталог .partial переименовывается в domovoy-backup-<UTC-метка>;
 #   6. ротация: остаются N последних полных бэкапов (по умолчанию 14).
@@ -107,8 +109,18 @@ partial="$dest/$name.partial"
 final="$dest/$name"
 done_ok=0
 
+created_verify_db=0
+drop_verify_db() {
+  # shellcheck disable=SC2016
+  dc exec -T postgres sh -c 'dropdb -U "$POSTGRES_USER" --if-exists "$1"' sh "$verify_db" </dev/null \
+    && created_verify_db=0
+}
+
 on_exit() {
   local code=$?
+  if [ "${created_verify_db:-0}" -eq 1 ]; then
+    drop_verify_db >/dev/null 2>&1 || log "временная база $verify_db не удалена: dropdb вручную" >&2 || true
+  fi
   if [ "$done_ok" -ne 1 ]; then
     [ -n "${partial:-}" ] && [ -d "$partial" ] && [ "${created_partial:-0}" -eq 1 ] && rm -rf -- "$partial"
     log "ошибка: бэкап $name не создан (код $code)" >/dev/null || true
@@ -140,10 +152,6 @@ created_partial=1
 dc exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
   </dev/null >"$partial/db.dump" || fail "pg_dump не выполнился"
 
-table_counts="$(dc exec -T postgres sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -At -F " " -v ON_ERROR_STOP=1' \
-  <ops/backup/table-counts.sql | tr -d '\r')" || fail "подсчёт строк в таблицах не выполнился"
-
 # 2. Том HA. Сценарий модуля передаётся python3 через stdin: в контейнер
 # ничего не копируется. stdout — архив, stderr — число не отключённых
 # записей реестра, посчитанное по тем же байтам, что легли в архив (HA
@@ -159,12 +167,26 @@ archive_messages
 ha_enabled="$(sed -n 's/^registry_enabled //p' <<<"$archive_err")"
 [[ "$ha_enabled" =~ ^[0-9]+$ ]] || fail "реестр сущностей HA: модуль архивации не вернул число"
 
-# 3. Целостность до переименования. Дамп читается целиком, а не только
-# оглавление: --file=/dev/null проходит по каждому блоку данных.
+# 3. Целостность до переименования. Дамп восстанавливается во временную
+# базу того же postgres теми же флагами, что у restore.sh, и строки таблиц
+# считаются по ней. Так числа манифеста описывают сам дамп: запрос к живой
+# базе шёл бы в другой транзакции, и запись api между дампом и подсчётом
+# развела бы манифест с дампом. Временная база удаляется и при отказе.
 dc exec -T postgres pg_restore --list <"$partial/db.dump" >/dev/null \
   || fail "оглавление дампа не читается"
-dc exec -T postgres pg_restore --file=/dev/null <"$partial/db.dump" >/dev/null \
-  || fail "дамп не читается целиком"
+verify_db="domovoy_backup_verify_$(tr '[:upper:]' '[:lower:]' <<<"$stamp")"
+# shellcheck disable=SC2016
+dc exec -T postgres sh -c 'createdb -U "$POSTGRES_USER" -T template0 "$1"' sh "$verify_db" </dev/null \
+  || fail "временная база для проверки дампа не создана"
+created_verify_db=1
+# shellcheck disable=SC2016
+dc exec -T postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d "$1" --no-owner --exit-on-error' sh "$verify_db" \
+  <"$partial/db.dump" || fail "дамп не восстанавливается во временную базу"
+# shellcheck disable=SC2016
+table_counts="$(dc exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$1" -X -q -At -F " " -v ON_ERROR_STOP=1' sh "$verify_db" \
+  <ops/backup/table-counts.sql | tr -d '\r')" || fail "подсчёт строк в таблицах дампа не выполнился"
+drop_verify_db || fail "временная база $verify_db не удалена"
 gzip -t "$partial/ha-config.tar.gz" || fail "архив тома HA повреждён (gzip -t)"
 listing="$(tar -tzf "$partial/ha-config.tar.gz")" || fail "архив тома HA не читается tar"
 for member in .storage/core.entity_registry home-assistant_v2.db; do
