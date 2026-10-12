@@ -49,7 +49,7 @@
        все дистрибутивы, в том числе Docker Desktop), выполняет -Migrate;
     6. правило Hyper-V firewall domovoy-engine-ports: входящие TCP на порты
        API и Home Assistant, только с локальной подсети и с адресов петли
-       хоста (127.0.0.1, ::1);
+       хоста (127.0.0.1; ::1 правило Hyper-V не принимает);
     7. последним шагом — расписание бэкапа:
        ops/backup/install-schedule.ps1 -Install -LogonType S4U.
 
@@ -179,7 +179,9 @@ $RuleName = 'domovoy-engine-ports'
 $WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 $ImageBase = 'https://cloud-images.ubuntu.com/wsl/releases/24.04/current'
 $ImageFile = 'ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz'
-$RemoteAddresses = @('LocalSubnet', '127.0.0.1', '::1')
+$RemoteAddresses = @('LocalSubnet', '127.0.0.1')
+# ::1 New-NetFirewallHyperVRule отвергает («Параметр задан неверно», проба на
+# хосте 2026-10-12): IPv6-петля в правиле Hyper-V не задаётся.
 
 function Stop-WithError([string]$Message, [int]$Code = 1) {
     [Console]::Error.WriteLine("engine-setup: $Message")
@@ -1622,7 +1624,7 @@ else {
 
 # /health с хоста через петлю. Петля в mirrored при правиле только на
 # LocalSubnet в опыте 2026-10-12 отвечала тайм-аутом; правило дополнено
-# 127.0.0.1 и ::1.
+# 127.0.0.1 (::1 правило Hyper-V не принимает).
 $loop = Get-Health ('http://localhost:{0}/health' -f $apiPort)
 if ($loop.Stack) { Add-Result 'OK' "/health на localhost:$apiPort" '200 формы стека' }
 elseif ($loop.Code) { Add-Result 'FAIL' "/health на localhost:$apiPort" "код $($loop.Code)$(if ($loop.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
