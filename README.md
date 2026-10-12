@@ -303,41 +303,69 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 6. ставит расписание бэкапа.
 
 `wsl --shutdown` установка не выполняет: он гасит все дистрибутивы, в том
-числе Docker Desktop.
+числе Docker Desktop. Его выполняет переезд (`-Migrate`, ниже).
 
-**Окно переезда с Docker Desktop.** Данные переносят сценарии бэкапа и
-восстановления; тома Docker Desktop не трогаются — это путь отката. История
-рекордера HA за минуты окна теряется. Порядок:
+**Окно переезда с Docker Desktop.** Одна команда в терминале PowerShell от
+администратора, в каталоге клона: установка, затем переезд. На уже
+установленном движке — один `-Migrate`; без установленного движка он
+отказывает и подсказывает `-Install -Migrate`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -Migrate -DryRun  # что будет сделано
+powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -Migrate
+```
+
+Данные переносят сценарии бэкапа и восстановления; тома Docker Desktop не
+трогаются — это путь отката. История рекордера HA за минуты окна теряется.
+До любых действий `-Migrate` проверяет предусловия и при отказе ничего не
+меняет:
+
+- Docker Desktop работает, у него есть контейнеры проекта
+  (`COMPOSE_PROJECT_NAME`), postgres и homeassistant запущены;
+- в движке ещё нет ни контейнеров, ни томов проекта — повторный перенос
+  данные не затирает;
+- есть Git Bash (`bash.exe` Git for Windows);
+- `BACKUP_DIR` в `.env` задан путём Windows (`<диск>:/…`), каталог есть.
+
+Что делает `-Migrate` — тот же порядок, что раньше выполнялся руками:
 
 1. На Docker Desktop: `docker compose stop api` — Backend больше не пишет в
    базу.
-2. `bash ops/backup/backup.sh` из Git Bash.
+2. `ops/backup/backup.sh` из Git Bash в `BACKUP_DIR`.
 3. `docker compose --profile ha stop` — именно `stop`, а не `down -v`.
-4. `docker desktop stop`.
-5. `wsl --shutdown` — применяет mirrored. Проверить, что остальные
-   дистрибутивы и сервисы в WSL работают как прежде.
-6. `Start-ScheduledTask domovoy-engine`.
-7. Из каталога клона:
-   `wsl.exe -d domovoy-engine --exec bash ops/backup/restore.sh --project domovoy --from /mnt/<диск>/<каталог-бэкапа>`
-   (имя проекта — `COMPOSE_PROJECT_NAME` из `.env`).
-8. Подъём стека: `docker compose --profile ha up -d --build --wait` (через функцию
-   ниже). Проверить `/health` на `API_HTTP_PORT` с хоста, HA и `/health` с
-   телефона в домашней сети.
-9. Восстановление после ранней недоступности базы: `docker compose stop
-   postgres` — `/health` отдаёт 503; `docker compose start postgres` — не
-   позже чем через 60 с снова 200, без перезапуска api.
-10. Проверка всех звеньев — код 0:
+4. `docker desktop stop` и ожидание, пока его процессы завершатся.
+5. Выключает автозапуск Docker Desktop при входе (`AutoStart` в
+   `%APPDATA%\Docker\settings-store.json`, копия — `.domovoy-backup`): иначе
+   после входа он займёт порты стека. Нет файла — предупреждение.
+6. `wsl --shutdown` — применяет mirrored и гасит **все** дистрибутивы WSL.
+7. `Start-ScheduledTask domovoy-engine` и ожидание docker в дистрибутиве.
+8. Внутри дистрибутива: `ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME>
+   --from <бэкап шага 2>` — он же поднимает стек и ждёт `/health`.
+9. `engine-setup.ps1 -Check` — его код выхода и есть код `-Migrate`.
 
-    ```powershell
-    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
-    ```
+Отказ после шага 1 сам ничего не откатывает: вывод говорит, что тома Docker
+Desktop целы, и печатает команды отката (раздел «Откат на Docker Desktop»).
 
-    `-Check` только читает: дистрибутив не запускает и не останавливает.
-    Звенья внутри остановленного дистрибутива помечаются «не проверено», и
-    код тогда ненулевой.
-    Доступ из ЛВС `-Check` не проверяет — в mirrored хост не достаёт до
-    дистрибутива по своему адресу в ЛВС; его проверяет `/health` с телефона
-    в домашней сети (шаг 8), а звено печатается SKIP вне итога и кода.
+После переезда — руками:
+
+- проверить, что остальные дистрибутивы и сервисы в WSL работают как
+  прежде (mirrored действует на все);
+- HA и `/health` с телефона в домашней сети — доступ из ЛВС `-Check` не
+  проверяет: в mirrored хост не достаёт до дистрибутива по своему адресу в
+  ЛВС, звено печатается SKIP вне итога и кода;
+- восстановление после ранней недоступности базы: `docker compose stop
+  postgres` (через функцию ниже) — `/health` отдаёт 503; `docker compose
+  start postgres` — не позже чем через 60 с снова 200, без перезапуска api.
+
+`-Check` отдельно — проверка всех звеньев, код 0:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
+```
+
+`-Check` только читает: дистрибутив не запускает и не останавливает. Звенья
+внутри остановленного дистрибутива помечаются «не проверено», и код тогда
+ненулевой.
 
 **docker из Git Bash.** Движок живёт внутри дистрибутива, поэтому команды
 `docker` из этого README идут через обёртку. Строка в `~/.bashrc`:
@@ -353,8 +381,9 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 - абсолютные пути Windows в аргументах не переводятся;
 - `-it` у `docker exec` зависит от TTY Git Bash;
 - функция есть только в интерактивной оболочке, поэтому сценарии
-  `ops/backup/*.sh` запускаются внутри дистрибутива (команды выше), а не
-  через неё.
+  `ops/backup/*.sh` запускаются внутри дистрибутива
+  (`wsl.exe -d domovoy-engine --cd <клон> --exec bash ops/backup/…`, так их
+  зовут `-Migrate` и задача бэкапа), а не через неё.
 
 **Проверочные перезагрузки и замер.** Задача `domovoy-measure-boot` после
 каждой загрузки дописывает строку в
@@ -398,8 +427,9 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
    задачи `domovoy-engine` и `domovoy-measure-boot` — иначе после
    перезагрузки рядом с Docker Desktop поднялся бы второй стек, — ставит
    расписание бэкапа под Docker Desktop (`-LogonType Interactive`), гасит
-   дистрибутив, удаляет правило firewall и возвращает `.wslconfig` из копии
-   или удаляет его по отметке. Дистрибутив с томами остаётся:
+   дистрибутив, удаляет правило firewall, возвращает `.wslconfig` из копии
+   или удаляет его по отметке и возвращает автозапуску Docker Desktop
+   прежнее значение, если его выключал `-Migrate`. Дистрибутив с томами остаётся:
    `wsl --unregister domovoy-engine` уничтожает их — только решением
    владельца.
 2. Убрать функцию `docker()` из `~/.bashrc` и открыть новую оболочку —
