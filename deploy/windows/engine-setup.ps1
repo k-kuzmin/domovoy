@@ -57,6 +57,9 @@
   дистрибутива заходит, только если он уже работает. Каждое звено — строка
   OK / FAIL / SKIP; код 0 — только если все OK. SKIP — «не проверено»
   (дистрибутив не запущен, нет прав прочитать правило), код тоже ненулевой.
+  Исключение — звено «/health из ЛВС»: в mirrored хост не достаёт до
+  дистрибутива по своему адресу в ЛВС, поэтому оно всегда SKIP, в итог и
+  код не входит, а проверяется с устройства в домашней сети.
 
   Предусловия, которые сценарий не проверяет: в BIOS «восстановление после
   пропадания питания — включиться»; BitLocker без PIN до загрузки.
@@ -532,8 +535,10 @@ if ($Install) {
 
 # ---------------------------------------------------------------- -Check
 $results = New-Object System.Collections.Generic.List[object]
-function Add-Result([string]$State, [string]$Link, [string]$Detail) {
-    $results.Add([pscustomobject]@{ State = $State; Link = $Link; Detail = $Detail })
+# Counted = $false — звено, которое с хоста не проверяется по устройству
+# сети: в вывод идёт, в итог и код выхода — нет.
+function Add-Result([string]$State, [string]$Link, [string]$Detail, [bool]$Counted = $true) {
+    $results.Add([pscustomobject]@{ State = $State; Link = $Link; Detail = $Detail; Counted = $Counted })
     $line = '{0,-4} {1}' -f $State, $Link
     if ($Detail) { $line += " — $Detail" }
     Write-Output $line
@@ -644,29 +649,20 @@ else {
     else { Add-Result 'OK' 'порт замера = опубликованный порт api' "$measurePort" }
 }
 
-# /health с хоста: через петлю и через адрес хоста в ЛВС (сам адрес не
-# печатается). Петля в mirrored при правиле только на LocalSubnet в опыте
-# 2026-10-12 отвечала тайм-аутом; правило дополнено 127.0.0.1 и ::1.
+# /health с хоста через петлю. Петля в mirrored при правиле только на
+# LocalSubnet в опыте 2026-10-12 отвечала тайм-аутом; правило дополнено
+# 127.0.0.1 и ::1.
 $loop = Get-Health ('http://localhost:{0}/health' -f $apiPort)
 if ($loop.Stack) { Add-Result 'OK' "/health на localhost:$apiPort" '200 формы стека' }
 elseif ($loop.Code) { Add-Result 'FAIL' "/health на localhost:$apiPort" "код $($loop.Code)$(if ($loop.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
 else { Add-Result 'FAIL' "/health на localhost:$apiPort" "нет ответа: $($loop.Error)" }
 
-$lanAddress = $null
-try {
-    $lanAddress = @(Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway -and $_.IPv4Address } |
-            ForEach-Object { @($_.IPv4Address)[0].IPAddress })[0]
-}
-catch { $lanAddress = $null }
-if (-not $lanAddress) {
-    Add-Result 'SKIP' "/health на адресе хоста в ЛВС, порт $apiPort" 'не проверено: нет интерфейса со шлюзом по умолчанию'
-}
-else {
-    $lan = Get-Health ('http://{0}:{1}/health' -f $lanAddress, $apiPort)
-    if ($lan.Stack) { Add-Result 'OK' "/health на адресе хоста в ЛВС, порт $apiPort" '200 формы стека' }
-    elseif ($lan.Code) { Add-Result 'FAIL' "/health на адресе хоста в ЛВС, порт $apiPort" "код $($lan.Code)" }
-    else { Add-Result 'FAIL' "/health на адресе хоста в ЛВС, порт $apiPort" "нет ответа: $($lan.Error)" }
-}
+# Доступ из ЛВС с хоста не проверяется: в mirrored хост не достаёт до
+# слушателя дистрибутива по своему же адресу в ЛВС (hostAddressLoopback по
+# умолчанию false, -Install его не пишет) — такой запрос отказал бы всегда.
+# Его проверяет устройство в домашней сети (README, «Проверочные
+# перезагрузки и замер»); звено печатается, но в итог и код не входит.
+Add-Result 'SKIP' "/health из ЛВС, порт $apiPort" 'не проверяется с хоста в mirrored — доступ из ЛВС проверяет устройство в сети' $false
 
 # Расписание бэкапа (#8): S4U и состояние по install-schedule.ps1 -Check.
 $backupTaskObject = Get-ScheduledTask -TaskName $BackupTask -ErrorAction SilentlyContinue
@@ -683,10 +679,10 @@ else {
     else { Add-Result 'OK' 'расписание бэкапа' 'S4U' }
 }
 
-$notOk = @($results | Where-Object { $_.State -ne 'OK' })
+$notOk = @($results | Where-Object { $_.Counted -and $_.State -ne 'OK' })
 if ($notOk.Count) {
     Write-Output ('итог: не закрыто звеньев — {0}: {1}' -f $notOk.Count, (($notOk | ForEach-Object { $_.Link }) -join '; '))
     exit 1
 }
-Write-Output 'итог: все звенья OK'
+Write-Output 'итог: все звенья, проверяемые с хоста, OK; доступ из ЛВС — с устройства в сети'
 exit 0
