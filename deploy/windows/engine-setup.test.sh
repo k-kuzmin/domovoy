@@ -324,6 +324,7 @@ test_engine_setup_dry_run() {
       'firewall.name: domovoy-engine-ports' 'firewall.direction: Inbound' 'firewall.protocol: TCP' \
       'firewall.vmcreatorid: {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' \
       "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet,127.0.0.1' \
+      'firewall.profiles: Private' 'firewall.profiles.private_only: True' \
       'wslconfig.exists: False' 'wslconfig.changed: True' 'wslconfig.line: [wsl2]' 'wslconfig.line: networkingMode=mirrored' \
       'backup.LogonType: S4U' 'backup.exitcode: 0' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name/$shell" "нет «$line»"; show_out; return; }
@@ -717,6 +718,41 @@ test_engine_setup_migrate_dry_run() {
   ok "$name"
 }
 
+# Функции сценария по имени — из AST, без исполнения самого сценария (он
+# разбирает режим и выходит). ps_functions <shell> <сценарий> <выражение>
+# <функция>…: определения, затем выражение; вывод — в $work/out.
+ps_functions() {
+  local shell="$1" script="$2" expr="$3"
+  shift 3
+  # shellcheck disable=SC2016
+  PS1_PATH="$(cygpath -w "$script")" PS1_FUNCS="$*" PS1_EXPR="$expr" run "$shell" -NoProfile -NonInteractive -Command '
+    $ErrorActionPreference = "Stop"
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+    foreach ($fn in $env:PS1_FUNCS -split " ") {
+      $def = $ast.Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq $fn }, $true)
+      if (-not $def) { "нет функции $fn"; exit 9 }
+      . ([scriptblock]::Create($def.Extent.Text))
+    }
+    . ([scriptblock]::Create($env:PS1_EXPR))'
+}
+
+# Профиль правила firewall: только Private — перечислением или числом 2.
+# Any (0), Public и сочетания с ним — не Private. -Check читает Profiles
+# правила этой же функцией.
+test_rule_profile_private_only() {
+  local name=rule_profile_private_only shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      foreach ($v in "Private", "2", 2) { if (-not (Test-PrivateProfileOnly $v)) { "отвергнут $v"; exit 1 } }
+      foreach ($v in "Any", "0", 0, "Public", "Private, Public", "Domain, Private", "") { if (Test-PrivateProfileOnly $v) { "принят $v"; exit 1 } }' \
+      Test-PrivateProfileOnly
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 python_cmd() {
   local candidate
   for candidate in python3 python; do
@@ -817,6 +853,7 @@ test_ps1_encoding_and_parse
 test_engine_setup_dry_run
 test_engine_setup_uninstall_dry_run
 test_engine_setup_migrate_dry_run
+test_rule_profile_private_only
 test_measure_boot
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
