@@ -47,9 +47,12 @@ export HA_HTTP_PORT="$ha_port"
 export RESTORE_CHECK_PROJECT="$check_project"
 
 registry_fixture="$here/fixtures/core.entity_registry.json"
-# Число не отключённых записей фикстуры — через сам модуль на хосте не
-# считается (python на хосте не обязателен): фикстура известна.
-expected_ha=3
+# Число не отключённых записей фикстуры известно заранее (python на хосте
+# не обязателен). HA на старте добавляет к ним сущности встроенных
+# интеграций, поэтому ожидаемое число в манифесте — expected_ha — берётся
+# из живого реестра после засева, а не из фикстуры.
+fixture_enabled=3
+expected_ha=''
 marker="example-marker-$$-$RANDOM"
 
 work="$(mktemp -d)"
@@ -213,9 +216,15 @@ start_source_stack() {
   [ -f .env ] || { echo "backup.test: нет .env — cp .env.example .env" >&2; return 1; }
   stack_started=1
 
-  # Реестр и файл-маркер — до первого старта HA, в его собственный том.
+  # Реестр, файл-маркер и минимальный configuration.yaml — до первого
+  # старта HA, в его собственный том. Без configuration.yaml HA пишет свой
+  # с default_config и тянет десятки интеграций; минимальный набор держит
+  # реестр маленьким. recorder даёт живую базу home-assistant_v2.db, api —
+  # /api/ для проверки старта.
   dcs run --rm --no-deps -T --entrypoint sh homeassistant -c \
-    "mkdir -p /config/.storage && cat >/config/.storage/core.entity_registry && echo '$marker' >/config/domovoy-marker.txt" \
+    "mkdir -p /config/.storage && cat >/config/.storage/core.entity_registry \
+      && echo '$marker' >/config/domovoy-marker.txt \
+      && printf 'homeassistant:\n  name: Example Home\nrecorder:\napi:\n' >/config/configuration.yaml" \
     <"$registry_fixture" || return 1
 
   dcs up -d --build --wait --wait-timeout 300 </dev/null || return 1
@@ -262,12 +271,37 @@ single_backup_in() {
 
 test_seeded_registry_survives_ha_start() {
   local name=ha_registry_and_recorder_survive_backup/seed
-  local count
-  count="$(registry_count_in "$src_project")"
-  if [ "$count" != "$expected_ha" ]; then
-    fail "$name" "после старта HA в реестре «$count» не отключённых записей, в фикстуре $expected_ha — тест проверял бы пустоту"
+  # HA сохраняет реестр с задержкой и на старте добавляет сущности своих
+  # встроенных интеграций (backup). Число берётся, когда оно перестало
+  # меняться: три одинаковых чтения подряд с шагом 5 с.
+  local count='' previous='' same=0 deadline=$((SECONDS + 180))
+  while [ "$same" -lt 3 ]; do
+    [ "$SECONDS" -lt "$deadline" ] || { fail "$name" "реестр не успокоился за 180 с"; return 1; }
+    sleep 5
+    count="$(registry_count_in "$src_project")"
+    if [ -n "$count" ] && [ "$count" = "$previous" ]; then same=$((same + 1)); else same=1; fi
+    previous="$count"
+  done
+  # Засеянные записи пережили старт: каждая включённая запись фикстуры есть
+  # в живом реестре и не отключена. Иначе тест проверял бы чужие сущности.
+  local missing
+  missing="$(docker compose -p "$src_project" -f docker-compose.yml --profile ha exec -T homeassistant \
+    python3 -c '
+import json, sys
+fixture = json.load(sys.stdin)["data"]["entities"]
+live = json.load(open("/config/.storage/core.entity_registry"))["data"]["entities"]
+enabled = {e["entity_id"] for e in live if e.get("disabled_by") is None}
+print(sum(1 for e in fixture if e.get("disabled_by") is None and e["entity_id"] not in enabled))
+' <"$registry_fixture" | tr -d '\r')"
+  if [ "$missing" != '0' ]; then
+    fail "$name" "после старта HA из фикстуры пропало включённых записей: «$missing»"
     return 1
   fi
+  if ! [[ "$count" =~ ^[0-9]+$ ]] || [ "$count" -lt "$fixture_enabled" ]; then
+    fail "$name" "в живом реестре «$count» не отключённых записей, в фикстуре $fixture_enabled"
+    return 1
+  fi
+  expected_ha="$count"
   ok "$name"
 }
 
@@ -280,7 +314,7 @@ test_backup_creates_complete_backup() {
   grep -qx 'db_table public.domovoy_marker 1' "$backup/manifest.txt" \
     || { fail "$name" "в манифесте нет строки маркерной таблицы"; return 1; }
   grep -qx "ha_registry_enabled $expected_ha" "$backup/manifest.txt" \
-    || { fail "$name" "в манифесте не $expected_ha сущностей"; return 1; }
+    || { fail "$name" "в манифесте не $expected_ha сущностей: $(grep '^ha_registry_enabled' "$backup/manifest.txt")"; return 1; }
   local listing
   listing="$(tar -tzf "$backup/ha-config.tar.gz")"
   if grep -qE '(-wal|-shm)$' <<<"$listing"; then fail "$name" "в архиве -wal/-shm"; return 1; fi
@@ -367,6 +401,8 @@ test_restore_check_requires_ha_api_by_default() {
   run bash ops/backup/restore.sh --from "$backup" --check
   if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без флага на токене-плейсхолдере"; show_out; return; fi
   if grep -q 'пропущена' "$work/out"; then fail "$name" "проверка пропущена без флага"; return; fi
+  grep -q 'токен из окружения api не принят' "$work/out" \
+    || { fail "$name" "отказ не по токену"; show_out; return; }
   ok "$name"
 }
 
