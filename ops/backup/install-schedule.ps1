@@ -7,9 +7,9 @@
   Вызывается установщиком развёртывания (#6), отдельного шага у владельца
   нет; -Install требует терминала администратора:
 
-    pwsh -File ops/backup/install-schedule.ps1            # то же, что -Install
-    pwsh -File ops/backup/install-schedule.ps1 -Check     # состояние и хвост backup.log
-    pwsh -File ops/backup/install-schedule.ps1 -Uninstall
+    powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1         # то же, что -Install
+    powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check  # состояние и хвост backup.log
+    powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Uninstall
 
   -Install регистрирует задачу domovoy-backup: ежедневно в 03:30 (-At ЧЧ:ММ)
   запускает bash.exe Git for Windows с одним аргументом — путём к
@@ -210,13 +210,13 @@ if ($Install) {
         -Settings $settings -Description 'Домовой: ночной бэкап БД и тома Home Assistant (ops/backup/backup.sh)' -Force
     Write-Output ("задача {0} зарегистрирована: ежедневно {1}, {2} {3}" -f $TaskName,
         $time.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture), $bash, $argument)
-    Write-Output 'проверка: pwsh -File ops/backup/install-schedule.ps1 -Check'
+    Write-Output 'проверка: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check'
     exit 0
 }
 
 if ($Check) {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $task) { Stop-WithError "задачи $TaskName нет — поставьте: pwsh -File ops/backup/install-schedule.ps1" }
+    if (-not $task) { Stop-WithError "задачи $TaskName нет — поставьте: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1" }
     $info = $task | Get-ScheduledTaskInfo
     $action = @($task.Actions)[0]
     Write-Output "Task: $TaskName"
