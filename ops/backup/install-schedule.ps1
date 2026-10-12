@@ -21,7 +21,7 @@
   domovoy-engine (deploy/windows/engine-setup.ps1), задача идёт без входа
   пользователя и без хранимого пароля:
 
-    wsl.exe -d domovoy-engine --cd "<клон>" -- bash ops/backup/backup.sh
+    wsl.exe -d domovoy-engine --cd "<клон>" --exec bash ops/backup/backup.sh
 
   backup.sh выполняется внутри дистрибутива: docker там — сам движок, без
   обёртки и без интерактивной оболочки; клон виден как /mnt/<диск>/…,
@@ -190,7 +190,7 @@ if ($Install) {
         # Без входа: backup.sh внутри дистрибутива движка, путь сценария —
         # от корня клона, который wsl.exe делает текущим каталогом.
         $execute = Join-Path $env:SystemRoot 'System32\wsl.exe'
-        $argument = '-d {0} --cd "{1}" -- bash ops/backup/backup.sh' -f $Distro, $root
+        $argument = '-d {0} --cd "{1}" --exec bash ops/backup/backup.sh' -f $Distro, $root
     }
     else {
         $execute = Resolve-Bash

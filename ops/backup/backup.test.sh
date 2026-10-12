@@ -638,7 +638,7 @@ test_install_schedule_dry_run() {
   # По умолчанию (#6) — запуск без входа пользователя: backup.sh идёт внутри
   # дистрибутива движка, где docker — сам движок; каталог клона — его
   # текущий каталог, сценарий — путь от корня клона.
-  engine_arg="-d domovoy-engine --cd \"$(cygpath -w "$work/clone")\" -- bash ops/backup/backup.sh"
+  engine_arg="-d domovoy-engine --cd \"$(cygpath -w "$work/clone")\" --exec bash ops/backup/backup.sh"
   local first=''
   for shell in "${shells[@]}"; do
     run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
