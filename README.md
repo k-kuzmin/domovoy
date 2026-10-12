@@ -336,9 +336,17 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 2. `ops/backup/backup.sh` из Git Bash в `BACKUP_DIR`.
 3. `docker compose --profile ha stop` — именно `stop`, а не `down -v`.
 4. `docker desktop stop` и ожидание, пока его процессы завершатся.
-5. Выключает автозапуск Docker Desktop при входе (`AutoStart` в
-   `%APPDATA%\Docker\settings-store.json`, копия — `.domovoy-backup`): иначе
-   после входа он займёт порты стека. Нет файла — предупреждение.
+5. Выключает автозапуск Docker Desktop при входе — иначе после входа он
+   займёт порты стека:
+   - `AutoStart` в `%APPDATA%\Docker\settings-store.json`, копия —
+     `.domovoy-backup`; нет файла — предупреждение;
+   - запускает Desktop при входе значение `Docker Desktop` в ветке реестра
+     `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Если оно есть,
+     его выключает значение того же имени в
+     `…\Explorer\StartupApproved\Run` — так же, как «Автозагрузка» Диспетчера
+     задач. Прежнее значение сохраняется рядом с настройками Desktop
+     (`StartupApproved-Run.domovoy-backup` или отметка `.domovoy-absent`).
+     `-Check` отдаёт FAIL, если запись включена.
 6. Держалка, если работает, останавливается (`Stop-ScheduledTask`), затем
    `wsl --shutdown` — применяет mirrored и гасит **все** дистрибутивы WSL.
 7. `Start-ScheduledTask domovoy-engine`, ожидание, пока задача перейдёт в
@@ -436,7 +444,8 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
    расписание бэкапа под Docker Desktop (`-LogonType Interactive`), гасит
    дистрибутив, удаляет правило firewall, возвращает `.wslconfig` из копии
    или удаляет его по отметке и возвращает автозапуску Docker Desktop
-   прежнее значение, если его выключал `-Migrate`. Дистрибутив с томами остаётся:
+   прежнее значение — и в настройках, и в реестре, — если его выключал
+   `-Migrate`. Дистрибутив с томами остаётся:
    `wsl --unregister domovoy-engine` уничтожает их — только решением
    владельца.
 2. Убрать функцию `docker()` из `~/.bashrc` и открыть новую оболочку —

@@ -17,7 +17,10 @@
 #     план отката (с возвратом AutoStart Docker Desktop) и не трогает
 #     .wslconfig, копию и отметку; -Migrate -DryRun печатает шаги переезда
 #     в порядке контракта, без down, отказывает без установленного движка и
-#     не трогает настройки Docker Desktop; measure-boot.ps1 против
+#     не трогает настройки Docker Desktop; запись автозапуска Desktop в
+#     реестре — во временной ветке HKCU\Software\domovoy-test\…, которая
+#     убирается при выходе, настоящие Run и StartupApproved не читаются;
+#     measure-boot.ps1 против
 #     локальной заглушки /health на python (порт на 127.0.0.1, журнал во
 #     временном каталоге).
 #
@@ -33,8 +36,14 @@ cd "$root" || exit 1
 
 work="$(mktemp -d)"
 stub_pid=''
+# Ветка реестра для записи автозапуска Docker Desktop — своя, под
+# HKCU\Software\domovoy-test: настоящие Run и StartupApproved тест не
+# читает и не трогает. Создаётся по требованию, убирается при выходе.
+reg_root="HKCU:\\Software\\domovoy-test\\engine-setup-$$-$RANDOM"
+reg_used=''
 cleanup() {
   if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null || true; fi
+  if [ -n "$reg_used" ]; then reg_helper remove >/dev/null 2>&1 || true; fi
   rm -rf -- "$work"
 }
 trap cleanup EXIT
@@ -214,7 +223,8 @@ engine_setup() {
   local shell="$1"
   shift
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" \
-    "$@" -WslConfigPath "$(cygpath -w "$work/wslconfig")" -DockerSettingsDir "$(cygpath -w "$work/docker")"
+    "$@" -WslConfigPath "$(cygpath -w "$work/wslconfig")" -DockerSettingsDir "$(cygpath -w "$work/docker")" \
+    -StartupRegistryRoot "$reg_root"
   tr -d '\r' <"$work/out" >"$work/out.$shell"
 }
 
@@ -225,6 +235,44 @@ dry_run() {
 }
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
+
+# Ветка $reg_root: set <запись Run 0|1> <hex StartupApproved или ''>,
+# dump — состояние одной строкой, remove — убрать ветку теста.
+reg_helper() {
+  if [ ! -f "$work/reg.ps1" ]; then
+    cat >"$work/reg.ps1" <<'EOF'
+param([string]$Root, [string]$Action, [string]$Run = '0', [string]$Approved = '')
+$ErrorActionPreference = 'Stop'
+$name = 'Docker Desktop'
+$runKey = Join-Path $Root 'Run'
+$approvedKey = Join-Path $Root 'Explorer\StartupApproved\Run'
+if ($Root -notlike 'HKCU:\Software\domovoy-test\*') { throw "not a test key: $Root" }
+switch ($Action) {
+  'set' {
+    if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
+    $null = New-Item -Path $runKey -Force
+    $null = New-Item -Path $approvedKey -Force
+    if ($Run -eq '1') { $null = New-ItemProperty -LiteralPath $runKey -Name $name -Value 'C:\example\Docker Desktop.exe -Autostart' -PropertyType String }
+    if ($Approved) { $null = New-ItemProperty -LiteralPath $approvedKey -Name $name -PropertyType Binary -Value ([byte[]]@($Approved -split '-' | ForEach-Object { [Convert]::ToByte($_, 16) })) }
+  }
+  'dump' {
+    $r = Get-ItemProperty -LiteralPath $runKey -Name $name -ErrorAction SilentlyContinue
+    $a = Get-ItemProperty -LiteralPath $approvedKey -Name $name -ErrorAction SilentlyContinue
+    'run=' + [bool]$r + ' approved=' + $(if ($a) { [BitConverter]::ToString([byte[]]@($a.$name)) } else { '' })
+  }
+  'remove' {
+    if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
+    $parent = Split-Path -Parent $Root
+    if ((Test-Path -LiteralPath $parent) -and -not @(Get-ChildItem -LiteralPath $parent).Count) { Remove-Item -LiteralPath $parent -Force }
+  }
+}
+EOF
+  fi
+  reg_used=1
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/reg.ps1")" -Root "$reg_root" -Action "$@"
+}
+
+reg_set() { reg_helper set -Run "$1" -Approved "$2" >/dev/null; }
 
 # Содержимое .wslconfig из сухого прогона байт в байт против ожидаемого.
 wslconfig_bytes_are() {
@@ -437,6 +485,22 @@ test_engine_setup_uninstall_dry_run() {
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
     has "$shell" 'uninstall.desktop_autostart: restore AutoStart=true from settings-store.json.domovoy-backup' \
       || { fail "$name" "возврат AutoStart Docker Desktop не в плане отката"; show_out; return; }
+    has "$shell" 'uninstall.desktop_logon_entry: keep (no StartupApproved-Run.domovoy-backup copy and no StartupApproved-Run.domovoy-absent marker)' \
+      || { fail "$name" "без копии и отметки откат трогает запись автозапуска"; show_out; return; }
+    # Копия прежнего значения StartupApproved — откат возвращает его; отметка — убирает.
+    printf '02-00-00-00-00-00-00-00-00-00-00-00' >"$work/docker/StartupApproved-Run.domovoy-backup"
+    cp -R "$work/docker/." "$work/docker.before/"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    has "$shell" "uninstall.desktop_logon_entry: restore StartupApproved\\Run 'Docker Desktop' = 02-00-00-00-00-00-00-00-00-00-00-00 from StartupApproved-Run.domovoy-backup" \
+      || { fail "$name" "возврат записи автозапуска не в плане отката"; show_out; return; }
+    rm -f "$work/docker/StartupApproved-Run.domovoy-backup" "$work/docker.before/StartupApproved-Run.domovoy-backup"
+    : >"$work/docker/StartupApproved-Run.domovoy-absent"
+    cp -R "$work/docker/." "$work/docker.before/"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    has "$shell" "uninstall.desktop_logon_entry: remove StartupApproved\\Run 'Docker Desktop' (marker StartupApproved-Run.domovoy-absent)" \
+      || { fail "$name" "отметка «не было» не учтена"; show_out; return; }
+    rm -f "$work/docker/StartupApproved-Run.domovoy-absent" "$work/docker.before/StartupApproved-Run.domovoy-absent"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
     diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
     for line in 'uninstall.engine.running: True' \
       'uninstall.task.unregister: domovoy-engine' 'uninstall.task.unregister: domovoy-measure-boot' \
@@ -488,7 +552,7 @@ test_engine_setup_uninstall_dry_run() {
 # Состояние движка подменяется: на машине владельца он может быть и
 # установлен, и нет.
 migrate_order=(migrate.stop_api migrate.backup migrate.stop_stack migrate.desktop_stop migrate.desktop_autostart
-  migrate.keeper_stop migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
+  migrate.desktop_logon_entry migrate.keeper_stop migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
 
 test_engine_setup_migrate_dry_run() {
   local name=engine_setup_migrate_dry_run
@@ -545,6 +609,28 @@ test_engine_setup_migrate_dry_run() {
     fi
     ok "$name"
   done
+
+  # Запись автозапуска Desktop в реестре (ветка теста): включённая —
+  # выключается через StartupApproved с копией прежнего значения или
+  # отметкой «не было»; выключенная и отсутствующая — не трогаются. Сухой
+  # прогон ветку не меняет.
+  name=engine_setup_migrate_logon_entry
+  local reg_case reg_before
+  for reg_case in \
+    "1||StartupApproved\\Run 'Docker Desktop' -> 03-00-00-00 + FILETIME (disabled; previous value absent, marker StartupApproved-Run.domovoy-absent; -Uninstall restores it)" \
+    "1|02-00-00-00-00-00-00-00-00-00-00-00|StartupApproved\\Run 'Docker Desktop' -> 03-00-00-00 + FILETIME (disabled; previous value 02-00-00-00-00-00-00-00-00-00-00-00, copy StartupApproved-Run.domovoy-backup; -Uninstall restores it)" \
+    "1|03-00-00-00-00-00-00-00-00-00-00-00|StartupApproved\\Run 'Docker Desktop' 03-00-00-00-00-00-00-00-00-00-00-00 already disabled - unchanged" \
+    "0|02-00-00-00-00-00-00-00-00-00-00-00|no value 'Docker Desktop' in $reg_root\\Run - unchanged"; do
+    reg_set "${reg_case%%|*}" "$(echo "$reg_case" | cut -d'|' -f2)" || { fail "$name" "ветка теста в реестре не создана"; return; }
+    reg_before="$(reg_helper dump)"
+    engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    has "${shells[0]}" "migrate.desktop_logon_entry: ${reg_case#*|*|}" || { fail "$name" "нет «migrate.desktop_logon_entry: ${reg_case#*|*|}»"; show_out; return; }
+    [ "$(reg_helper dump)" = "$reg_before" ] || { fail "$name" "сухой прогон изменил ветку реестра"; return; }
+  done
+  [ ! -e "$work/docker/StartupApproved-Run.domovoy-backup" ] && [ ! -e "$work/docker/StartupApproved-Run.domovoy-absent" ] \
+    || { fail "$name" "сухой прогон записал копию или отметку"; return; }
+  ok "$name"
 
   # Один -Migrate без установленного движка — отказ с подсказкой, плана нет.
   name=engine_setup_migrate_requires_engine

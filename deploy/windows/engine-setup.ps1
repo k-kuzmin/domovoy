@@ -82,7 +82,14 @@
        времени, процессы не убиваются);
     5. автозапуск Desktop при входе выключается: %APPDATA%\Docker\
        settings-store.json, ключ AutoStart (старые версии — settings.json,
-       autoStart); прежний файл — копией .domovoy-backup. Файла нет — WARN;
+       autoStart); прежний файл — копией .domovoy-backup. Файла нет — WARN.
+       Запускает Desktop при входе значение «Docker Desktop» в
+       HKCU\...\CurrentVersion\Run: если оно есть, значение того же имени
+       в Explorer\StartupApproved\Run получает 03 00 00 00 + время
+       (выключено, как в Диспетчере задач); прежнее значение — копией
+       StartupApproved-Run.domovoy-backup (hex) или отметкой
+       StartupApproved-Run.domovoy-absent рядом с настройками Desktop.
+       Записи Run нет или она уже выключена — не трогается;
     6. держалка, если работает, — Stop-ScheduledTask, затем wsl --shutdown —
        гасит ВСЕ дистрибутивы WSL, применяет mirrored. Задача держалки
        с MultipleInstances IgnoreNew: «зависший» Running молча проглотил
@@ -103,6 +110,9 @@
   дистрибутива заходит, только если он уже работает. Каждое звено — строка
   OK / FAIL / SKIP; код 0 — только если все OK. SKIP — «не проверено»
   (дистрибутив не запущен, нет прав прочитать правило), код тоже ненулевой.
+  Звено «автозапуск Docker Desktop при входе выключен» — FAIL, если
+  запись Run «Docker Desktop» есть и не выключена через StartupApproved
+  или в настройках Desktop AutoStart true.
   Исключение — звено «/health из ЛВС»: в mirrored хост не достаёт до
   дистрибутива по своему адресу в ЛВС, поэтому оно всегда SKIP, в итог и
   код не входит, а проверяется с устройства в домашней сети.
@@ -123,6 +133,10 @@
     7. автозапуск Docker Desktop: если -Migrate оставил копию настроек
        .domovoy-backup, ключ AutoStart (autoStart) получает прежнее значение
        из неё — остальные настройки Desktop не трогаются; копия расходуется.
+       Значение StartupApproved\Run «Docker Desktop» возвращается из копии
+       StartupApproved-Run.domovoy-backup или, по отметке
+       StartupApproved-Run.domovoy-absent, убирается; копия и отметка
+       расходуются.
   Дистрибутив не удаляется: в нём тома стека. wsl --unregister domovoy-engine
   уничтожает их — только руками владельца. wsl --shutdown, без которого
   возврат .wslconfig не применится, -Uninstall не выполняет.
@@ -141,6 +155,9 @@ param(
     [string]$DistroDir = (Join-Path $env:LOCALAPPDATA 'domovoy-engine'),
     # Каталог настроек Docker Desktop (автозапуск при входе); тест подменяет его.
     [string]$DockerSettingsDir = (Join-Path $env:APPDATA 'Docker'),
+    # Ветка реестра автозапуска при входе: под ней Run и
+    # Explorer\StartupApproved\Run. Тест подменяет её своей веткой.
+    [string]$StartupRegistryRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion',
     # Только с -DryRun: подмена состояния держалки и дистрибутива для теста
     # (deploy/windows/engine-setup.test.sh). Без него состояние читается с хоста.
     # Absent — дистрибутив не зарегистрирован (движок не установлен).
@@ -448,6 +465,48 @@ function Get-DesktopSettingsBackup {
     return $null
 }
 
+# Автозапуск Docker Desktop при входе запускает не settings-store.json, а
+# значение «Docker Desktop» в ветке Run; выключенным его делает значение
+# того же имени в Explorer\StartupApproved\Run (так выключает Диспетчер
+# задач, «Автозагрузка»). Первый байт значения: 02 и 06 — включено, 03 —
+# выключено; значения нет — включено. Прежнее значение -Migrate сохраняет
+# копией (hex) или отметкой «не было» рядом с копией настроек Desktop.
+$DesktopRunName = 'Docker Desktop'
+$desktopRunKey = Join-Path $StartupRegistryRoot 'Run'
+$desktopApprovedKey = Join-Path $StartupRegistryRoot 'Explorer\StartupApproved\Run'
+$desktopApprovedBackup = Join-Path $DockerSettingsDir 'StartupApproved-Run.domovoy-backup'
+$desktopApprovedAbsent = Join-Path $DockerSettingsDir 'StartupApproved-Run.domovoy-absent'
+
+# State: none — записи Run нет; enabled; disabled; unknown — первый байт не
+# из известных. Hex — значение StartupApproved или '' (его нет).
+function Get-DesktopStartup {
+    $runItem = Get-ItemProperty -LiteralPath $desktopRunKey -Name $DesktopRunName -ErrorAction SilentlyContinue
+    $approvedItem = Get-ItemProperty -LiteralPath $desktopApprovedKey -Name $DesktopRunName -ErrorAction SilentlyContinue
+    $bytes = $null
+    if ($approvedItem) { $bytes = [byte[]]@($approvedItem.$DesktopRunName) }
+    $hex = if ($bytes -and $bytes.Count) { [BitConverter]::ToString($bytes) } else { '' }
+    if (-not $runItem) { $state = 'none' }
+    elseif (-not $hex) { $state = 'enabled' }
+    elseif ($bytes[0] -eq 3) { $state = 'disabled' }
+    elseif ($bytes[0] -eq 2 -or $bytes[0] -eq 6) { $state = 'enabled' }
+    else { $state = 'unknown' }
+    return [pscustomobject]@{ State = $state; Hex = $hex }
+}
+
+# Выключенное значение: 03 00 00 00 и время выключения (FILETIME), как
+# пишет Диспетчер задач.
+function Get-DisabledStartupBytes {
+    return [byte[]](@([byte]3, [byte]0, [byte]0, [byte]0) + [BitConverter]::GetBytes([DateTime]::UtcNow.ToFileTimeUtc()))
+}
+
+# Значение StartupApproved записывается; ветки нет — создаётся. New-Item
+# -Force по существующей ветке реестра стёр бы её значения — только при
+# её отсутствии.
+function Set-DesktopApproved([byte[]]$Bytes) {
+    if (-not (Test-Path -LiteralPath $desktopApprovedKey)) { $null = New-Item -Path $desktopApprovedKey -Force }
+    $null = New-ItemProperty -LiteralPath $desktopApprovedKey -Name $DesktopRunName -PropertyType Binary -Value $Bytes -Force
+}
+
 $apiPort = Get-Port 'API_HTTP_PORT'
 $haPort = Get-Port 'HA_HTTP_PORT'
 $project = Get-Setting 'COMPOSE_PROJECT_NAME'
@@ -674,6 +733,36 @@ $migrateSteps = @(
         }
     },
     [pscustomobject]@{
+        Key   = 'migrate.desktop_logon_entry'; Stage = 'engine'
+        Title = "запись автозапуска Docker Desktop при входе (реестр, Run) — выключить через StartupApproved"
+        Plan  = {
+            $startup = Get-DesktopStartup
+            if ($startup.State -eq 'none') { "no value '$DesktopRunName' in $desktopRunKey - unchanged" }
+            elseif ($startup.State -eq 'disabled') { "StartupApproved\Run '$DesktopRunName' $($startup.Hex) already disabled - unchanged" }
+            else {
+                $previousValue = if ($startup.Hex) { "$($startup.Hex), copy $(Split-Path -Leaf $desktopApprovedBackup)" } else { "absent, marker $(Split-Path -Leaf $desktopApprovedAbsent)" }
+                "StartupApproved\Run '$DesktopRunName' -> 03-00-00-00 + FILETIME (disabled; previous value $previousValue; -Uninstall restores it)"
+            }
+        }
+        Run   = {
+            $startup = Get-DesktopStartup
+            if ($startup.State -eq 'none') { Write-Output "записи автозапуска «$DesktopRunName» в $desktopRunKey нет — не тронуто" }
+            elseif ($startup.State -eq 'disabled') { Write-Output "автозапуск «$DesktopRunName» уже выключен (StartupApproved\Run $($startup.Hex)) — не тронут" }
+            else {
+                # Прежнее значение — один раз: повторный -Migrate не затирает
+                # копию первого.
+                if (-not (Test-Path -LiteralPath $desktopApprovedBackup) -and -not (Test-Path -LiteralPath $desktopApprovedAbsent)) {
+                    $null = New-Item -ItemType Directory -Force -Path $DockerSettingsDir
+                    if ($startup.Hex) { [IO.File]::WriteAllText($desktopApprovedBackup, $startup.Hex, (New-Object Text.UTF8Encoding($false))) }
+                    else { $null = New-Item -ItemType File -Path $desktopApprovedAbsent }
+                }
+                Set-DesktopApproved (Get-DisabledStartupBytes)
+                $shownValue = if ($startup.Hex) { $startup.Hex } else { 'не было' }
+                Write-Output "автозапуск «$DesktopRunName» при входе выключен (StartupApproved\Run; прежнее значение — $shownValue; -Uninstall вернёт)"
+            }
+        }
+    },
+    [pscustomobject]@{
         Key   = 'migrate.keeper_stop'; Stage = 'engine'
         Title = "держалка $KeeperTask — остановить, если работает (её всё равно гасит wsl --shutdown)"
         Plan  = { "Stop-ScheduledTask $KeeperTask if its State is Running - wsl --shutdown kills it anyway; a stale Running instance would make the start below a no-op (MultipleInstances IgnoreNew)" }
@@ -733,7 +822,7 @@ $migrateSteps = @(
         Title = 'engine-setup.ps1 -Check — его код и есть код -Migrate'
         Plan  = { 'engine-setup.ps1 -Check - its exit code is the exit code of -Migrate' }
         Run   = {
-            Invoke-Passthru (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Check', '-WslConfigPath', $WslConfigPath)
+            Invoke-Passthru (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Check', '-WslConfigPath', $WslConfigPath, '-DockerSettingsDir', $DockerSettingsDir, '-StartupRegistryRoot', $StartupRegistryRoot)
             $checkCode = $script:passCode
             if ($checkCode -ne 0) {
                 [Console]::Error.WriteLine("engine-setup: -Migrate: данные перенесены, но -Check не закрыл звенья (код $checkCode). Тома Docker Desktop не тронуты; откат — README, «Откат на Docker Desktop», или engine-setup.ps1 -Uninstall")
@@ -777,6 +866,10 @@ if ($Uninstall) {
     }
     # Автозапуск Docker Desktop: -Migrate выключил его и оставил копию.
     $desktopBackup = Get-DesktopSettingsBackup
+    # Запись автозапуска в реестре: копия прежнего значения или отметка «не было».
+    $approvedAction = 'keep'
+    if (Test-Path -LiteralPath $desktopApprovedBackup -PathType Leaf) { $approvedAction = 'restore' }
+    elseif (Test-Path -LiteralPath $desktopApprovedAbsent -PathType Leaf) { $approvedAction = 'remove' }
     $stopArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'docker', 'compose', '--profile', 'ha', 'stop')
     $interactiveArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Install', '-LogonType', 'Interactive')
     if ($DryRun) { $interactiveArgs += '-DryRun' }
@@ -814,6 +907,15 @@ if ($Uninstall) {
         }
         else {
             Write-Output ('uninstall.desktop_autostart: keep (no {0} copy)' -f (($desktopSettingsFiles | ForEach-Object { "$($_.Leaf).domovoy-backup" }) -join ' or '))
+        }
+        if ($approvedAction -eq 'restore') {
+            Write-Output ("uninstall.desktop_logon_entry: restore StartupApproved\Run '$DesktopRunName' = {0} from {1}" -f [IO.File]::ReadAllText($desktopApprovedBackup).Trim(), (Split-Path -Leaf $desktopApprovedBackup))
+        }
+        elseif ($approvedAction -eq 'remove') {
+            Write-Output ("uninstall.desktop_logon_entry: remove StartupApproved\Run '$DesktopRunName' (marker {0})" -f (Split-Path -Leaf $desktopApprovedAbsent))
+        }
+        else {
+            Write-Output ('uninstall.desktop_logon_entry: keep (no {0} copy and no {1} marker)' -f (Split-Path -Leaf $desktopApprovedBackup), (Split-Path -Leaf $desktopApprovedAbsent))
         }
         Write-Output "uninstall.distro.kept: $Distro - stack volumes inside; remove by hand: wsl --unregister $Distro (destroys the volumes)"
         Write-Output 'DryRun: nothing changed'
@@ -916,6 +1018,21 @@ if ($Uninstall) {
     }
     else {
         Write-Output 'настройки Docker Desktop не тронуты — копии .domovoy-backup нет'
+    }
+    # Запись автозапуска в реестре — прежнее значение; копия и отметка расходуются.
+    if ($approvedAction -eq 'restore') {
+        $approvedHex = [IO.File]::ReadAllText($desktopApprovedBackup).Trim()
+        Set-DesktopApproved ([byte[]]@($approvedHex -split '-' | ForEach-Object { [Convert]::ToByte($_, 16) }))
+        Remove-Item -LiteralPath $desktopApprovedBackup -Force
+        Write-Output "автозапуск «$DesktopRunName» (StartupApproved\Run) возвращён к прежнему значению $approvedHex"
+    }
+    elseif ($approvedAction -eq 'remove') {
+        Remove-ItemProperty -LiteralPath $desktopApprovedKey -Name $DesktopRunName -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $desktopApprovedAbsent -Force
+        Write-Output "автозапуск «$DesktopRunName»: значение StartupApproved\Run убрано — до -Migrate его не было"
+    }
+    else {
+        Write-Output "автозапуск «$DesktopRunName» в реестре не тронут — нет ни копии, ни отметки -Migrate"
     }
 
     Write-Output @"
@@ -1394,6 +1511,20 @@ catch {
 $desktop = @(Get-Process -Name 'Docker Desktop', 'com.docker.backend' -ErrorAction SilentlyContinue)
 if ($desktop.Count) { Add-Result 'FAIL' 'Docker Desktop не запущен' 'процесс Docker Desktop работает — два движка делят порты' }
 else { Add-Result 'OK' 'Docker Desktop не запущен' '' }
+
+# Автозапуск Docker Desktop при входе: при входе владельца он занял бы порты
+# стека. Запускает его запись Run, а не файл настроек; файл с AutoStart
+# true при старте Desktop вернул бы запись.
+$startupNow = Get-DesktopStartup
+$startupProblems = New-Object System.Collections.Generic.List[string]
+$startupShown = if ($startupNow.Hex) { $startupNow.Hex } else { 'нет значения' }
+if ($startupNow.State -eq 'enabled') { $startupProblems.Add("запись Run «$DesktopRunName» включена (StartupApproved\Run: $startupShown) — выключите: -Migrate или Диспетчер задач, «Автозагрузка»") }
+elseif ($startupNow.State -eq 'unknown') { $startupProblems.Add("StartupApproved\Run «$DesktopRunName» = $($startupNow.Hex): первый байт не 02, 06 или 03 — состояние неизвестно") }
+$desktopSettingsNow = Get-DesktopSettings
+if ($desktopSettingsNow -and $desktopSettingsNow.Value -eq 'true') { $startupProblems.Add("$($desktopSettingsNow.Leaf): $($desktopSettingsNow.Key) true") }
+if ($startupProblems.Count) { Add-Result 'FAIL' 'автозапуск Docker Desktop при входе выключен' ($startupProblems -join '; ') }
+elseif ($startupNow.State -eq 'none') { Add-Result 'OK' 'автозапуск Docker Desktop при входе выключен' 'записи Run нет' }
+else { Add-Result 'OK' 'автозапуск Docker Desktop при входе выключен' "StartupApproved\Run $($startupNow.Hex)" }
 
 $running = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
 $inner = @('docker.service в автозапуске', 'containerd.service в автозапуске', 'restart: unless-stopped у контейнеров проекта', 'порт замера = опубликованный порт api')
