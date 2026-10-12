@@ -142,7 +142,7 @@ cp config/home-profile.example.md     config/home-profile.md
 cp config/proactive-rules.example.yaml config/proactive-rules.yaml
 cp config/response-templates.example.yaml config/response-templates.yaml
 
-docker compose up -d --build
+docker compose up -d --build --wait
 curl -s http://localhost:18080/health
 ```
 
@@ -151,7 +151,7 @@ curl -s http://localhost:18080/health
 `/health` отдаёт только это одно поле; раздельный статус БД, Home Assistant и
 LLM доступен на `GET /api/v1/health` под токеном устройства.
 
-Скопированные `config/*.yaml` и `.env` закрыты `.gitignore` — заполнять их
+Скопированные файлы `config/` и `.env` закрыты `.gitignore` — заполнять их
 реальными значениями безопасно. Пароль базы в `.env.example` — значение для
 примера: наружу порт базы не публикуется, но при реальной эксплуатации
 `POSTGRES_PASSWORD` меняется.
@@ -246,7 +246,9 @@ dotnet user-secrets list
 ## API
 
 Базовый префикс `/api/v1`, аутентификация — Bearer-токен устройства.
-На этапе каркаса все эндпоинты, кроме `/health`, отвечают `501`.
+На этапе каркаса любой запрос к `/api/v1`, кроме `POST /auth/device`,
+получает `401`: привязка устройств ещё не реализована, и предъявленный токен
+отклоняется. `POST /auth/device` анонимный и отвечает `501`.
 
 | Метод | Путь | Назначение |
 |---|---|---|

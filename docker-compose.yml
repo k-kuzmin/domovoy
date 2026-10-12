@@ -4,7 +4,7 @@
 # Поднимается на .env.example без правок (ТЗ 5.1.3):
 #
 #   cp .env.example .env
-#   docker compose up -d --build
+#   docker compose up -d --build --wait
 #   curl -s http://localhost:18080/health
 #
 # По умолчанию поднимаются только Backend и база. Home Assistant
