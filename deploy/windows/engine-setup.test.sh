@@ -693,6 +693,17 @@ test_engine_setup_migrate_dry_run() {
   [ "$(grep -c '^DryRun: nothing changed$' "$work/out.${shells[0]}")" = 1 ] || { fail "$name" "строка сухого прогона не одна в конце"; show_out; return; }
   ok "$name"
 
+  # С -Install предусловия переезда без движка — до установки: негодное
+  # имя проекта отказывает раньше, чем печатается план установки.
+  name=engine_setup_install_migrate_precheck_first
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=Example-Home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  engine_setup "${shells[0]}" -Install -Migrate -DryRun -AssumeEngineState Absent
+  [ "$rc" -ne 0 ] || { fail "$name" "негодное имя проекта принято"; show_out; return; }
+  grep -q 'COMPOSE_PROJECT_NAME' "$work/out.${shells[0]}" || { fail "$name" "отказ не называет COMPOSE_PROJECT_NAME"; show_out; return; }
+  if grep -q '^keeper\.task: ' "$work/out.${shells[0]}"; then fail "$name" "план установки напечатан до отказа переезда"; show_out; return; fi
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  ok "$name"
+
   # Нет файла настроек Desktop — предупреждение, не отказ.
   name=engine_setup_migrate_without_desktop_settings
   rm -rf -- "$work/docker" && mkdir -p "$work/docker"

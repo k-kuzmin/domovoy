@@ -318,7 +318,8 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 Данные переносят сценарии бэкапа и восстановления; тома Docker Desktop не
 трогаются — это путь отката. История рекордера HA за минуты окна теряется.
 До любых действий `-Migrate` проверяет предусловия и при отказе ничего не
-меняет:
+меняет; с `-Install` Git Bash, `BACKUP_DIR` и имя проекта проверяются ещё до
+установки:
 
 - Docker Desktop работает, у него есть контейнеры проекта
   (`COMPOSE_PROJECT_NAME`), postgres и homeassistant запущены;

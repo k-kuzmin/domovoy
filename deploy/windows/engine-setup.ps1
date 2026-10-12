@@ -62,7 +62,8 @@
   отрабатывает установка, затем переезд; один -Migrate требует
   установленного движка (дистрибутив, задача держалки, mirrored в
   .wslconfig), иначе отказ с подсказкой.
-    0. предусловия — до любых действий, отказ без изменений: Git Bash
+    0. предусловия — до любых действий, отказ без изменений (с -Install
+       Git Bash, BACKUP_DIR и имя проекта — до действий установки): Git Bash
        (bash.exe Git for Windows, не bash WSL из System32); BACKUP_DIR —
        путь Windows, каталог есть и лежит вне клона; имя проекта годится
        для restore.sh; Docker Desktop отвечает, у docker.exe есть команда
@@ -1072,6 +1073,14 @@ docker compose --profile ha start.
 }
 
 if ($Install) {
+    # С -Migrate предусловия переезда, которые не требуют движка (Git Bash,
+    # BACKUP_DIR, имя проекта), — до любых действий установки, и в сухом
+    # прогоне так же: отказ не оставляет установку без переезда.
+    if ($Migrate) {
+        $script:migrateSetup = Get-MigrateSetup
+        if ($script:migrateSetup.Problems.Count) { Stop-WithError ('установка и переезд не начаты, ничего не изменено: ' + ($script:migrateSetup.Problems -join '; ')) }
+    }
+
     # Объекты задач и параметры правила собираются до любых действий; сухой
     # прогон печатает их свойства: что напечатано, то и регистрируется.
     $bootTrigger = New-ScheduledTaskTrigger -AtStartup
