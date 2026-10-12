@@ -41,6 +41,12 @@ for name in "$src_project" "$check_project" "$fresh_project"; do
   esac
 done
 
+# Каталог и лимит бэкапа задаются тестами явно. Заданная, даже пустая,
+# переменная окружения важнее .env, поэтому настройки .env владельца на
+# тесты не влияют; тесты разбора .env снимают их через env -u.
+export BACKUP_DIR=''
+export BACKUP_MAX_SIZE_GB=''
+
 export COMPOSE_PROJECT_NAME="$src_project"
 export API_HTTP_PORT="$api_port"
 export HA_HTTP_PORT="$ha_port"
@@ -324,6 +330,96 @@ test_backup_max_size_prunes_oldest_before_writing() {
     PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size "$value"
     if [ "$rc" -ne 2 ]; then fail "$name" "--max-size $value: код $rc, ожидался 2"; return; fi
   done
+  ok "$name"
+}
+
+# Копия ops/backup/ в отдельный корень с собственным .env: сценарии берут
+# корень клона из своего пути, так .env подменяется, не трогая .env
+# владельца. Каталоги назначения лежат вне копии.
+fake_clone() {
+  rm -rf -- "$work/clone"
+  mkdir -p "$work/clone/ops"
+  cp -R "$here" "$work/clone/ops/backup"
+  printf '%s' "$1" >"$work/clone/.env"
+}
+
+# Путь так, как его пишет владелец в .env на Windows (D:/…), если есть
+# cygpath; иначе POSIX.
+env_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+clone_backup() { env -u BACKUP_DIR -u BACKUP_MAX_SIZE_GB "$@"; }
+
+test_backup_reads_settings_from_env_file() {
+  local name=backup_destination_from_env_file
+  local fake_path
+  fake_path="$(fake_docker_path)"
+  rm -rf -- "$work/env-file" "$work/env-proc" "$work/env-arg"
+  mkdir "$work/env-file" "$work/env-proc" "$work/env-arg"
+  # Кавычки и CRLF, закомментированная строка и соседние переменные.
+  fake_clone "$(printf '# BACKUP_DIR=%s\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=\r\n' \
+    "$(env_path "$work/env-arg")" "$(env_path "$work/env-file")")"
+
+  # Без аргумента — каталог из .env: сценарий дошёл до лога в нём.
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/backup.sh"
+  if [ "$rc" -eq 2 ]; then fail "$name" "каталог из .env не взят (код 2)"; show_out; return; fi
+  grep -q 'старт: domovoy-backup-' "$work/env-file/backup.log" 2>/dev/null \
+    || { fail "$name" "в каталоге из .env нет backup.log"; show_out; return; }
+  ok "$name"
+
+  name=backup_destination_env_overrides_env_file
+  PATH="$fake_path" run env -u BACKUP_MAX_SIZE_GB BACKUP_DIR="$work/env-proc" bash "$work/clone/ops/backup/backup.sh"
+  grep -q 'старт:' "$work/env-proc/backup.log" 2>/dev/null || { fail "$name" "каталог из окружения не взят"; show_out; return; }
+  [ "$(grep -c 'старт:' "$work/env-file/backup.log")" = 1 ] || { fail "$name" "записано в каталог из .env"; return; }
+  ok "$name"
+
+  name=backup_destination_argument_overrides_env
+  PATH="$fake_path" run env -u BACKUP_MAX_SIZE_GB BACKUP_DIR="$work/env-proc" bash "$work/clone/ops/backup/backup.sh" "$work/env-arg"
+  grep -q 'старт:' "$work/env-arg/backup.log" 2>/dev/null || { fail "$name" "каталог из аргумента не взят"; show_out; return; }
+  [ "$(grep -c 'старт:' "$work/env-proc/backup.log")" = 1 ] || { fail "$name" "записано в каталог из окружения"; return; }
+  [ "$(grep -c 'старт:' "$work/env-file/backup.log")" = 1 ] || { fail "$name" "записано в каталог из .env"; return; }
+  ok "$name"
+
+  # Не задан нигде — пустое значение, нет строки, незаполненный пример в
+  # угловых скобках: код 2 и подсказка про BACKUP_DIR.
+  name=backup_destination_unset_is_usage_error
+  local env_text
+  for env_text in $'HA_TOKEN=x\n' $'BACKUP_DIR=\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\n' $'BACKUP_DIR=""\r\n'; do
+    fake_clone "$env_text"
+    PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/backup.sh"
+    if [ "$rc" -ne 2 ]; then fail "$name" "«${env_text%%$'\n'*}»: код $rc, ожидался 2"; show_out; return; fi
+    grep -q 'BACKUP_DIR' "$work/out" || { fail "$name" "в выводе нет BACKUP_DIR"; show_out; return; }
+  done
+  ok "$name"
+}
+
+test_backup_max_size_from_env_file() {
+  local name=backup_max_size_from_env_file
+  local fake_path
+  fake_path="$(fake_prewrite_path)"
+  fake_dest_with_backups "$work/env-limit"
+  fake_clone "$(printf 'BACKUP_DIR=%s\nBACKUP_MAX_SIZE_GB=1\n' "$(env_path "$work/env-limit")")"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/backup.sh"
+  if [ "$(list_dest "$work/env-limit")" != 'domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
+    fail "$name" "лимит из .env не применён: $(list_dest "$work/env-limit")"; show_out; return
+  fi
+  ok "$name"
+
+  # --max-size важнее .env: лимит 10 ГБ ничего не удаляет.
+  name=backup_max_size_argument_overrides_env_file
+  fake_dest_with_backups "$work/env-limit"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/backup.sh" --max-size 10
+  if [ "$(list_dest "$work/env-limit")" != 'domovoy-backup-20200101T000000Z domovoy-backup-20200102T000000Z domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
+    fail "$name" "аргумент не перекрыл .env: $(list_dest "$work/env-limit")"; show_out; return
+  fi
+  ok "$name"
+
+  name=backup_max_size_from_env_file_rejects_bad_value
+  fake_clone "$(printf 'BACKUP_DIR=%s\nBACKUP_MAX_SIZE_GB=1.5\n' "$(env_path "$work/env-limit")")"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/backup.sh"
+  if [ "$rc" -ne 2 ]; then fail "$name" "код $rc, ожидался 2"; show_out; return; fi
+  grep -q 'BACKUP_MAX_SIZE_GB' "$work/out" || { fail "$name" "в выводе нет BACKUP_MAX_SIZE_GB"; show_out; return; }
   ok "$name"
 }
 
@@ -755,6 +851,8 @@ test_restore_project_refuses_while_other_ha_runs_static
 test_restore_refuses_manifest_without_ha_count
 test_backup_drops_leftover_verify_databases
 test_backup_max_size_prunes_oldest_before_writing
+test_backup_reads_settings_from_env_file
+test_backup_max_size_from_env_file
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"

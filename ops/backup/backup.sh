@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # Бэкап Домового: база Backend и том конфигурации Home Assistant.
 #
-#   bash ops/backup/backup.sh <каталог-назначения> [--keep N] [--max-size ГБ]
+#   bash ops/backup/backup.sh [<каталог-назначения>] [--keep N] [--max-size ГБ]
 #
 # Каталог назначения — корень на внешнем носителе, например
-# <внешний-диск>/domovoy-backups. Он должен существовать: неподключённый
-# диск — отказ, а не запись на системный диск. Каталог внутри клона
-# репозитория — тоже отказ: бэкап содержит токены HA и приватную разметку
-# дома.
+# <внешний-диск>/domovoy-backups. Без аргумента берётся BACKUP_DIR, без
+# --max-size — BACKUP_MAX_SIZE_GB: из переменной окружения, если она
+# задана, иначе из .env клона (ops/backup/dotenv.sh; .env не исполняется).
+# Так запускает задача Планировщика (ops/backup/install-schedule.ps1):
+# правка .env действует со следующего прогона. Каталог не задан нигде —
+# код 2.
+#
+# Каталог должен существовать: неподключённый диск — отказ, а не запись
+# на системный диск. Каталог внутри клона репозитория — тоже отказ: бэкап
+# содержит токены HA и приватную разметку дома.
 #
 # Что делает:
 #   1. pg_dump -Fc изнутри контейнера postgres — db.dump;
@@ -27,7 +33,8 @@
 # успешному; если с ним сумма выходит за лимит, самые старые полные бэкапы
 # удаляются по одному, пока не влезет. Последний успешный не удаляется
 # никогда: не влезает и без остальных, или свободного места на носителе
-# меньше оценки — отказ. Без параметра до записи ничего не удаляется.
+# меньше оценки — отказ. Без лимита (ни --max-size, ни BACKUP_MAX_SIZE_GB)
+# до записи ничего не удаляется.
 #
 # Проект compose — тот, что задан в .env клона (COMPOSE_PROJECT_NAME),
 # или переменная окружения COMPOSE_PROJECT_NAME. Лог — <назначение>/backup.log.
@@ -45,9 +52,13 @@ umask 077
 export MSYS_NO_PATHCONV=1
 
 usage() {
-  echo "использование: bash ops/backup/backup.sh <каталог-назначения> [--keep N] [--max-size ГБ]" >&2
+  echo "использование: bash ops/backup/backup.sh [<каталог-назначения>] [--keep N] [--max-size ГБ]" >&2
   exit 2
 }
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# shellcheck source=ops/backup/dotenv.sh
+. "$root/ops/backup/dotenv.sh"
 
 dest_arg=''
 keep=14
@@ -73,14 +84,24 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-[ -n "$dest_arg" ] || usage
+if [ -z "$dest_arg" ]; then
+  dest_arg="$(backup_setting BACKUP_DIR "$root")"
+  if [ -z "$dest_arg" ]; then
+    echo "backup: каталог назначения не задан — задайте BACKUP_DIR в .env клона или передайте каталог аргументом" >&2
+    usage
+  fi
+fi
+max_size_source='--max-size'
+if [ -z "$max_size_gb" ]; then
+  max_size_gb="$(backup_setting BACKUP_MAX_SIZE_GB "$root")"
+  max_size_source='BACKUP_MAX_SIZE_GB'
+fi
 [[ "$keep" =~ ^[1-9][0-9]*$ ]] || { echo "backup: --keep — целое число не меньше 1" >&2; exit 2; }
 if [ -n "$max_size_gb" ] && ! [[ "$max_size_gb" =~ ^[1-9][0-9]{0,5}$ ]]; then
-  echo "backup: --max-size — целое число гигабайт от 1" >&2
+  echo "backup: $max_size_source — целое число гигабайт от 1" >&2
   exit 2
 fi
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root"
 
 # Канонический путь существующего каталога: запись Windows (D:\…)
