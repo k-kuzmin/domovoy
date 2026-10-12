@@ -286,6 +286,19 @@ wslconfig_bytes_are() {
   return 1
 }
 
+# Файл настроек Docker Desktop, который запишет сценарий, из строки
+# <ключ>.base64 сухого прогона — байт в байт против ожидаемого.
+settings_bytes_are() {
+  local name="$1" shell="$2" key="$3" expected="$4"
+  sed -n "s/^$key\.base64: \([^ ]*\).*/\1/p" "$work/out.$shell" | base64 -d >"$work/settings.got" 2>/dev/null
+  printf '%s' "$expected" >"$work/settings.expected"
+  cmp -s "$work/settings.got" "$work/settings.expected" && return 0
+  fail "$name" "$key: текст настроек Desktop не тот (od -c: получено / ожидалось)"
+  od -c "$work/settings.got" | sed 's/^/    | /'
+  od -c "$work/settings.expected" | sed 's/^/    | /'
+  return 1
+}
+
 test_engine_setup_dry_run() {
   local name=engine_setup_dry_run
   if ! is_windows; then skip "$name" "не Windows — задачи собирает модуль ScheduledTasks"; return; fi
@@ -485,6 +498,20 @@ test_engine_setup_uninstall_dry_run() {
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
     has "$shell" 'uninstall.desktop_autostart: restore AutoStart=true from settings-store.json.domovoy-backup' \
       || { fail "$name" "возврат AutoStart Docker Desktop не в плане отката"; show_out; return; }
+    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "AutoStart": true,\n  "Example": 1\n}\n' || return
+    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
+    # В копии ключа не было — он убирается: первым, последним, единственным.
+    printf '{\n  "Example": 1\n}\n' >"$work/docker/settings-store.json.domovoy-backup"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "Example": 1\n}\n' || return
+    printf '{\n  "Example": 1,\n  "AutoStart": false\n}\n' >"$work/docker/settings-store.json"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "Example": 1\n}\n' || return
+    printf '{\n  "AutoStart": false\n}\n' >"$work/docker/settings-store.json"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
+    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  \n}\n' || return
+    rm -rf -- "$work/docker" && cp -R "$work/docker.before" "$work/docker"
+    uninstall_dry_run "$shell" -AssumeEngineState Running
     has "$shell" 'uninstall.desktop_logon_entry: keep (no StartupApproved-Run.domovoy-backup copy and no StartupApproved-Run.domovoy-absent marker)' \
       || { fail "$name" "без копии и отметки откат трогает запись автозапуска"; show_out; return; }
     # Копия прежнего значения StartupApproved — откат возвращает его; отметка — убирает.
@@ -609,6 +636,20 @@ test_engine_setup_migrate_dry_run() {
     fi
     ok "$name"
   done
+
+  # AutoStart в файле настроек Desktop — байт в байт: замена значения,
+  # вставка ключа в непустой и в пустой объект.
+  name=engine_setup_migrate_desktop_settings_bytes
+  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
+  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart $'{\n  "AutoStart": false,\n  "Example": 1\n}\n' || return
+  printf '{\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
+  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
+  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart $'{"AutoStart": false,\n  "Example": 1\n}\n' || return
+  printf '{}' >"$work/docker/settings-store.json"
+  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
+  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart '{"AutoStart": false}' || return
+  printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
+  ok "$name"
 
   # Запись автозапуска Desktop в реестре (ветка теста): включённая —
   # выключается через StartupApproved с копией прежнего значения или

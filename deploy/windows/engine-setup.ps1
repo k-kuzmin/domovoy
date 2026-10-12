@@ -453,6 +453,21 @@ function Get-DesktopSettings {
     return $null
 }
 
+# Байты файла настроек Desktop, которые запишет сценарий, — для строки
+# base64 сухого прогона: строки плана перевод строки и пробелы не показывают.
+function ConvertTo-SettingsBase64([string]$Text) {
+    return [Convert]::ToBase64String((New-Object Text.UTF8Encoding($false)).GetBytes($Text))
+}
+
+# Текст, который -Uninstall запишет в файл настроек Desktop: в нынешнем
+# файле ключ получает прежнее значение из копии (нет его в копии —
+# убирается). $null — файла нет или он не объект JSON: копия
+# возвращается целиком.
+function Get-DesktopRestoreText($Backup) {
+    if (-not (Test-Path -LiteralPath $Backup.Path -PathType Leaf)) { return $null }
+    return Set-JsonBool ([IO.File]::ReadAllText($Backup.Path)) $Backup.Key $Backup.Value
+}
+
 # Копия настроек, оставленная -Migrate; нет — $null.
 function Get-DesktopSettingsBackup {
     foreach ($file in $desktopSettingsFiles) {
@@ -706,8 +721,16 @@ $migrateSteps = @(
                 "$($desktopSettings.Leaf) $($desktopSettings.Key) already false - unchanged"
             }
             else {
-                $previousValue = if ($desktopSettings.Value) { $desktopSettings.Value } else { 'absent' }
-                "$($desktopSettings.Leaf) $($desktopSettings.Key) $previousValue -> false (copy $($desktopSettings.Leaf).domovoy-backup; -Uninstall restores the value)"
+                $disabledText = Set-JsonBool $desktopSettings.Text $desktopSettings.Key 'false'
+                if ($null -eq $disabledText) {
+                    "WARN $($desktopSettings.Leaf) is not a JSON object - AutoStart unchanged; turn it off in Docker Desktop"
+                }
+                else {
+                    $previousValue = if ($desktopSettings.Value) { $desktopSettings.Value } else { 'absent' }
+                    "$($desktopSettings.Leaf) $($desktopSettings.Key) $previousValue -> false (copy $($desktopSettings.Leaf).domovoy-backup; -Uninstall restores the value)"
+                    # Байт в байт, как запишет настоящий прогон.
+                    "migrate.desktop_autostart.base64: $(ConvertTo-SettingsBase64 $disabledText)"
+                }
             }
         }
         # Пишется после остановки Desktop: работающий Desktop переписывает файл.
@@ -904,6 +927,10 @@ if ($Uninstall) {
         if ($desktopBackup) {
             $previousValue = if ($desktopBackup.Value) { $desktopBackup.Value } else { '(absent - key removed)' }
             Write-Output ('uninstall.desktop_autostart: restore {0}={1} from {2}' -f $desktopBackup.Key, $previousValue, (Split-Path -Leaf $desktopBackup.Backup))
+            # Байт в байт, как запишет -Uninstall: ключ в нынешнем файле или копия целиком.
+            $restoredText = Get-DesktopRestoreText $desktopBackup
+            if ($null -eq $restoredText) { Write-Output ('uninstall.desktop_autostart.base64: {0} (whole copy)' -f [Convert]::ToBase64String([IO.File]::ReadAllBytes($desktopBackup.Backup))) }
+            else { Write-Output ('uninstall.desktop_autostart.base64: {0}' -f (ConvertTo-SettingsBase64 $restoredText)) }
         }
         else {
             Write-Output ('uninstall.desktop_autostart: keep (no {0} copy)' -f (($desktopSettingsFiles | ForEach-Object { "$($_.Leaf).domovoy-backup" }) -join ' or '))
@@ -1001,14 +1028,9 @@ if ($Uninstall) {
     # 7. Автозапуск Docker Desktop — прежнее значение ключа из копии, а не
     # файл целиком: другие настройки Desktop могли меняться после -Migrate.
     if ($desktopBackup) {
-        if (Test-Path -LiteralPath $desktopBackup.Path -PathType Leaf) {
-            $restored = Set-JsonBool ([IO.File]::ReadAllText($desktopBackup.Path)) $desktopBackup.Key $desktopBackup.Value
-            if ($null -eq $restored) { Copy-Item -LiteralPath $desktopBackup.Backup -Destination $desktopBackup.Path -Force }
-            else { [IO.File]::WriteAllText($desktopBackup.Path, $restored, (New-Object Text.UTF8Encoding($false))) }
-        }
-        else {
-            Copy-Item -LiteralPath $desktopBackup.Backup -Destination $desktopBackup.Path
-        }
+        $restored = Get-DesktopRestoreText $desktopBackup
+        if ($null -eq $restored) { Copy-Item -LiteralPath $desktopBackup.Backup -Destination $desktopBackup.Path -Force }
+        else { [IO.File]::WriteAllText($desktopBackup.Path, $restored, (New-Object Text.UTF8Encoding($false))) }
         Remove-Item -LiteralPath $desktopBackup.Backup -Force
         $shownValue = if ($desktopBackup.Value) { $desktopBackup.Value } else { 'ключа не было — убран' }
         Write-Output "Docker Desktop, $($desktopBackup.Leaf): $($desktopBackup.Key) возвращён к прежнему значению ($shownValue)"
