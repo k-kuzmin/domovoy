@@ -11,7 +11,10 @@
     powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -DryRun  # что было бы сделано
     powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check            # только чтение
 
-  -Install (повторный запуск ничего не дублирует):
+  -Install (повторный запуск ничего не дублирует; дистрибутив при нём
+  кратко перезапускается — wsl --terminate в шаге 2, — и если держалка или
+  дистрибутив работали до запуска, держалка сразу после регистрации задач
+  запускается снова: стек не лежит до перезагрузки):
     1. дистрибутив domovoy-engine: wsl --import официального образа Ubuntu
        24.04 для WSL (cloud-images.ubuntu.com), SHA256 сверяется с SHA256SUMS
        того же каталога — это проверка целостности загрузки, не подлинности:
@@ -64,7 +67,11 @@ param(
     [switch]$Check,
     [switch]$DryRun,
     [string]$WslConfigPath = (Join-Path $env:USERPROFILE '.wslconfig'),
-    [string]$DistroDir = (Join-Path $env:LOCALAPPDATA 'domovoy-engine')
+    [string]$DistroDir = (Join-Path $env:LOCALAPPDATA 'domovoy-engine'),
+    # Только с -DryRun: подмена состояния держалки и дистрибутива для теста
+    # (deploy/windows/engine-setup.test.sh). Без него состояние читается с хоста.
+    [ValidateSet('', 'Running', 'Stopped')]
+    [string]$AssumeEngineState = ''
 )
 
 Set-StrictMode -Version Latest
@@ -89,6 +96,7 @@ function Stop-WithError([string]$Message, [int]$Code = 1) {
 if ($Install -and $Check) { Stop-WithError 'укажите один режим: -Install или -Check' 2 }
 if (-not $Install -and -not $Check) { Stop-WithError 'укажите режим: -Install или -Check' 2 }
 if ($DryRun -and -not $Install) { Stop-WithError '-DryRun — только с -Install' 2 }
+if ($AssumeEngineState -and -not $DryRun) { Stop-WithError '-AssumeEngineState — только с -Install -DryRun' 2 }
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $envFile = Join-Path $root '.env'
@@ -276,6 +284,17 @@ if ($Install) {
 
     $wslConfig = Get-WslConfigPlan $WslConfigPath
     $registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
+    # Провижининг делает wsl --terminate дистрибутива: держалка и движок
+    # гибнут. Работали до -Install — держалка запускается снова после
+    # регистрации задач, иначе стек лежал бы до перезагрузки.
+    if ($AssumeEngineState) {
+        $engineRunning = $AssumeEngineState -eq 'Running'
+    }
+    else {
+        $keeperNow = Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue
+        $engineRunning = ($keeperNow -and [string]$keeperNow.State -eq 'Running') -or
+            ((Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro)
+    }
     $diskDir = Join-Path $DistroDir 'disk'
     $downloadDir = Join-Path $DistroDir 'download'
     $tar = Join-Path $downloadDir $ImageFile
@@ -295,6 +314,11 @@ if ($Install) {
         Write-Output ('provision: wsl.exe {0}' -f ($provisionArgs -join ' '))
         Write-Output ('provision.restart: код 3 — wsl.exe --terminate {0} и повтор' -f $Distro)
         Write-Output ('provision.terminate: wsl.exe --terminate {0}' -f $Distro)
+        Write-Output ('engine.running: {0}' -f [bool]$engineRunning)
+        if ($engineRunning) { Write-Output ('keeper.resume: Start-ScheduledTask {0}' -f $KeeperTask) }
+        # ASCII, как остальные строки сухого прогона: кириллица в выводе
+        # Windows PowerShell уходит в OEM-кодировке консоли.
+        else { Write-Output 'keeper.resume: none (keeper and distro were not running)' }
         foreach ($task in @(
                 @{ Prefix = 'keeper'; Name = $KeeperTask; Action = $keeperAction; Principal = $keeperPrincipal; Settings = $keeperSettings },
                 @{ Prefix = 'measure'; Name = $MeasureTask; Action = $measureAction; Principal = $measurePrincipal; Settings = $measureSettings })) {
@@ -380,6 +404,21 @@ if ($Install) {
         Write-Output "дистрибутив $Distro создан из $ImageFile (целостность загрузки: SHA256 сошёлся с SHA256SUMS того же сервера; подлинность не проверялась)"
     }
 
+    # Держалка снова, если работала до -Install: $true — запущена.
+    function Resume-Keeper {
+        if (-not $engineRunning) { return $false }
+        if (-not (Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue)) { return $false }
+        $null = Start-ScheduledTask -TaskName $KeeperTask
+        return $true
+    }
+    # Отказ после остановки дистрибутива: прежнее состояние возвращается
+    # до выхода, а не оставляется до перезагрузки.
+    function Stop-Install([string]$Message) {
+        try { $resumed = Resume-Keeper } catch { $resumed = $false; $Message += "; держалку запустить не удалось: $($_.Exception.Message)" }
+        if ($resumed) { $Message += "; держалка $KeeperTask запущена снова, как работала до -Install" }
+        Stop-WithError $Message
+    }
+
     # 2. Провижининг. Код 3 — systemd записан в wsl.conf, но ещё не PID 1:
     # перезапуск только этого дистрибутива и второй проход уже под systemd.
     $env:WSL_UTF8 = '1'
@@ -390,7 +429,7 @@ if ($Install) {
         & $wslExe @provisionArgs
         $provisionCode = $LASTEXITCODE
     }
-    if ($provisionCode -ne 0) { Stop-WithError "провижининг дистрибутива: код $provisionCode" }
+    if ($provisionCode -ne 0) { Stop-Install "провижининг дистрибутива: код $provisionCode" }
     $null = Invoke-Wsl @('--terminate', $Distro)
     # По одному юниту: is-enabled со списком даёт код 0, если включён хоть
     # один. Признак — вывод enabled, как в -Check.
@@ -400,7 +439,7 @@ if ($Install) {
         if ($isEnabled -ne 'enabled') { $disabled.Add("$unit «$isEnabled»") }
     }
     $null = Invoke-Wsl @('--terminate', $Distro)
-    if ($disabled.Count) { Stop-WithError "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
+    if ($disabled.Count) { Stop-Install "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
     Write-Output 'docker.service и containerd.service в автозапуске systemd дистрибутива'
 
     # 3–4. Задачи; -Force заменяет прежние.
@@ -410,6 +449,11 @@ if ($Install) {
     $null = Register-ScheduledTask -TaskName $MeasureTask -Trigger $bootTrigger -Action $measureAction -Principal $measurePrincipal `
         -Settings $measureSettings -Description 'Домовой: замер от старта ОС до первого ответа /health' -Force
     Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, S4U, журнал $measureLog"
+
+    # Держалка — сразу после регистрации, до шагов, которые могут отказать.
+    try { $resumed = Resume-Keeper }
+    catch { Stop-WithError "держалка $KeeperTask работала до -Install, а запустить её снова не удалось: $($_.Exception.Message) — Start-ScheduledTask $KeeperTask" }
+    if ($resumed) { Write-Output "держалка $KeeperTask работала до -Install — запущена снова; контейнеры поднимет restart: unless-stopped" }
 
     # 5. .wslconfig.
     if ($wslConfig.Changed) {
@@ -440,13 +484,22 @@ if ($Install) {
     & $hostExe @scheduleArgs
     $scheduleCode = $LASTEXITCODE
 
-    Write-Output @"
+    if ($resumed) {
+        Write-Output @"
+
+Повторный запуск: дистрибутив $Distro перезапускался (wsl --terminate), держалка
+запущена снова. Проверка всех звеньев — -Check.
+"@
+    }
+    else {
+        Write-Output @"
 
 Дальше — окно переезда (README, «Автозапуск после перезагрузки»): остановить
 стек на Docker Desktop, бэкап, wsl --shutdown, Start-ScheduledTask $KeeperTask,
 восстановление внутри дистрибутива, -Check.
 Предусловия: BIOS — включаться после пропадания питания; BitLocker без PIN.
 "@
+    }
     if ($scheduleCode -ne 0) {
         Stop-WithError "расписание бэкапа не поставлено (ops/backup/install-schedule.ps1, код $scheduleCode) — остальное настроено"
     }

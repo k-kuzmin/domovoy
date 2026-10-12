@@ -274,6 +274,22 @@ test_engine_setup_dry_run() {
   done
   ok "$name"
 
+  # Повторный -Install гасит дистрибутив (wsl --terminate): держалка, если
+  # работала, запускается снова. Состояние хоста подменяется — на машине
+  # владельца после переезда держалка работает, и ветка «не работала» иначе
+  # не проверялась бы.
+  name=engine_setup_resumes_keeper
+  dry_run "${shells[0]}" -AssumeEngineState Running
+  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+  has "${shells[0]}" 'engine.running: True' || { fail "$name" "состояние Running не учтено"; show_out; return; }
+  has "${shells[0]}" 'keeper.resume: Start-ScheduledTask domovoy-engine' || { fail "$name" "держалка не запускается снова"; show_out; return; }
+  dry_run "${shells[0]}" -AssumeEngineState Stopped
+  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+  has "${shells[0]}" 'engine.running: False' || { fail "$name" "состояние Stopped не учтено"; show_out; return; }
+  if grep -q '^keeper.resume: Start-ScheduledTask' "$work/out.${shells[0]}"; then fail "$name" "держалка запускается, хотя не работала"; show_out; return; fi
+  grep -q '^keeper.resume: none ' "$work/out.${shells[0]}" || { fail "$name" "решение о держалке не напечатано"; show_out; return; }
+  ok "$name"
+
   # Без API_HTTP_PORT в .env — значение по умолчанию из docker-compose.yml.
   name=engine_setup_port_from_compose_default
   fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
