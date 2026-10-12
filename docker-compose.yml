@@ -36,7 +36,11 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      # По TCP, а не через сокет: при первой инициализации docker-entrypoint
+      # поднимает временный сервер с listen_addresses='' — сокет отвечает,
+      # а сервер вот-вот погасится. Готовность по сокету пропускала api и
+      # pg_restore к гаснущему серверу.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
       interval: 10s
       timeout: 5s
       retries: 5
