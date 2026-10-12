@@ -90,7 +90,7 @@ jobs:
       - name: Анонимный /health отвечает без секретов
         run: |
           set -euo pipefail
-          body="$(curl --fail --silent --show-error http://localhost:8080/health)"
+          body="$(curl --fail --silent --show-error http://localhost:18080/health)"
           echo "ответ: $body"
           echo "$body" | grep -qE '"status":"(healthy|degraded)"'
 
@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            http://localhost:8080/api/v1/state)"
+            http://localhost:18080/api/v1/state)"
           test "$code" = "401" || { echo "ожидался 401, получено $code"; exit 1; }
 
       - name: В логах старта нет секретов
@@ -130,7 +130,7 @@ jobs:
           # провайдер LLM в стеке отсутствуют, и это нормально: проверяется
           # не доступность, а то, что значения не утекли в лог.
           for _ in $(seq 40); do
-            if curl --silent --output /dev/null http://localhost:8080/health; then break; fi
+            if curl --silent --output /dev/null http://localhost:18080/health; then break; fi
             sleep 1
           done
 

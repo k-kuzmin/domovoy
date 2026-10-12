@@ -302,7 +302,7 @@ gitleaks dir . --redact --no-banner              # рабочий каталог
 docker compose up -d --build
 docker compose logs -f api
 docker compose down
-curl -s http://localhost:8080/health
+curl -s http://localhost:18080/health
 
 # Обвязка: риск, план, совет, гейт, построчные замечания
 bash scripts/risk.sh plan docs/tasks/<N>.plan.json

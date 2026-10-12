@@ -143,7 +143,7 @@ cp config/proactive-rules.example.yaml config/proactive-rules.yaml
 cp config/response-templates.example.yaml config/response-templates.yaml
 
 docker compose up -d --build
-curl -s http://localhost:8080/health
+curl -s http://localhost:18080/health
 ```
 
 Ожидаемый ответ — `{"status":"degraded"}`: без токена Home Assistant и ключа
