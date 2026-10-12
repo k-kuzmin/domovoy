@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Восстановление Домового из бэкапа ops/backup/backup.sh.
 #
-#   bash ops/backup/restore.sh --from <каталог-бэкапа> --check [--ha-api-check required|skip] [--keep]
+#   bash ops/backup/restore.sh --check [--from <каталог-бэкапа>] [--ha-api-check required|skip] [--keep]
 #   bash ops/backup/restore.sh --from <каталог-бэкапа> --project <имя> [--ha-api-check required|skip]
 #
+# --check без --from берёт последний полный domovoy-backup-<метка> из
+#   BACKUP_DIR (окружение, иначе .env клона — как у backup.sh).
 # --check — проверка восстановления без простоя рабочего стека: отдельный
 #   проект compose (domovoy-restore-check, переопределяется переменной
 #   RESTORE_CHECK_PROJECT) только из docker-compose.yml и
@@ -12,13 +14,31 @@
 #   --keep оставляет его для разбора (удалять вручную: docker compose -p <имя> down -v).
 # --project <имя> — восстановление после потери данных в проект с этим
 #   именем: обычные файлы compose (с docker-compose.override.yml, если он
-#   есть), обычные сети и порты из .env. Проект не удаляется. Отказ, если на
-#   хосте работает homeassistant другого проекта compose: восстановленный HA
-#   управлял бы теми же устройствами параллельно. Рабочий стек сначала
-#   останавливается: docker compose --profile ha down (без -v).
+#   есть), обычные сети и порты из .env. Проект не удаляется. Бэкап
+#   выбирается явно, --from обязателен.
 #
-# В обоих режимах проект обязан быть пустым — ни контейнеров (даже
-# остановленных), ни томов. Перезаписи данных нет.
+# Полное восстановление после потери данных — в проект с именем из .env
+# (COMPOSE_PROJECT_NAME): тогда ночной бэкап и команды docker compose без
+# -p продолжают работать с восстановленным стеком.
+#
+#   docker compose --profile ha down -v
+#   bash ops/backup/restore.sh --project <имя-проекта-из-.env> --from <каталог-бэкапа>
+#
+# Предостережения:
+#   - down -v уничтожает остатки томов, в том числе конфигурацию HA:
+#     выполнять его, только когда данные уже потеряны и бэкап выбран;
+#   - --project отказывает, пока на хосте работает homeassistant другого
+#     проекта compose, и называет этот проект: восстановленный HA с
+#     override (USB-координатор) и обычными сетями управлял бы теми же
+#     устройствами параллельно. Рядом с работающим стеком безопасен
+#     только --check. Перед восстановлением в другой проект рабочий стек
+#     останавливается без -v: docker compose --profile ha down;
+#   - восстановление идёт только в пустой проект — ни контейнеров (даже
+#     остановленных), ни томов, перезаписи данных нет. Если восстановление
+#     отменяется или повторяется, проект сначала удаляется, иначе
+#     следующий запуск откажет: docker compose -p <имя> --profile ha down -v;
+#   - файлы клона (.env, config/*) в бэкап не входят: потерю хоста целиком
+#     этот бэкап не закрывает.
 #
 # Проверки:
 #   БД  — число строк по каждой таблице равно манифесту;
@@ -74,7 +94,8 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-[ -n "$from_arg" ] && [ -n "$mode" ] || usage
+[ -n "$mode" ] || usage
+[ -n "$from_arg" ] || [ "$mode" = 'check' ] || usage
 case "$ha_api_check" in required | skip) ;; *) usage ;; esac
 if [ "$keep_project" -eq 1 ] && [ "$mode" != 'check' ]; then usage; fi
 
@@ -85,6 +106,36 @@ fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root"
+# shellcheck source=ops/backup/dotenv.sh
+. "$root/ops/backup/dotenv.sh"
+
+canonical_dir() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -u -- "$path")"; fi
+  (cd -- "$path" 2>/dev/null && pwd -P) || true
+}
+
+# Без --from (только --check) — последний полный бэкап из BACKUP_DIR: имя
+# ровно domovoy-backup-<метка>, как у ротации backup.sh; .partial и
+# посторонние каталоги не выбираются.
+if [ -z "$from_arg" ]; then
+  backup_dir_arg="$(backup_setting BACKUP_DIR "$root")"
+  if [ -z "$backup_dir_arg" ]; then
+    echo "restore: бэкап не указан — задайте BACKUP_DIR в .env клона или передайте --from <каталог-бэкапа>" >&2
+    usage
+  fi
+  backup_dir="$(canonical_dir "$backup_dir_arg")"
+  [ -n "$backup_dir" ] || { echo "restore: каталога BACKUP_DIR нет — носитель не подключён?" >&2; exit 1; }
+  latest=''
+  for entry in "$backup_dir"/domovoy-backup-*; do
+    base="${entry##*/}"
+    if [ -d "$entry" ] && [[ "$base" =~ ^domovoy-backup-[0-9]{8}T[0-9]{6}Z$ ]] && [[ "$base" > "$latest" ]]; then
+      latest="$base"
+    fi
+  done
+  [ -n "$latest" ] || { echo "restore: в BACKUP_DIR полных бэкапов нет" >&2; exit 1; }
+  from_arg="$backup_dir/$latest"
+fi
 
 from="$from_arg"
 if command -v cygpath >/dev/null 2>&1; then from="$(cygpath -u -- "$from")"; fi
@@ -102,6 +153,7 @@ grep -qx 'format 1' "$from/manifest.txt" || { echo "restore: неизвестн�
 expected_tables="$(grep '^db_table ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2- | sort || true)"
 expected_ha="$(grep '^ha_registry_enabled ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2 || true)"
 [[ "$expected_ha" =~ ^[0-9]+$ ]] || { echo "restore: в манифесте нет числа сущностей HA" >&2; exit 1; }
+echo "бэкап: $from"
 
 files=()
 if [ "$mode" = 'check' ]; then

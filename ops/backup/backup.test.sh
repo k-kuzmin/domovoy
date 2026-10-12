@@ -456,6 +456,53 @@ test_restore_refuses_manifest_without_ha_count() {
   ok "$name"
 }
 
+test_restore_check_defaults_to_latest_backup() {
+  local name=restore_check_defaults_to_latest_backup
+  local fake_path
+  fake_path="$(fake_docker_path)"
+  rm -rf -- "$work/restore-dir"
+  fake_backup_dir "$work/restore-dir/domovoy-backup-20200101T000000Z"
+  fake_backup_dir "$work/restore-dir/domovoy-backup-20200102T000000Z"
+  # Новее последнего полного, но не полные бэкапы: не выбираются.
+  fake_backup_dir "$work/restore-dir/domovoy-backup-20200103T000000Z.partial"
+  fake_backup_dir "$work/restore-dir/domovoy-backup-20200104T000000Z-copy"
+  fake_backup_dir "$work/restore-dir/foreign-dir"
+  fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(env_path "$work/restore-dir")")"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check
+  if [ "$rc" -eq 2 ]; then fail "$name" "без --from — код 2"; show_out; return; fi
+  grep -q '^бэкап: .*/domovoy-backup-20200102T000000Z$' "$work/out" \
+    || { fail "$name" "выбран не последний полный бэкап"; show_out; return; }
+  ok "$name"
+
+  # --from важнее BACKUP_DIR.
+  name=restore_check_from_overrides_backup_dir
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check \
+    --from "$work/restore-dir/domovoy-backup-20200101T000000Z"
+  grep -q '^бэкап: .*/domovoy-backup-20200101T000000Z$' "$work/out" || { fail "$name" "--from не взят"; show_out; return; }
+  ok "$name"
+
+  # Полное восстановление выбирает бэкап явно: без --from — код 2.
+  name=restore_project_requires_from
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --project example-fresh
+  if [ "$rc" -ne 2 ]; then fail "$name" "код $rc, ожидался 2"; show_out; return; fi
+  ok "$name"
+
+  name=restore_check_without_backups_refuses
+  rm -rf -- "$work/restore-empty" && mkdir -p "$work/restore-empty/domovoy-backup-20200103T000000Z.partial"
+  fake_clone "$(printf 'BACKUP_DIR=%s\n' "$(env_path "$work/restore-empty")")"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0"; return; fi
+  grep -q 'полных бэкапов нет' "$work/out" || { fail "$name" "отказ без причины"; show_out; return; }
+
+  fake_clone $'BACKUP_DIR=<внешний-диск>/domovoy-backups\n'
+  rm -f "$work/docker-called"
+  PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check
+  if [ "$rc" -ne 2 ]; then fail "$name" "BACKUP_DIR не задан: код $rc, ожидался 2"; show_out; return; fi
+  grep -q 'BACKUP_DIR' "$work/out" || { fail "$name" "в выводе нет BACKUP_DIR"; show_out; return; }
+  if [ -e "$work/docker-called" ]; then fail "$name" "docker вызывался"; return; fi
+  ok "$name"
+}
+
 test_restore_project_refuses_while_other_ha_runs_static() {
   local name=restore_project_refuses_while_other_ha_runs/static
   # Подделка docker: работает homeassistant проекта example-other, всё
@@ -853,6 +900,7 @@ test_backup_drops_leftover_verify_databases
 test_backup_max_size_prunes_oldest_before_writing
 test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
+test_restore_check_defaults_to_latest_backup
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"
