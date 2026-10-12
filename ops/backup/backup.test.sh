@@ -557,6 +557,12 @@ test_install_schedule_dry_run() {
     grep -qx 'Daily: 03:30' "$work/out.$shell" || { fail "$name/$shell" "не 03:30"; show_out; return; }
     grep -qx 'LogonType: S4U' "$work/out.$shell" || { fail "$name/$shell" "не S4U"; show_out; return; }
     grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
+    # Строки — свойства объектов, которые уходят в Register-ScheduledTask.
+    local setting
+    for setting in 'DaysInterval: 1' 'StartWhenAvailable: True' 'ExecutionTimeLimit: PT2H' \
+      'MultipleInstances: IgnoreNew' 'DisallowStartIfOnBatteries: False' 'StopIfGoingOnBatteries: False'; do
+      grep -qxF "$setting" "$work/out.$shell" || { fail "$name/$shell" "нет «$setting»"; show_out; return; }
+    done
     grep -qix 'Execute: .*\\bin\\bash\.exe' "$work/out.$shell" || { fail "$name/$shell" "не bash.exe Git for Windows"; show_out; return; }
     if grep -qi '^Execute: .*\\system32\\' "$work/out.$shell"; then fail "$name/$shell" "выбран bash.exe из System32 (WSL)"; return; fi
     # Аргумент — только путь к backup.sh этого клона: каталог и лимит

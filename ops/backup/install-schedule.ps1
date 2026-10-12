@@ -163,16 +163,33 @@ if ($Install) {
     $argument = '"{0}"' -f $backupScript.Replace('\', '/')
     $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
+    # Объекты задачи — локальные, прав администратора не требуют. Сухой
+    # прогон печатает их свойства, а не описание: что напечатано, то и
+    # регистрируется.
+    $action = New-ScheduledTaskAction -Execute $bash -Argument $argument -WorkingDirectory $root
+    $trigger = New-ScheduledTaskTrigger -Daily -At $time
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
+        -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+
     if ($DryRun) {
+        $invariant = [Globalization.CultureInfo]::InvariantCulture
+        # StartBoundary хранится в UTC; в выводе — местное время запуска.
+        $start = [DateTimeOffset]::Parse($trigger.StartBoundary, $invariant).ToLocalTime()
         Write-Output "Task: $TaskName"
-        Write-Output ('Daily: {0}' -f $time.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture))
-        Write-Output "Execute: $bash"
-        Write-Output "Arguments: $argument"
-        Write-Output "WorkingDirectory: $root"
-        Write-Output "UserId: $userId"
-        Write-Output 'LogonType: S4U'
-        Write-Output 'RunLevel: Limited'
-        Write-Output 'Settings: StartWhenAvailable, ExecutionTimeLimit 02:00:00, MultipleInstances IgnoreNew, AllowStartIfOnBatteries, DontStopIfGoingOnBatteries'
+        Write-Output ('Daily: {0}' -f $start.ToString('HH:mm', $invariant))
+        Write-Output "DaysInterval: $($trigger.DaysInterval)"
+        Write-Output "Execute: $($action.Execute)"
+        Write-Output "Arguments: $($action.Arguments)"
+        Write-Output "WorkingDirectory: $($action.WorkingDirectory)"
+        Write-Output "UserId: $($principal.UserId)"
+        Write-Output "LogonType: $($principal.LogonType)"
+        Write-Output "RunLevel: $($principal.RunLevel)"
+        Write-Output "StartWhenAvailable: $($settings.StartWhenAvailable)"
+        Write-Output "ExecutionTimeLimit: $($settings.ExecutionTimeLimit)"
+        Write-Output "MultipleInstances: $($settings.MultipleInstances)"
+        Write-Output "DisallowStartIfOnBatteries: $($settings.DisallowStartIfOnBatteries)"
+        Write-Output "StopIfGoingOnBatteries: $($settings.StopIfGoingOnBatteries)"
         Write-Output "BACKUP_DIR: $backupDir"
         Write-Output 'DryRun: not registered'
         exit 0
@@ -183,11 +200,6 @@ if ($Install) {
         Write-Warning "каталог BACKUP_DIR ($backupDir) сейчас недоступен — задача ставится, но бэкап будет отказывать, пока носитель не подключён"
     }
 
-    $action = New-ScheduledTaskAction -Execute $bash -Argument $argument -WorkingDirectory $root
-    $trigger = New-ScheduledTaskTrigger -Daily -At $time
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
-        -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $null = Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
         -Settings $settings -Description 'Домовой: ночной бэкап БД и тома Home Assistant (ops/backup/backup.sh)' -Force
     Write-Output ("задача {0} зарегистрирована: ежедневно {1}, {2} {3}" -f $TaskName,
