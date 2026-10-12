@@ -555,7 +555,8 @@ test_install_schedule_dry_run() {
     tr -d '\r' <"$work/out" >"$work/out.$shell"
     grep -qx 'Task: domovoy-backup' "$work/out.$shell" || { fail "$name/$shell" "нет имени задачи"; show_out; return; }
     grep -qx 'Daily: 03:30' "$work/out.$shell" || { fail "$name/$shell" "не 03:30"; show_out; return; }
-    grep -qx 'LogonType: S4U' "$work/out.$shell" || { fail "$name/$shell" "не S4U"; show_out; return; }
+    # До #6 движок — Docker Desktop в сессии пользователя: задача только при входе.
+    grep -qx 'LogonType: Interactive' "$work/out.$shell" || { fail "$name/$shell" "не Interactive"; show_out; return; }
     grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
     # Строки — свойства объектов, которые уходят в Register-ScheduledTask.
     local setting

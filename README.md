@@ -207,13 +207,18 @@ docker compose --profile ha down
 отказ, а не запись на системный диск.
 
 **Расписание** — ежедневно в 03:30, задача `domovoy-backup` Планировщика
-заданий Windows. Ставится при развёртывании одной командой из корня клона в
-терминале администратора, повторный запуск её заменяет; правка `.env`
-переустановки не требует:
+заданий Windows; ставит её установщик развёртывания (#6) через
+`ops/backup/install-schedule.ps1`, отдельного шага нет. Правка `.env`
+переустановки не требует.
+
+До #6 бэкап идёт, только пока пользователь вошёл в систему и Docker Desktop
+запущен. Docker Desktop не запущен — отказ с ненулевым кодом и строкой в
+`backup.log`; никто не вошёл — задача в 03:30 не стартует, пропущенный
+запуск Планировщик выполняет при первой возможности. Запуск без входа — #6.
+Состояние задачи и хвост `backup.log`:
 
 ```powershell
-pwsh -File ops/backup/install-schedule.ps1
-pwsh -File ops/backup/install-schedule.ps1 -Check   # состояние и хвост backup.log
+powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check
 ```
 
 **Бэкап — секрет.** В нём токены Home Assistant, разметка дома, диалоги и
@@ -286,7 +291,7 @@ dotnet user-secrets list
 | Стек целиком | `docker compose up -d --build` |
 | Стек с Home Assistant | `docker compose --profile ha up -d --build` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
-| Расписание бэкапа (терминал администратора) | `pwsh -File ops/backup/install-schedule.ps1` |
+| Состояние расписания бэкапа | `powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check` |
 | Бэкап вне расписания | `bash ops/backup/backup.sh` |
 | Проверка восстановления | `bash ops/backup/restore.sh --check` |
 | Тесты бэкапа (нужен docker) | `bash ops/backup/backup.test.sh` |

@@ -4,7 +4,8 @@
   Задача Планировщика Windows для ночного бэкапа Домового.
 
 .DESCRIPTION
-  Ставится один раз при развёртывании, из терминала администратора:
+  Вызывается установщиком развёртывания (#6), отдельного шага у владельца
+  нет; -Install требует терминала администратора:
 
     pwsh -File ops/backup/install-schedule.ps1            # то же, что -Install
     pwsh -File ops/backup/install-schedule.ps1 -Check     # состояние и хвост backup.log
@@ -17,10 +18,14 @@
   запуске, и правка .env не требует переустановки. Секретов в аргументах
   задачи нет. Повторный -Install заменяет задачу.
 
-  Задача идёт от текущего пользователя с LogonType S4U — без входа в
-  систему и без хранения пароля, с обычными правами (RunLevel Limited).
-  Регистрация S4U требует терминала администратора. Пропущенный запуск
-  (хост был выключен) выполняется при первой возможности; прогон дольше
+  Задача идёт от текущего пользователя с LogonType Interactive и обычными
+  правами (RunLevel Limited): до #6 движок — Docker Desktop, а он работает
+  только в сессии вошедшего пользователя. Поэтому бэкап идёт, только пока
+  пользователь вошёл и Docker Desktop запущен: Docker Desktop не запущен —
+  backup.sh отказывает с ненулевым кодом и строкой в backup.log; никто не
+  вошёл — задача не стартует. Запуск без входа (S4U) — в #6,
+  вместе с переездом движка в WSL. Пропущенный запуск (хост был выключен
+  или никто не вошёл) выполняется при первой возможности; прогон дольше
   2 ч останавливается; второй экземпляр не запускается.
 
   bash.exe — только из Git for Windows: InstallPath из
@@ -139,7 +144,7 @@ function Test-Administrator {
 
 function Assert-Administrator {
     if (-not (Test-Administrator)) {
-        Stop-WithError 'нужен терминал администратора: задача S4U (без входа в систему) регистрируется только с правами администратора. Запустите терминал «от имени администратора» и повторите.'
+        Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
     }
 }
 
@@ -168,7 +173,7 @@ if ($Install) {
     # регистрируется.
     $action = New-ScheduledTaskAction -Execute $bash -Argument $argument -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At $time
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
         -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
