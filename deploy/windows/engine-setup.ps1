@@ -1614,6 +1614,8 @@ try {
     foreach ($port in $apiPort, $haPort) {
         if ($ports -notcontains [string]$port) { $problems.Add("нет порта $port") }
     }
+    $extraPorts = @($ports | Where-Object { @([string]$apiPort, [string]$haPort) -notcontains $_ })
+    if ($extraPorts.Count) { $problems.Add('порты шире стека: ' + ($extraPorts -join ',')) }
     if ($problems.Count) { Add-Result 'FAIL' 'правило firewall' ($problems -join '; ') }
     else { Add-Result 'OK' 'правило firewall' ('TCP {0} с {1}, профиль {2}' -f ($ports -join ','), ($addresses -join ','), $rule.Profiles) }
 }
