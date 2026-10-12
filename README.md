@@ -142,8 +142,8 @@ cp config/home-profile.example.md     config/home-profile.md
 cp config/proactive-rules.example.yaml config/proactive-rules.yaml
 cp config/response-templates.example.yaml config/response-templates.yaml
 
-docker compose up -d --build
-curl -s http://localhost:8080/health
+docker compose up -d --build --wait
+curl -s http://localhost:18080/health
 ```
 
 Ожидаемый ответ — `{"status":"degraded"}`: без токена Home Assistant и ключа
@@ -151,7 +151,7 @@ curl -s http://localhost:8080/health
 `/health` отдаёт только это одно поле; раздельный статус БД, Home Assistant и
 LLM доступен на `GET /api/v1/health` под токеном устройства.
 
-Скопированные `config/*.yaml` и `.env` закрыты `.gitignore` — заполнять их
+Скопированные файлы `config/` и `.env` закрыты `.gitignore` — заполнять их
 реальными значениями безопасно. Пароль базы в `.env.example` — значение для
 примера: наружу порт базы не публикуется, но при реальной эксплуатации
 `POSTGRES_PASSWORD` меняется.
@@ -166,7 +166,7 @@ Home Assistant объявлен в том же `docker-compose.yml`, но под
 видит.
 
 ```bash
-docker compose --profile ha up -d --build
+docker compose --profile ha up -d --build --wait
 docker compose --profile ha down
 ```
 
@@ -187,6 +187,58 @@ docker compose --profile ha down
 Конфигурация HA — устройства, пользователи, токены — лежит в именованном томе
 `homeassistant-config`, вне рабочего дерева. **`docker compose down -v` и
 `docker volume prune` удаляют этот том**: HA после них настраивается заново.
+
+## Резервное копирование и восстановление
+
+Сценарии — в [`ops/backup/`](ops/backup/); подробности поведения и
+предостережения — в их шапках.
+
+**Что входит.** Каждую ночь в каталоге `domovoy-backup-<UTC-метка>`:
+
+- `db.dump` — база Backend;
+- `ha-config.tar.gz` — том конфигурации Home Assistant, снятый без его
+  остановки;
+- `manifest.txt` — числа для проверки восстановления, без `entity_id`.
+
+**Место и объём** задаются в `.env`: `BACKUP_DIR` — существующий каталог на
+внешнем носителе, например `<внешний-диск>/domovoy-backups`;
+`BACKUP_MAX_SIZE_GB` — лимит суммарного объёма в ГБ, пусто — без лимита.
+Хранятся 14 последних бэкапов. Неподключённый носитель и каталог внутри клона —
+отказ, а не запись на системный диск.
+
+**Расписание** — ежедневно в 03:30, задача `domovoy-backup` Планировщика
+заданий Windows; ставит её установщик развёртывания (#6) через
+`ops/backup/install-schedule.ps1`, отдельного шага нет. Правка `.env`
+переустановки не требует.
+
+**Пока #6 не закрыта, установщика нет и задача не ставится ничем — ночного
+бэкапа нет.** Бэкап вне расписания — `bash ops/backup/backup.sh` (место и
+лимит из `.env`). После установки задача до #6 идёт, только пока
+пользователь вошёл в систему и Docker Desktop запущен: Docker Desktop не
+запущен — отказ с ненулевым кодом и строкой в `backup.log`; никто не вошёл —
+задача в 03:30 не стартует, пропущенный запуск Планировщик выполняет при
+первой возможности. Запуск без входа — #6. Состояние задачи и хвост
+`backup.log`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check
+```
+
+**Бэкап — секрет.** В нём токены Home Assistant, разметка дома, диалоги и
+аудит: носитель хранится как ключ от дома и без шифрования в облако не
+копируется.
+
+**Проверка восстановления** — последний бэкап из `BACKUP_DIR` поднимается в
+отдельном изолированном проекте compose, рабочий стек не трогается:
+
+```bash
+bash ops/backup/restore.sh --check
+```
+
+**Полное восстановление после потери данных** —
+`restore.sh --project <имя-проекта-из-.env> --from <каталог-бэкапа>`.
+Порядок и предостережения (`down -v`, отказ рядом с работающим HA другого
+проекта) — в шапке [`ops/backup/restore.sh`](ops/backup/restore.sh).
 
 ## Локальная разработка
 
@@ -239,14 +291,20 @@ dotnet user-secrets list
 | Миграции: применить | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
-| Стек целиком | `docker compose up -d --build` |
-| Стек с Home Assistant | `docker compose --profile ha up -d --build` |
+| Стек целиком | `docker compose up -d --build --wait` |
+| Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
+| Состояние расписания бэкапа | `powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check` |
+| Бэкап вне расписания | `bash ops/backup/backup.sh` |
+| Проверка восстановления | `bash ops/backup/restore.sh --check` |
+| Тесты бэкапа (нужен docker) | `bash ops/backup/backup.test.sh` |
 
 ## API
 
 Базовый префикс `/api/v1`, аутентификация — Bearer-токен устройства.
-На этапе каркаса все эндпоинты, кроме `/health`, отвечают `501`.
+На этапе каркаса любой запрос к `/api/v1`, кроме `POST /auth/device`,
+получает `401`: привязка устройств ещё не реализована, и предъявленный токен
+отклоняется. `POST /auth/device` анонимный и отвечает `501`.
 
 | Метод | Путь | Назначение |
 |---|---|---|
