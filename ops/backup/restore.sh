@@ -12,7 +12,10 @@
 #   --keep оставляет его для разбора (удалять вручную: docker compose -p <имя> down -v).
 # --project <имя> — восстановление после потери данных в проект с этим
 #   именем: обычные файлы compose (с docker-compose.override.yml, если он
-#   есть), обычные сети и порты из .env. Проект не удаляется.
+#   есть), обычные сети и порты из .env. Проект не удаляется. Отказ, если на
+#   хосте работает homeassistant другого проекта compose: восстановленный HA
+#   управлял бы теми же устройствами параллельно. Рабочий стек сначала
+#   останавливается: docker compose --profile ha down (без -v).
 #
 # В обоих режимах проект обязан быть пустым — ни контейнеров (даже
 # остановленных), ни томов. Перезаписи данных нет.
@@ -116,6 +119,21 @@ project_is_empty() {
 }
 
 docker info >/dev/null 2>&1 || { echo "restore: docker недоступен" >&2; exit 1; }
+# --project поднимает HA с обычными сетями и override с USB-координатором:
+# рядом с работающим HA другого проекта он управлял бы теми же
+# устройствами параллельно. Безопасен рядом с работающим стеком только
+# --check.
+if [ "$mode" = 'project' ]; then
+  running_ha="$(docker ps --filter 'label=com.docker.compose.service=homeassistant' \
+    --format '{{.Label "com.docker.compose.project"}}' | tr -d '\r' | grep -vxF "$project" | sort -u || true)"
+  if [ -n "$running_ha" ]; then
+    while read -r other; do
+      echo "restore: на хосте работает Home Assistant проекта ${other:-<без имени>} — восстановленный управлял бы теми же устройствами." >&2
+      echo "restore: сначала остановите его, тома не трогая: docker compose -p ${other:-<проект>} --profile ha down (без -v)" >&2
+    done <<<"$running_ha"
+    exit 1
+  fi
+fi
 if ! project_is_empty; then
   echo "restore: в проекте $project уже есть контейнеры или тома — восстановление идёт только в пустой проект." >&2
   echo "restore: если прошлое восстановление отменяется: docker compose -p $project down -v" >&2

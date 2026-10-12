@@ -200,6 +200,44 @@ test_backup_refuses_missing_destination() {
   ok "$name"
 }
 
+# Каталог бэкапа с правильной формой, но без данных: отказ обязан случиться
+# раньше, чем что-то из него читается в контейнеры.
+fake_backup_dir() {
+  mkdir -p "$1"
+  : >"$1/db.dump"
+  : >"$1/ha-config.tar.gz"
+  printf 'format 1\nha_registry_enabled 3\n' >"$1/manifest.txt"
+}
+
+test_restore_project_refuses_while_other_ha_runs_static() {
+  local name=restore_project_refuses_while_other_ha_runs/static
+  # Подделка docker: работает homeassistant проекта example-other, всё
+  # остальное пусто; любой docker compose — отметка в журнале и отказ.
+  mkdir -p "$work/fakebin-ha"
+  cat >"$work/fakebin-ha/docker" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  info*) exit 0 ;;
+  compose*) echo compose >>"$work/compose-called"; exit 1 ;;
+  *com.docker.compose.service=homeassistant*) echo example-other ;;
+esac
+exit 0
+EOF
+  chmod +x "$work/fakebin-ha/docker"
+  fake_backup_dir "$work/fake-backup"
+  rm -f "$work/compose-called"
+  PATH="$work/fakebin-ha:$PATH" run bash ops/backup/restore.sh --from "$work/fake-backup" --project example-fresh
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0 при работающем HA другого проекта"; return; fi
+  grep -q 'работает Home Assistant проекта example-other' "$work/out" || { fail "$name" "отказ не по работающему HA"; show_out; return; }
+  grep -qF 'docker compose -p example-other --profile ha down (без -v)' "$work/out" || { fail "$name" "нет команды остановки без -v"; show_out; return; }
+  if [ -e "$work/compose-called" ]; then fail "$name" "docker compose вызывался до отказа"; return; fi
+
+  # --check рядом с работающим HA — штатный режим, этот отказ его не трогает.
+  PATH="$work/fakebin-ha:$PATH" run bash ops/backup/restore.sh --from "$work/fake-backup" --check
+  if grep -q 'работает Home Assistant проекта' "$work/out"; then fail "$name" "--check отказал по работающему HA"; return; fi
+  ok "$name"
+}
+
 # ------------------------------------------------------------------
 # С docker
 # ------------------------------------------------------------------
@@ -460,8 +498,34 @@ test_restore_check_requires_ha_api_by_default() {
   fi
 }
 
+test_restore_project_refuses_while_other_ha_runs() {
+  local name=restore_project_refuses_while_other_ha_runs
+  # Работает HA исходного проекта — восстановление в другой проект
+  # отказывает и ничего не создаёт.
+  API_HTTP_PORT="$fresh_api_port" HA_HTTP_PORT="$fresh_ha_port" \
+    run bash ops/backup/restore.sh --from "$backup" --project "$fresh_project" --ha-api-check skip
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0 при работающем HA проекта $src_project"; return; fi
+  grep -q "работает Home Assistant проекта $src_project" "$work/out" || { fail "$name" "отказ не по работающему HA"; show_out; return; }
+  if [ -n "$(docker ps -aq --filter "label=com.docker.compose.project=$fresh_project")" ] \
+    || [ -n "$(project_volumes "$fresh_project")" ]; then
+    fail "$name" "в проекте $fresh_project что-то создано до отказа"; return
+  fi
+  ok "$name"
+}
+
 test_restore_into_fresh_project_restores_markers() {
   local name=restore_into_fresh_project_restores_markers
+  # Рядом с работающим HA --project отказывает, поэтому HA исходного
+  # проекта останавливается. HA вне тестовых проектов (рабочий стек
+  # владельца на его машине) тест не трогает — тогда он пропускается.
+  dcs stop homeassistant </dev/null >/dev/null 2>&1
+  local others
+  others="$(docker ps --filter 'label=com.docker.compose.service=homeassistant' \
+    --format '{{.Label "com.docker.compose.project"}}' | tr -d '\r' | grep -vxF "$fresh_project" | sort -u || true)"
+  if [ -n "$others" ]; then
+    skip "$name" "на хосте работает HA проекта $(tr '\n' ' ' <<<"$others")— восстановление в проект рядом с ним запрещено, тест его не останавливает"
+    return
+  fi
   API_HTTP_PORT="$fresh_api_port" HA_HTTP_PORT="$fresh_ha_port" \
     run bash ops/backup/restore.sh --from "$backup" --project "$fresh_project" --ha-api-check skip
   if [ "$rc" -ne 0 ]; then fail "$name" "код $rc"; show_out; return; fi
@@ -531,6 +595,7 @@ test_rotation_keeps_foreign_and_partial_directories() {
 test_backup_artifacts_are_ignored_in_tree
 test_backup_refuses_destination_inside_repository
 test_backup_refuses_missing_destination
+test_restore_project_refuses_while_other_ha_runs_static
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"
@@ -542,9 +607,11 @@ if [ "$static_only" -eq 0 ]; then
     test_restore_check_fails_on_manifest_mismatch
     test_restore_check_fails_on_missing_marker
     test_restore_check_requires_ha_api_by_default
-    test_restore_into_fresh_project_restores_markers
+    test_restore_project_refuses_while_other_ha_runs
     test_backup_fails_without_entity_registry
     test_rotation_keeps_foreign_and_partial_directories
+    # Последним: останавливает HA исходного проекта.
+    test_restore_into_fresh_project_restores_markers
   fi
   tree_after="$(git status --porcelain --ignored)"
   if [ "$tree_before" = "$tree_after" ]; then
