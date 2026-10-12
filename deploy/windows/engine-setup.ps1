@@ -187,6 +187,8 @@ $RemoteAddresses = @('LocalSubnet', '127.0.0.1')
 # для трафика контейнеров (provision-engine.sh): без него HTTPS из сети моста
 # через интерфейс с MTU меньше 1500 (VPN хоста) висит.
 $EngineUnits = @('docker.service', 'containerd.service', 'domovoy-mss-clamp.service')
+# Oneshot с RemainAfterExit=yes: в -Check — и is-enabled, и is-active.
+$OneshotUnits = @('domovoy-mss-clamp.service')
 # ::1 New-NetFirewallHyperVRule отвергает («Параметр задан неверно», проба на
 # хосте 2026-10-12): IPv6-петля в правиле Hyper-V не задаётся.
 # Профиль сети правила: только частная — в общественной сети порты закрыты.
@@ -1673,10 +1675,15 @@ if (-not $running) {
 else {
     foreach ($unit in $EngineUnits) {
         $isEnabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)
-        $isActive = Format-Native (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-active', $unit))
-        # OK — по is-enabled: «active» после ручного старта автозапуска не доказывает.
-        if ($isEnabled.Text -eq 'enabled') { Add-Result 'OK' "$unit в автозапуске" "is-enabled enabled; is-active $isActive" }
-        else { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled «$(Format-Native $isEnabled)»; is-active $isActive" }
+        $activeResult = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-active', $unit)
+        $isActive = Format-Native $activeResult
+        # OK — по is-enabled: «active» после ручного старта автозапуска не
+        # доказывает. Oneshot с RemainAfterExit (MSS clamp) после загрузки
+        # обязан быть и active: упавший на старте юнит is-enabled не видно.
+        $needActive = $OneshotUnits -contains $unit
+        if ($isEnabled.Text -ne 'enabled') { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled «$(Format-Native $isEnabled)»; is-active $isActive" }
+        elseif ($needActive -and $activeResult.Text -ne 'active') { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled enabled, но is-active «$isActive» — юнит упал на загрузке: systemctl status $unit" }
+        else { Add-Result 'OK' "$unit в автозапуске" "is-enabled enabled; is-active $isActive" }
     }
     $label = "label=com.docker.compose.project=$project"
     $listed = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '-a', '--filter', $label, '--format', '{{.Names}}')
