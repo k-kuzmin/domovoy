@@ -14,11 +14,14 @@
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
 #     pwsh 7; engine-setup.ps1 -Install -DryRun печатает собранные задачи,
 #     правило и .wslconfig и ничего не создаёт; -Uninstall -DryRun печатает
-#     план отката и не трогает .wslconfig, копию и отметку; measure-boot.ps1 против
+#     план отката (с возвратом AutoStart Docker Desktop) и не трогает
+#     .wslconfig, копию и отметку; -Migrate -DryRun печатает шаги переезда
+#     в порядке контракта, без down, отказывает без установленного движка и
+#     не трогает настройки Docker Desktop; measure-boot.ps1 против
 #     локальной заглушки /health на python (порт на 127.0.0.1, журнал во
 #     временном каталоге).
 #
-# engine-setup.ps1 -Install и -Check тест не запускает: они меняют и читают
+# engine-setup.ps1 -Install, -Migrate и -Check тест не запускает: они меняют и читают
 # хост — это живой прогон владельца (README, «Автозапуск после перезагрузки»).
 
 set -uo pipefail
@@ -202,12 +205,23 @@ fake_clone() {
   printf '%s' "$1" >"$work/clone/.env"
 }
 
-dry_run() {
+# Настройки Docker Desktop — во временном каталоге: сухие прогоны не читают
+# файл владельца из %APPDATA%.
+mkdir -p "$work/docker"
+
+# engine-setup.ps1 копии клона с временными .wslconfig и настройками Desktop.
+engine_setup() {
   local shell="$1"
   shift
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" \
-    -Install -DryRun -WslConfigPath "$(cygpath -w "$work/wslconfig")" "$@"
+    "$@" -WslConfigPath "$(cygpath -w "$work/wslconfig")" -DockerSettingsDir "$(cygpath -w "$work/docker")"
   tr -d '\r' <"$work/out" >"$work/out.$shell"
+}
+
+dry_run() {
+  local shell="$1"
+  shift
+  engine_setup "$shell" -Install -DryRun "$@"
 }
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
@@ -339,6 +353,11 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 2 ] || { fail "$name" "-Check -DryRun код $rc, ожидался 2"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Install -Uninstall -DryRun
   [ "$rc" -eq 2 ] || { fail "$name" "-Install -Uninstall код $rc, ожидался 2"; show_out; return; }
+  # -Migrate — один или с -Install; с -Check и -Uninstall — отказ разбора.
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Migrate -Check
+  [ "$rc" -eq 2 ] || { fail "$name" "-Migrate -Check код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Migrate -Uninstall -DryRun
+  [ "$rc" -eq 2 ] || { fail "$name" "-Migrate -Uninstall код $rc, ожидался 2"; show_out; return; }
   # Подменённое состояние — только для сухого прогона. Проба через -Check:
   # при сломанной защите он лишь читает хост, а -Install без -DryRun тест
   # не запускает.
@@ -365,9 +384,7 @@ test_engine_setup_dry_run() {
 uninstall_dry_run() {
   local shell="$1"
   shift
-  run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" \
-    -Uninstall -DryRun -WslConfigPath "$(cygpath -w "$work/wslconfig")" "$@"
-  tr -d '\r' <"$work/out" >"$work/out.$shell"
+  engine_setup "$shell" -Uninstall -DryRun "$@"
 }
 
 # Файлы .wslconfig, копия и отметка — байт в байт как до сухого прогона.
@@ -410,8 +427,17 @@ test_engine_setup_uninstall_dry_run() {
     printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
     printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig.domovoy-backup"
     snapshot_wslconfig
+    # -Migrate выключил автозапуск Docker Desktop и оставил копию настроек:
+    # откат возвращает прежнее значение ключа.
+    rm -rf -- "$work/docker" "$work/docker.before" && mkdir -p "$work/docker"
+    printf '{\n  "AutoStart": false,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
+    printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json.domovoy-backup"
+    cp -R "$work/docker" "$work/docker.before"
     uninstall_dry_run "$shell" -AssumeEngineState Running
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    has "$shell" 'uninstall.desktop_autostart: restore AutoStart=true from settings-store.json.domovoy-backup' \
+      || { fail "$name" "возврат AutoStart Docker Desktop не в плане отката"; show_out; return; }
+    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
     for line in 'uninstall.engine.running: True' \
       'uninstall.task.unregister: domovoy-engine' 'uninstall.task.unregister: domovoy-measure-boot' \
       'backup.LogonType: Interactive' 'backup.exitcode: 0' \
@@ -438,6 +464,10 @@ test_engine_setup_uninstall_dry_run() {
     has "$shell" 'uninstall.engine.running: False' || { fail "$name" "состояние Stopped не учтено"; show_out; return; }
     grep -q '^uninstall\.stack\.stop: none ' "$work/out.$shell" || { fail "$name" "стек останавливается в неработающем дистрибутиве"; show_out; return; }
     has "$shell" 'uninstall.wslconfig: remove (marker wslconfig.domovoy-absent)' || { fail "$name" "отметка не учтена"; show_out; return; }
+    rm -f "$work/docker/settings-store.json.domovoy-backup"
+    uninstall_dry_run "$shell" -AssumeEngineState Stopped
+    has "$shell" 'uninstall.desktop_autostart: keep (no settings-store.json.domovoy-backup or settings.json.domovoy-backup copy)' \
+      || { fail "$name" "без копии настроек Desktop откат их трогает"; show_out; return; }
     why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
 
     # Ни копии, ни отметки — .wslconfig не трогается.
@@ -449,6 +479,90 @@ test_engine_setup_uninstall_dry_run() {
     why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
     ok "$name"
   done
+}
+
+# Переезд одной командой (-Migrate): сухой прогон печатает шаги в порядке
+# контракта и ничего не трогает — ни docker.exe, ни WSL, ни настроек Desktop.
+# Состояние движка подменяется: на машине владельца он может быть и
+# установлен, и нет.
+migrate_order=(migrate.stop_api migrate.backup migrate.stop_stack migrate.desktop_stop migrate.desktop_autostart
+  migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
+
+test_engine_setup_migrate_dry_run() {
+  local name=engine_setup_migrate_dry_run
+  if ! is_windows; then skip "$name" "не Windows — сценарий на PowerShell"; return; fi
+  if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
+  local dest="$work/backups" shell key line previous first=''
+  mkdir -p "$dest"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  rm -f "$work/wslconfig"*
+  rm -rf -- "$work/docker" "$work/docker.before" && mkdir -p "$work/docker"
+  printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
+  cp -R "$work/docker" "$work/docker.before"
+
+  for shell in "${shells[@]}"; do
+    name="engine_setup_migrate_dry_run/$shell"
+    engine_setup "$shell" -Migrate -DryRun -AssumeEngineState Running
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    # Шаги — в порядке контракта: бэкап при работающем стеке и до его
+    # остановки, Desktop гасится до wsl --shutdown, восстановление — в
+    # запущенном движке, последним — -Check.
+    previous=0
+    for key in "${migrate_order[@]}"; do
+      line="$(grep -n -m1 "^$key: " "$work/out.$shell" | cut -d: -f1)"
+      [ -n "$line" ] || { fail "$name" "нет шага $key"; show_out; return; }
+      [ "$line" -gt "$previous" ] || { fail "$name" "шаг $key не на своём месте"; show_out; return; }
+      previous="$line"
+    done
+    grep -q '^migrate\.stop_api: docker\.exe compose stop api$' "$work/out.$shell" || { fail "$name" "api не останавливается первым"; show_out; return; }
+    grep -qi '^migrate\.backup: .*\\bash\.exe ops/backup/backup\.sh <BACKUP_DIR>$' "$work/out.$shell" || { fail "$name" "бэкап не через bash Git for Windows"; show_out; return; }
+    if grep -qi '^migrate\.backup: .*\\system32\\bash\.exe' "$work/out.$shell"; then fail "$name" "бэкап через bash WSL"; show_out; return; fi
+    grep -q '^migrate\.stop_stack: docker\.exe compose --profile ha stop ' "$work/out.$shell" || { fail "$name" "стек Desktop не останавливается stop"; show_out; return; }
+    # Тома Desktop — путь отката: ни down, ни -v нигде в плане.
+    if grep -E '^migrate\.' "$work/out.$shell" | grep -qE '(^|[^a-z])down([^a-z]|$)| -v( |$)'; then fail "$name" "в плане переезда есть down или -v"; show_out; return; fi
+    grep -q '^migrate\.desktop_autostart: settings-store\.json AutoStart true -> false ' "$work/out.$shell" || { fail "$name" "автозапуск Desktop не выключается"; show_out; return; }
+    grep -q '^migrate\.wsl_shutdown: wsl\.exe --shutdown - stops ALL WSL distributions' "$work/out.$shell" || { fail "$name" "не сказано, что wsl --shutdown гасит все дистрибутивы"; show_out; return; }
+    has "$shell" 'migrate.keeper_start: Start-ScheduledTask domovoy-engine' || { fail "$name" "держалка не запускается"; show_out; return; }
+    grep -q '^migrate\.restore: wsl\.exe -d domovoy-engine -u root --cd .* --exec bash ops/backup/restore\.sh --project example-home --from ' "$work/out.$shell" \
+      || { fail "$name" "восстановление не restore.sh --project внутри движка"; show_out; return; }
+    grep -q '^migrate\.check: .*-Check' "$work/out.$shell" || { fail "$name" "итог не -Check"; show_out; return; }
+    grep -q '^migrate\.rollback: .*-Uninstall' "$work/out.$shell" || { fail "$name" "нет команд отката"; show_out; return; }
+    has "$shell" 'DryRun: nothing changed' || { fail "$name" "нет строки сухого прогона"; show_out; return; }
+    if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name" "в выводе значения .env"; return; fi
+    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
+    if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
+      fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
+    fi
+    ok "$name"
+  done
+
+  # Один -Migrate без установленного движка — отказ с подсказкой, плана нет.
+  name=engine_setup_migrate_requires_engine
+  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Absent
+  [ "$rc" -ne 0 ] || { fail "$name" "без движка код 0"; show_out; return; }
+  grep -q -- '-Install -Migrate' "$work/out.${shells[0]}" || { fail "$name" "нет подсказки -Install -Migrate"; show_out; return; }
+  if grep -q '^migrate\.stop_api:' "$work/out.${shells[0]}"; then fail "$name" "план напечатан при отказе"; show_out; return; fi
+  ok "$name"
+
+  # С -Install движок ставится первым: план установки, затем план переезда.
+  name=engine_setup_install_then_migrate
+  engine_setup "${shells[0]}" -Install -Migrate -DryRun -AssumeEngineState Absent
+  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+  local install_line migrate_line
+  install_line="$(grep -n -m1 '^keeper\.task: ' "$work/out.${shells[0]}" | cut -d: -f1)"
+  migrate_line="$(grep -n -m1 '^migrate\.stop_api: ' "$work/out.${shells[0]}" | cut -d: -f1)"
+  [ -n "$install_line" ] && [ -n "$migrate_line" ] && [ "$install_line" -lt "$migrate_line" ] \
+    || { fail "$name" "план установки не перед планом переезда"; show_out; return; }
+  [ "$(grep -c '^DryRun: nothing changed$' "$work/out.${shells[0]}")" = 1 ] || { fail "$name" "строка сухого прогона не одна в конце"; show_out; return; }
+  ok "$name"
+
+  # Нет файла настроек Desktop — предупреждение, не отказ.
+  name=engine_setup_migrate_without_desktop_settings
+  rm -rf -- "$work/docker" && mkdir -p "$work/docker"
+  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Stopped
+  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+  grep -q '^migrate\.desktop_autostart: WARN ' "$work/out.${shells[0]}" || { fail "$name" "нет предупреждения"; show_out; return; }
+  ok "$name"
 }
 
 python_cmd() {
@@ -550,6 +664,7 @@ test_docker_wsl_passes_arguments
 test_ps1_encoding_and_parse
 test_engine_setup_dry_run
 test_engine_setup_uninstall_dry_run
+test_engine_setup_migrate_dry_run
 test_measure_boot
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
