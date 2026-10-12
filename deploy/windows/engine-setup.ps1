@@ -14,7 +14,10 @@
   -Install (повторный запуск ничего не дублирует):
     1. дистрибутив domovoy-engine: wsl --import официального образа Ubuntu
        24.04 для WSL (cloud-images.ubuntu.com), SHA256 сверяется с SHA256SUMS
-       того же каталога; уже зарегистрированный не трогается;
+       того же каталога — это проверка целостности загрузки, не подлинности:
+       подпись SHA256SUMS не проверяется, и подменённый на сервере образ
+       вместе с его суммой проверку пройдёт; уже зарегистрированный не
+       трогается;
     2. провижининг внутри под root — deploy/windows/provision-engine.sh:
        systemd, Docker Engine с compose, git, safe.directory клона. Если
        systemd ещё не запущен, первый проход только включает его, затем
@@ -369,12 +372,12 @@ if ($Install) {
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $tar).Hash.ToLowerInvariant()
         if (-not $expected -or $actual -ne $expected) {
             Remove-Item -LiteralPath $tar -Force -ErrorAction SilentlyContinue
-            Stop-WithError "SHA256 образа не сошёлся с SHA256SUMS (ожидалось «$expected», получено «$actual») — образ удалён, дистрибутив не создан"
+            Stop-WithError "SHA256 образа не сошёлся с SHA256SUMS (ожидалось «$expected», получено «$actual») — загрузка повреждена или неполна; образ удалён, дистрибутив не создан"
         }
         $import = Invoke-Wsl $importArgs
         if ($import.Code -ne 0) { Stop-WithError "wsl --import: код $($import.Code): $($import.Text)" }
         Remove-Item -LiteralPath $tar, $sumsFile -Force -ErrorAction SilentlyContinue
-        Write-Output "дистрибутив $Distro создан из $ImageFile (SHA256 сошёлся)"
+        Write-Output "дистрибутив $Distro создан из $ImageFile (целостность загрузки: SHA256 сошёлся с SHA256SUMS того же сервера; подлинность не проверялась)"
     }
 
     # 2. Провижининг. Код 3 — systemd записан в wsl.conf, но ещё не PID 1:

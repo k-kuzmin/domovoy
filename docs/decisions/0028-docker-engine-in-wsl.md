@@ -67,7 +67,9 @@ WSL2-дистрибутиве `domovoy-engine` (Ubuntu 24.04). Настройк�
 - **Порты не зашиты.** Они берутся из `API_HTTP_PORT` и `HA_HTTP_PORT` в
   `.env`, без них — из значений по умолчанию в `docker-compose.yml`.
 - **Софт хоста.** Добавляются дистрибутив Ubuntu 24.04 (официальный образ
-  `cloud-images.ubuntu.com`, SHA256 сверяется с `SHA256SUMS`) и пакеты
+  `cloud-images.ubuntu.com`; SHA256 сверяется с `SHA256SUMS` того же
+  сервера — проверка целостности загрузки, не подлинности: подпись
+  `SHA256SUMS` не проверяется, gpg ради неё не ставится) и пакеты
   `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`,
   `docker-compose-plugin`, `git` из официального репозитория apt Docker. В
   сборку и зависимости проекта ничего из этого не входит.
