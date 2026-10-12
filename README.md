@@ -143,7 +143,7 @@ cp config/proactive-rules.example.yaml config/proactive-rules.yaml
 cp config/response-templates.example.yaml config/response-templates.yaml
 
 docker compose up -d --build --wait
-curl -s http://localhost:18080/health
+curl -s http://127.0.0.1:18080/health
 ```
 
 Ожидаемый ответ — `{"status":"degraded"}`: без токена Home Assistant и ключа
@@ -177,7 +177,7 @@ docker compose --profile ha down
 **Первый запуск.** До первичной настройки страница создания владельца HA
 открыта любому в локальной сети. Поэтому сразу после первого
 `docker compose --profile ha up -d` пройти настройку с самой машины:
-`http://localhost:8123` (или порт из `HA_HTTP_PORT`).
+`http://127.0.0.1:8123` (или порт из `HA_HTTP_PORT`).
 
 Веб-интерфейс опубликован на все интерфейсы хоста, чтобы открываться с
 телефона в домашней сети. Наружу HA не выставляется (NFR-SEC-2): на роутере
