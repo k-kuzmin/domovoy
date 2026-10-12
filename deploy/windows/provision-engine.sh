@@ -94,8 +94,7 @@ ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptable
 [Install]
 WantedBy=multi-user.target"
   if [ "$(cat "$unit" 2>/dev/null || true)" != "$content" ]; then
-    printf '%s
-' "$content" >"$unit"
+    printf '%s\n' "$content" >"$unit"
     systemctl daemon-reload
   fi
   systemctl enable domovoy-mss-clamp.service
