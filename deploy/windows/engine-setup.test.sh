@@ -408,6 +408,22 @@ test_engine_setup_dry_run() {
   has "${shells[0]}" 'wslconfig.conflict: networkingMode=nat' || { fail "$name" "конфликт не назван"; show_out; return; }
   ok "$name"
 
+  # firewall=false выключает firewall Hyper-V для VM WSL: правило ничего не
+  # сужало бы, порты стека видны всем в сети. Отказ — и рядом с mirrored.
+  name=engine_setup_refuses_wsl_firewall_off
+  local wsl_case
+  for wsl_case in $'[wsl2]\nfirewall=false\n|firewall=false' $'[wsl2]\nnetworkingMode=mirrored\nFirewall = False\n|firewall=False'; do
+    printf '%s' "${wsl_case%|*}" >"$work/wslconfig"
+    dry_run "${shells[0]}"
+    if [ "$rc" -eq 0 ]; then fail "$name" "${wsl_case#*|} принят"; show_out; return; fi
+    has "${shells[0]}" "wslconfig.conflict: ${wsl_case#*|}" || { fail "$name" "конфликт ${wsl_case#*|} не назван"; show_out; return; }
+  done
+  printf '[wsl2]\nnetworkingMode=mirrored\nfirewall=true\n' >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "firewall=true — отказ, код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "firewall=true: файл меняется"; show_out; return; }
+  ok "$name"
+
   name=engine_setup_requires_mode
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")"
   [ "$rc" -eq 2 ] || { fail "$name" "без режима код $rc, ожидался 2"; show_out; return; }
@@ -753,6 +769,25 @@ test_rule_profile_private_only() {
   ok "$name"
 }
 
+# Звено -Check «firewall Hyper-V для VM WSL»: OK только при Enabled True и
+# DefaultInboundAction Block; NotConfigured хранилища по умолчанию — не OK.
+test_vm_firewall_problems() {
+  local name=vm_firewall_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function s($e, $d) { [pscustomobject]@{ Enabled = $e; DefaultInboundAction = $d } }
+      if (@(Get-VmFirewallProblems (s "True" "Block")).Count) { "True/Block не OK"; exit 1 }
+      foreach ($bad in (s "False" "Block"), (s "True" "Allow"), (s "NotConfigured" "NotConfigured"), (s "True" "NotConfigured")) {
+        if (-not @(Get-VmFirewallProblems $bad).Count) { "принято $($bad.Enabled)/$($bad.DefaultInboundAction)"; exit 1 }
+      }' \
+      Get-VmFirewallProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 python_cmd() {
   local candidate
   for candidate in python3 python; do
@@ -854,6 +889,7 @@ test_engine_setup_dry_run
 test_engine_setup_uninstall_dry_run
 test_engine_setup_migrate_dry_run
 test_rule_profile_private_only
+test_vm_firewall_problems
 test_measure_boot
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"

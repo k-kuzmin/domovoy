@@ -44,7 +44,9 @@
     5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=mirrored — порты
        дистрибутива видны на адресе хоста. Прежний файл сохраняется копией
        .wslconfig.domovoy-backup, отсутствие — отметкой .wslconfig.domovoy-absent.
-       Другое значение networkingMode — отказ: чужая настройка не переписывается.
+       Другое значение networkingMode или firewall=false (firewall Hyper-V
+       для VM WSL выключен — правило ниже ничего не сужало бы) — отказ:
+       чужая настройка не переписывается.
        Применяется после wsl --shutdown — его -Install не выполняет (гасит
        все дистрибутивы, в том числе Docker Desktop), выполняет -Migrate;
     6. правило Hyper-V firewall domovoy-engine-ports: входящие TCP на порты
@@ -326,16 +328,23 @@ function Get-WslNames([string[]]$Arguments) {
 }
 
 # Новое содержимое .wslconfig: mirrored в [wsl2], прочее не трогается.
-# Changed = $false — файл уже такой; Conflict — задан другой networkingMode.
+# Changed = $false — файл уже такой; Conflict — чужая настройка парой
+# ключ=значение: другой networkingMode или firewall=false. Порты стека в
+# mirrored закрывает от всех, кроме правила, firewall Hyper-V для VM WSL —
+# с firewall=false правило ничего не сужало бы.
 function Get-WslConfigPlan([string]$Path) {
     $exists = Test-Path -LiteralPath $Path -PathType Leaf
     $current = if ($exists) { [IO.File]::ReadAllText($Path) } else { '' }
+    $firewall = [regex]::Match($current, '(?im)^\s*firewall\s*=\s*(\S+)\s*$')
+    if ($firewall.Success -and $firewall.Groups[1].Value -ieq 'false') {
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "firewall=$($firewall.Groups[1].Value)"; Content = $current }
+    }
     $mode = [regex]::Match($current, '(?im)^\s*networkingMode\s*=\s*(\S+)\s*$')
     if ($mode.Success) {
         if ($mode.Groups[1].Value -ieq 'mirrored') {
             return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current }
         }
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = $mode.Groups[1].Value; Content = $current }
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$($mode.Groups[1].Value)"; Content = $current }
     }
     # Вставка — перед переводом строки после [wsl2] и тем же переводом, что
     # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
@@ -363,6 +372,16 @@ function Get-WslConfigPlan([string]$Path) {
 function Test-PrivateProfileOnly($Value) {
     $text = [string]$Value
     return ($text -eq 'Private' -or $text -eq '2')
+}
+
+# Настройка firewall Hyper-V для VM WSL (Get-NetFirewallHyperVVMSetting,
+# ActiveStore): нужны Enabled True и DefaultInboundAction Block. Значения —
+# перечисления; сравнивается их текст. Пустой список — замечаний нет.
+function Get-VmFirewallProblems($Setting) {
+    $found = @()
+    if ([string]$Setting.Enabled -ne 'True') { $found += "Enabled $($Setting.Enabled), нужен True" }
+    if ([string]$Setting.DefaultInboundAction -ne 'Block') { $found += "DefaultInboundAction $($Setting.DefaultInboundAction), нужен Block" }
+    return $found
 }
 
 function Test-Administrator {
@@ -664,7 +683,8 @@ function Get-MigrateSetup {
             if ((Get-WslNames @('--list', '--quiet')) -notcontains $Distro) { $missing.Add("нет дистрибутива $Distro") }
             if (-not (Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue)) { $missing.Add("нет задачи $KeeperTask") }
             $wslPlan = Get-WslConfigPlan $WslConfigPath
-            if ($wslPlan.Changed -or $wslPlan.Conflict) { $missing.Add('в .wslconfig нет networkingMode=mirrored') }
+            if ($wslPlan.Conflict) { $missing.Add("в .wslconfig $($wslPlan.Conflict)") }
+            elseif ($wslPlan.Changed) { $missing.Add('в .wslconfig нет networkingMode=mirrored') }
         }
         if ($missing.Count) {
             $problems.Add("движок не установлен ($($missing -join '; ')) — сначала engine-setup.ps1 -Install, или одной командой: engine-setup.ps1 -Install -Migrate")
@@ -1226,7 +1246,7 @@ if ($Install) {
             }
         }
         if ($wslConfig.Conflict) {
-            Write-Output "wslconfig.conflict: networkingMode=$($wslConfig.Conflict)"
+            Write-Output "wslconfig.conflict: $($wslConfig.Conflict)"
         }
         else {
             Write-Output ('wslconfig.exists: {0}' -f $wslConfig.Exists)
@@ -1263,7 +1283,7 @@ if ($Install) {
         Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
     }
     if ($wslConfig.Conflict) {
-        Stop-WithError "$WslConfigPath задаёт networkingMode=$($wslConfig.Conflict) — чужая настройка не переписывается; движку нужен mirrored (README, «Автозапуск после перезагрузки»)"
+        Stop-WithError "$WslConfigPath задаёт $($wslConfig.Conflict) — чужая настройка не переписывается; движку нужны networkingMode=mirrored и firewall Hyper-V (README, «Автозапуск после перезагрузки»)"
     }
     if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
         Stop-WithError 'wsl.exe не найден — включите WSL2 (wsl --install) и повторите'
@@ -1604,6 +1624,24 @@ catch {
     }
     else {
         Add-Result 'SKIP' 'правило firewall' 'не проверено: нет Get-NetFirewallHyperVRule (Windows 11 22H2+)'
+    }
+}
+
+# Firewall Hyper-V для VM WSL: правило выше сужает доступ, только пока
+# firewall включён и по умолчанию блокирует входящие. ActiveStore — действующие
+# значения: в хранилище по умолчанию без явной настройки стоит NotConfigured.
+try {
+    $vmFirewall = Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name $WslVmCreatorId -ErrorAction Stop
+    $vmProblems = @(Get-VmFirewallProblems $vmFirewall)
+    if ($vmProblems.Count) { Add-Result 'FAIL' 'firewall Hyper-V для VM WSL' (($vmProblems -join '; ') + ' — входящие на порты стека открыты шире правила') }
+    else { Add-Result 'OK' 'firewall Hyper-V для VM WSL' 'Enabled True, DefaultInboundAction Block' }
+}
+catch {
+    if (Get-Command Get-NetFirewallHyperVVMSetting -ErrorAction SilentlyContinue) {
+        Add-Result 'SKIP' 'firewall Hyper-V для VM WSL' "не проверено: $($_.Exception.Message) (нужен терминал администратора?)"
+    }
+    else {
+        Add-Result 'SKIP' 'firewall Hyper-V для VM WSL' 'не проверено: нет Get-NetFirewallHyperVVMSetting (Windows 11 22H2+)'
     }
 }
 
