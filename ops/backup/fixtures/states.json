@@ -1,0 +1,28 @@
+[
+  {
+    "entity_id": "light.example_lamp",
+    "state": "unavailable",
+    "attributes": {
+      "restored": true,
+      "supported_features": 0
+    },
+    "last_changed": "2026-01-01T00:00:00+00:00",
+    "last_updated": "2026-01-01T00:00:00+00:00"
+  },
+  {
+    "entity_id": "sensor.example_temperature",
+    "state": "21.5",
+    "attributes": {
+      "unit_of_measurement": "°C"
+    },
+    "last_changed": "2026-01-01T00:00:00+00:00",
+    "last_updated": "2026-01-01T00:00:00+00:00"
+  },
+  {
+    "entity_id": "sun.example_sun",
+    "state": "above_horizon",
+    "attributes": {},
+    "last_changed": "2026-01-01T00:00:00+00:00",
+    "last_updated": "2026-01-01T00:00:00+00:00"
+  }
+]
