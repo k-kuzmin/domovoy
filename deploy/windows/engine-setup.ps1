@@ -71,7 +71,8 @@
        Desktop есть контейнеры проекта и работают postgres и
        homeassistant; в движке нет ни
        контейнеров, ни томов проекта — повторный перенос данные не
-       затирает. Для последней пробы дистрибутив запускается; если он не
+       затирает — и не работает Home Assistant другого проекта (та же
+       проверка, что в restore.sh). Для последней пробы дистрибутив запускается; если он не
        работал, при отказе гасится только он;
     1. Docker Desktop (docker.exe хоста, в каталоге клона): docker compose
        stop api;
@@ -543,6 +544,10 @@ $desktopQuitArgs = @('desktop', 'stop')
 # Проба до шага 1: есть ли у docker.exe команда desktop, которой шаг 4
 # останавливает Desktop (её нет у старых версий).
 $desktopCliProbeArgs = @('desktop', 'version')
+# Проба движка: работающий Home Assistant любого проекта — та же проверка,
+# что running_ha в ops/backup/restore.sh. Метки — {{.Labels}}, без кавычек
+# в аргументе: Windows PowerShell 5.1 не экранирует их для внешней программы.
+$engineHaProbeArgs = @('ps', '--filter', 'label=com.docker.compose.service=homeassistant', '--format', '{{.Labels}}')
 $backupScriptPath = 'ops/backup/backup.sh'
 
 # docker в дистрибутиве: опрос docker info до ответа или предела времени.
@@ -866,6 +871,7 @@ function Write-MigratePlan {
     Write-Output "migrate.project: $project"
     Write-Output ("migrate.precheck: Docker Desktop answers docker info; docker.exe {0} answers (migrate.desktop_stop needs it); containers of project $project exist; postgres and homeassistant running (checked by the run, not by DryRun)" -f ($desktopCliProbeArgs -join ' '))
     Write-Output "migrate.precheck: no containers and no volumes of project $project in $Distro (the run starts the distro and waits for docker up to $EngineWaitSeconds s; stops it again on refusal)"
+    Write-Output ('migrate.precheck: no running homeassistant of another compose project in {0}, as restore.sh checks (docker {1})' -f $Distro, ($engineHaProbeArgs -join ' '))
     foreach ($migrateStep in $migrateSteps) {
         $planLines = @(& $migrateStep.Plan)
         Write-Output ('{0}: {1}' -f $migrateStep.Key, $planLines[0])
@@ -1414,6 +1420,21 @@ if ($Migrate) {
             if ($engineProbe.Text) {
                 $engineProblem = "в $Distro уже есть $(if ($probe[0] -eq 'ps') { 'контейнеры' } else { 'тома' }) проекта $project — перенос уже был или начат; данные движка не затираются. Сверьте их (-Check, docker через обёртку); удаление — только руками владельца"
                 break
+            }
+        }
+    }
+    # Home Assistant другого проекта в движке: restore.sh откажет уже после
+    # остановки Desktop — восстановленный управлял бы теми же устройствами.
+    if (-not $engineProblem) {
+        $engineHa = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker') + $engineHaProbeArgs)
+        if ($engineHa.Code -ne 0) { $engineProblem = "docker ps в ${Distro}: код $($engineHa.Code): $(Format-Native $engineHa)" }
+        else {
+            $foreignHa = @($engineHa.Lines | Where-Object { $_.Trim() } | ForEach-Object {
+                    $m = [regex]::Match($_, '(?:^|,)com\.docker\.compose\.project=([^,]*)')
+                    if ($m.Success) { $m.Groups[1].Value.Trim() } else { '' }
+                } | Where-Object { $_ -cne $project } | ForEach-Object { if ($_) { $_ } else { '<без имени>' } } | Sort-Object -Unique)
+            if ($foreignHa.Count) {
+                $engineProblem = "в $Distro работает Home Assistant проекта $($foreignHa -join ', ') — восстановленный управлял бы теми же устройствами, restore.sh откажет. Остановите его, тома не трогая: docker compose -p <проект> --profile ha down (без -v)"
             }
         }
     }

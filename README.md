@@ -327,6 +327,8 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
   version`) — ею переезд останавливает Desktop;
 - в движке ещё нет ни контейнеров, ни томов проекта — повторный перенос
   данные не затирает;
+- в движке не работает Home Assistant другого проекта compose — та же
+  проверка, что в `restore.sh`: два HA управляли бы одними устройствами;
 - есть Git Bash (`bash.exe` Git for Windows);
 - `BACKUP_DIR` в `.env` задан путём Windows (`<диск>:/…`), каталог есть.
 

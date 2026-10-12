@@ -627,6 +627,10 @@ test_engine_setup_migrate_dry_run() {
     # docker desktop stop проверяется до шага 1; его отказ — откат стадии
     # Desktop (docker desktop start), а не -Uninstall.
     grep -q '^migrate\.precheck: .*docker\.exe desktop version answers' "$work/out.$shell" || { fail "$name" "нет пробы docker desktop до шага 1"; show_out; return; }
+    # HA другого проекта в движке — до шага 1, как running_ha в restore.sh;
+    # формат без кавычек: 5.1 их внешней программе не передаёт.
+    has "$shell" 'migrate.precheck: no running homeassistant of another compose project in domovoy-engine, as restore.sh checks (docker ps --filter label=com.docker.compose.service=homeassistant --format {{.Labels}})' \
+      || { fail "$name" "нет пробы Home Assistant другого проекта в движке"; show_out; return; }
     grep -q '^migrate\.rollback: .*up to and including migrate\.desktop_stop: docker desktop start' "$work/out.$shell" || { fail "$name" "откат при отказе docker desktop stop не тот"; show_out; return; }
     has "$shell" 'DryRun: nothing changed' || { fail "$name" "нет строки сухого прогона"; show_out; return; }
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name" "в выводе значения .env"; return; fi
