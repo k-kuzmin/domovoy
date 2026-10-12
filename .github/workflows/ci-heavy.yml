@@ -74,31 +74,85 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Конфигурация из примеров, без правок
-        # Ровно то, что делает человек на чистой машине (ТЗ 5.1.3).
+      - name: 'Конфигурация по критерию готовности: только .env и реестр сущностей'
+        # Последовательность из критерия #5 (ТЗ 5.1.3): два файла, а не
+        # пять из README. Если старт начнёт требовать любой другой
+        # config-файл, стек здесь не поднимется — это и ловится.
         run: |
           set -euo pipefail
           cp .env.example .env
-          cp config/entities.example.yaml         config/entities.yaml
-          cp config/home-profile.example.md       config/home-profile.md
-          cp config/proactive-rules.example.yaml  config/proactive-rules.yaml
-          cp config/response-templates.example.yaml config/response-templates.yaml
+          cp config/entities.example.yaml config/entities.yaml
 
       - name: Подъём стека
+        # --wait: шаг завершается успехом, только когда сервисы healthy.
         run: docker compose up --detach --build --wait --wait-timeout 300
 
-      - name: Анонимный /health отвечает без секретов
+      - name: Сервисы стека healthy
+        # Новые версии compose печатают по объекту на строку, старые —
+        # массив: jq -s с flatten принимает оба формата.
         run: |
           set -euo pipefail
-          body="$(curl --fail --silent --show-error http://localhost:8080/health)"
-          echo "ответ: $body"
-          echo "$body" | grep -qE '"status":"(healthy|degraded)"'
+          ps_json="$(docker compose ps --format json)"
+          echo "$ps_json"
+          echo "$ps_json" | jq -e -s '
+            flatten
+            | map(select(.Service == "postgres" or .Service == "api"))
+            | length == 2 and all(.Health == "healthy")' > /dev/null \
+            || { echo '::error::postgres и api должны быть healthy.'; exit 1; }
+
+      - name: 'git status: реальные конфиги игнорируются, примеры в индексе'
+        # Стоит до шагов, которые пишут логи в корень дерева: позже
+        # git status увидел бы их как неотслеживаемые.
+        run: |
+          set -uo pipefail
+          failed=0
+          ignored="$(git status --ignored --porcelain)"
+          echo "$ignored"
+          for path in .env config/entities.yaml; do
+            if ! grep -qxF "!! $path" <<< "$ignored"; then
+              echo "::error::$path не игнорируется git."
+              failed=1
+            fi
+          done
+          untracked="$(git status --porcelain)"
+          if [ -n "$untracked" ]; then
+            echo "::error::Дерево не чистое после копирования конфигурации:"
+            echo "$untracked"
+            failed=1
+          fi
+          for path in .env.example config/entities.example.yaml; do
+            if ! git ls-files --error-unmatch "$path" > /dev/null 2>&1; then
+              echo "::error::$path не в индексе."
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: 'Анонимный /health: degraded на примерах, api без перезапусков'
+        # На примерах секреты не заполнены: компоненты в состоянии
+        # «не сконфигурировано», и /health обязан быть ровно degraded.
+        # healthy без секретов — сломано распознавание плейсхолдеров,
+        # unhealthy — отказ, которого на примерах быть не может
+        # (ТЗ 5.1.3). Перезапуск контейнера — падение приложения, а не
+        # «не сконфигурировано».
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --output "$RUNNER_TEMP/health.json" \
+            --write-out '%{http_code}' http://localhost:18080/health)"
+          body="$(cat "$RUNNER_TEMP/health.json")"
+          echo "ответ: $body, HTTP $code"
+          test "$code" = '200' || { echo "::error::ожидался HTTP 200, получено $code"; exit 1; }
+          grep -qF '"status":"degraded"' <<< "$body" \
+            || { echo '::error::ожидался "status":"degraded".'; exit 1; }
+          restarts="$(docker inspect --format '{{.RestartCount}}' "$(docker compose ps -q api)")"
+          echo "перезапусков api: $restarts"
+          test "$restarts" = '0' || { echo '::error::контейнер api перезапускался.'; exit 1; }
 
       - name: Эндпоинты API требуют аутентификации
         run: |
           set -euo pipefail
           code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            http://localhost:8080/api/v1/state)"
+            http://localhost:18080/api/v1/state)"
           test "$code" = "401" || { echo "ожидался 401, получено $code"; exit 1; }
 
       - name: В логах старта нет секретов
@@ -130,7 +184,7 @@ jobs:
           # провайдер LLM в стеке отсутствуют, и это нормально: проверяется
           # не доступность, а то, что значения не утекли в лог.
           for _ in $(seq 40); do
-            if curl --silent --output /dev/null http://localhost:8080/health; then break; fi
+            if curl --silent --output /dev/null http://localhost:18080/health; then break; fi
             sleep 1
           done
 

@@ -142,8 +142,8 @@ cp config/home-profile.example.md     config/home-profile.md
 cp config/proactive-rules.example.yaml config/proactive-rules.yaml
 cp config/response-templates.example.yaml config/response-templates.yaml
 
-docker compose up -d --build
-curl -s http://localhost:8080/health
+docker compose up -d --build --wait
+curl -s http://localhost:18080/health
 ```
 
 Ожидаемый ответ — `{"status":"degraded"}`: без токена Home Assistant и ключа
@@ -151,7 +151,7 @@ curl -s http://localhost:8080/health
 `/health` отдаёт только это одно поле; раздельный статус БД, Home Assistant и
 LLM доступен на `GET /api/v1/health` под токеном устройства.
 
-Скопированные `config/*.yaml` и `.env` закрыты `.gitignore` — заполнять их
+Скопированные файлы `config/` и `.env` закрыты `.gitignore` — заполнять их
 реальными значениями безопасно. Пароль базы в `.env.example` — значение для
 примера: наружу порт базы не публикуется, но при реальной эксплуатации
 `POSTGRES_PASSWORD` меняется.
@@ -166,7 +166,7 @@ Home Assistant объявлен в том же `docker-compose.yml`, но под
 видит.
 
 ```bash
-docker compose --profile ha up -d --build
+docker compose --profile ha up -d --build --wait
 docker compose --profile ha down
 ```
 
@@ -239,14 +239,16 @@ dotnet user-secrets list
 | Миграции: применить | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
-| Стек целиком | `docker compose up -d --build` |
-| Стек с Home Assistant | `docker compose --profile ha up -d --build` |
+| Стек целиком | `docker compose up -d --build --wait` |
+| Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
 
 ## API
 
 Базовый префикс `/api/v1`, аутентификация — Bearer-токен устройства.
-На этапе каркаса все эндпоинты, кроме `/health`, отвечают `501`.
+На этапе каркаса любой запрос к `/api/v1`, кроме `POST /auth/device`,
+получает `401`: привязка устройств ещё не реализована, и предъявленный токен
+отклоняется. `POST /auth/device` анонимный и отвечает `501`.
 
 | Метод | Путь | Назначение |
 |---|---|---|
