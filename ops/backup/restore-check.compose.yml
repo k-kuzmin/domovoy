@@ -1,0 +1,25 @@
+# Надстройка только для проверочного проекта restore.sh --check.
+#
+# Восстановленный Home Assistant поднимается рядом с рабочим, на том же
+# хосте. Чтобы он не управлял реальными устройствами параллельно с рабочим
+# (Wi-Fi и облачные интеграции, дублирующие автоматизации), обе сети
+# проекта — internal: ни ЛВС, ни интернета. Порты на хост не публикуются:
+# проверки идут через docker compose exec, а рабочий стек свои порты
+# держит занятыми.
+#
+# Подключается только явно, вместе с docker-compose.yml:
+#   docker compose -p <проект> -f docker-compose.yml -f ops/backup/restore-check.compose.yml …
+# docker-compose.override.yml владельца (проброс USB-координатора) при
+# явных -f не подхватывается.
+
+services:
+  api:
+    ports: !reset []
+  homeassistant:
+    ports: !reset []
+
+networks:
+  default:
+    internal: true
+  db:
+    internal: true

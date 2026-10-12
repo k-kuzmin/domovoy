@@ -214,6 +214,35 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
+  backup:
+    name: Бэкап и восстановление
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Модуль проверки реестра HA на фикстурах
+        # Без docker: быстрый отказ раньше, чем тянется образ HA.
+        run: bash ops/backup/ha-registry-check.test.sh
+
+      - name: Конфигурация из примеров, без правок
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          cp config/entities.example.yaml         config/entities.yaml
+          cp config/home-profile.example.md       config/home-profile.md
+          cp config/proactive-rules.example.yaml  config/proactive-rules.yaml
+          cp config/response-templates.example.yaml config/response-templates.yaml
+
+      - name: Бэкап, проверка восстановления и восстановление в новый проект
+        # Сценарий сам поднимает стек с профилем ha под своими именами
+        # проектов и удаляет их с томами в конце. HA здесь не проходит
+        # первичную настройку и токена нет — проверка HA API идёт с
+        # --ha-api-check skip, а отказ без флага проверяется отдельно.
+        run: bash ops/backup/backup.test.sh
+
   codeql:
     name: Статический анализ CodeQL
     needs: gate
@@ -251,23 +280,24 @@ jobs:
     # условные, а пропущенная required-проверка держит PR незакрытым
     # навсегда.
     name: Тяжёлые проверки пройдены
-    needs: [gate, compose, codeql]
+    needs: [gate, compose, backup, codeql]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Итог
         env:
           COMPOSE: ${{ needs.compose.result }}
+          BACKUP: ${{ needs.backup.result }}
           CODEQL: ${{ needs.codeql.result }}
           GATE: ${{ needs.gate.result }}
         run: |
           set -euo pipefail
-          echo "gate=$GATE compose=$COMPOSE codeql=$CODEQL"
+          echo "gate=$GATE compose=$COMPOSE backup=$BACKUP codeql=$CODEQL"
           if [ "$GATE" != 'success' ]; then
             echo '::error::Работа gate не выполнена — состояние тяжёлых проверок неизвестно.'
             exit 1
           fi
-          for result in "$COMPOSE" "$CODEQL"; do
+          for result in "$COMPOSE" "$BACKUP" "$CODEQL"; do
             case "$result" in
               success|skipped) ;;
               *) echo '::error::Тяжёлая проверка не пройдена.'; exit 1 ;;

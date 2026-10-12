@@ -36,6 +36,11 @@ config/*.json
 *.sql.gz
 *.dump
 backups/
+# Артефакты ops/backup: архив тома HA, лог и каталог бэкапа. Сценарий
+# пишет их только вне клона; маски — на случай, если положили руками.
+*.tar.gz
+backup.log
+domovoy-backup-*/
 
 # Секреты Cloudflare Tunnel
 *.pem
