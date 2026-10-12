@@ -163,10 +163,12 @@ restored_ha="$(docker exec "$helper" python3 /tmp/ha_registry_check.py count /co
   || fail "реестр сущностей в восстановленном томе HA не читается"
 [ "$restored_ha" = "$expected_ha" ] \
   || fail "HA: в восстановленном реестре $restored_ha не отключённых записей, в манифесте $expected_ha"
-docker exec "$helper" python3 /tmp/ha_registry_check.py sqlite-check /config/home-assistant_v2.db >/dev/null \
-  || fail "HA: копия базы рекордера не прошла integrity_check"
+# Каждая база sqlite тома (рекордер, zigbee.db и прочие, что archive
+# положил онлайн-копией); рекордер обязателен.
+sqlite_report="$(docker exec "$helper" python3 /tmp/ha_registry_check.py sqlite-check-all /config | tr -d '\r')" \
+  || { [ -z "$sqlite_report" ] || sed '$d' <<<"$sqlite_report" >&2; fail "HA: копии баз sqlite не прошли integrity_check"; }
 docker rm -f "$helper" >/dev/null
-echo "HA: реестр восстановлен, $restored_ha не отключённых записей, как в манифесте; рекордер цел"
+echo "HA: реестр восстановлен, $restored_ha не отключённых записей, как в манифесте; баз sqlite цело: $sqlite_report"
 
 # 3. Стек целиком. --build: проверяется текущий код api, а не образ,
 # оставшийся от прошлой проверки; при неизменном коде сборка берётся из кеша.

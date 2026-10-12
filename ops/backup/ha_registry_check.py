@@ -6,6 +6,7 @@
     count        <реестр>                              число не отключённых записей
     compare      <реестр> <состояния|-> [--expect N]   «N из M» сущностей реестра в /api/states
     sqlite-check <база>                                PRAGMA integrity_check
+    sqlite-check-all <каталог>                         integrity_check каждой базы sqlite каталога, число баз
     sqlite-backup <база> <копия>                       онлайн-копия через sqlite3 backup API
     archive      <каталог>                             tar.gz тома в stdout, живые sqlite — онлайн-копией;
                                                        в stderr «registry_enabled N» по реестру из архива
@@ -123,10 +124,9 @@ def is_sqlite(path: str) -> bool:
         return False
 
 
-def sqlite_check(path: str) -> int:
-    # sqlite3.connect создал бы отсутствующий файл и честно сказал бы «ok».
-    if not os.path.isfile(path):
-        raise CheckError(f"базы {os.path.basename(path)} нет")
+def integrity_problem(path: str) -> str | None:
+    """None, если PRAGMA integrity_check базы ответил «ok», иначе — что не так."""
+    name = os.path.basename(path)
     try:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
@@ -134,13 +134,42 @@ def sqlite_check(path: str) -> int:
         finally:
             connection.close()
     except sqlite3.DatabaseError as err:
-        print(f"{os.path.basename(path)}: {err}")
-        return EXIT_MISMATCH
+        return f"{name}: {err}"
     if rows == [("ok",)]:
-        print("ok")
-        return 0
-    print(f"{os.path.basename(path)}: integrity_check нашёл {len(rows)} нарушений")
-    return EXIT_MISMATCH
+        return None
+    return f"{name}: integrity_check нашёл {len(rows)} нарушений"
+
+
+def sqlite_check(path: str) -> int:
+    # sqlite3.connect создал бы отсутствующий файл и честно сказал бы «ok».
+    if not os.path.isfile(path):
+        raise CheckError(f"базы {os.path.basename(path)} нет")
+    problem = integrity_problem(path)
+    print(problem or "ok")
+    return EXIT_MISMATCH if problem else 0
+
+
+def sqlite_check_all(config_dir: str) -> int:
+    """integrity_check каждой базы sqlite в каталоге — тех же, что archive
+    находит по сигнатуре и кладёт онлайн-копией. Рекордер HA обязателен.
+    Печатает число проверенных баз; при сбое — имя базы и нарушения."""
+    if not os.path.isfile(os.path.join(config_dir, "home-assistant_v2.db")):
+        raise CheckError("базы home-assistant_v2.db нет")
+    checked = 0
+    failed = False
+    for root, dirs, files in os.walk(config_dir):
+        dirs.sort()
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            if os.path.islink(path) or not is_sqlite(path):
+                continue
+            checked += 1
+            problem = integrity_problem(path)
+            if problem:
+                print(problem)
+                failed = True
+    print(checked)
+    return EXIT_MISMATCH if failed else 0
 
 
 def sqlite_backup(source_path: str, target_path: str) -> None:
@@ -259,7 +288,7 @@ def extract(config_dir: str) -> int:
 USAGE = (
     "использование: ha_registry_check.py "
     "count <реестр> | compare <реестр> <состояния|-> [--expect N] | "
-    "sqlite-check <база> | sqlite-backup <база> <копия> | "
+    "sqlite-check <база> | sqlite-check-all <каталог> | sqlite-backup <база> <копия> | "
     "archive <каталог> | extract <каталог>"
 )
 
@@ -281,6 +310,8 @@ def main(argv: list) -> int:
             return compare(argv[1], argv[2], expect)
         if len(argv) == 2 and argv[0] == "sqlite-check":
             return sqlite_check(argv[1])
+        if len(argv) == 2 and argv[0] == "sqlite-check-all":
+            return sqlite_check_all(argv[1])
         if len(argv) == 3 and argv[0] == "sqlite-backup":
             sqlite_backup(argv[1], argv[2])
             return 0

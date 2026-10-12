@@ -196,6 +196,31 @@ EOF
   run count "$work/restored/.storage/core.entity_registry"
   [ "$(cat "$work/out")" = "3" ] || { fail "$name" "реестр после распаковки: «$(cat "$work/out")»"; return; }
 
+  # integrity_check — каждой базы из архива, а не только рекордера.
+  name=sqlite_check_all_covers_every_archived_database
+  run sqlite-check-all "$work/restored"
+  if [ "$rc" -ne 0 ] || [ "$(cat "$work/out")" != 2 ]; then
+    fail "$name" "целые базы: код $rc, вывод «$(cat "$work/out" "$work/err")»"; return
+  fi
+  cp -R "$work/restored" "$work/corrupt"
+  # Сигнатура zigbee.db цела, страницы за заголовком — мусор.
+  "$py" - "$work/corrupt/zigbee.db" <<'EOF'
+import os, sys
+path = sys.argv[1]
+size = os.path.getsize(path)
+with open(path, "r+b") as handle:
+    handle.seek(100)
+    handle.write(b"\xa5" * (size - 100))
+EOF
+  run sqlite-check-all "$work/corrupt"
+  if [ "$rc" -ne 1 ]; then fail "$name" "испорченная zigbee.db: ожидался код 1, получен $rc"; return; fi
+  grep -q '^zigbee.db: ' "$work/out" || { fail "$name" "испорченная база не названа: «$(cat "$work/out")»"; return; }
+  rm -f "$work/corrupt/home-assistant_v2.db"
+  run sqlite-check-all "$work/corrupt"
+  if [ "$rc" -ne 2 ]; then fail "$name" "без рекордера: ожидался код 2, получен $rc"; return; fi
+  ok "$name"
+  name=archive_snapshots_live_sqlite_and_restores
+
   # Распаковка в непустой каталог — отказ: восстановление не перезаписывает.
   "$py" "$module" extract "$work/restored" <"$work/archive.tar.gz" >"$work/out" 2>"$work/err"
   rc=$?
