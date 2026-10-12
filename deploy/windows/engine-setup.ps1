@@ -180,6 +180,10 @@ $WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 $ImageBase = 'https://cloud-images.ubuntu.com/wsl/releases/24.04/current'
 $ImageFile = 'ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz'
 $RemoteAddresses = @('LocalSubnet', '127.0.0.1')
+# Юниты автозапуска в systemd дистрибутива. domovoy-mss-clamp — MSS по PMTU
+# для трафика контейнеров (provision-engine.sh): без него HTTPS из сети моста
+# через интерфейс с MTU меньше 1500 (VPN хоста) висит.
+$EngineUnits = @('docker.service', 'containerd.service', 'domovoy-mss-clamp.service')
 # ::1 New-NetFirewallHyperVRule отвергает («Параметр задан неверно», проба на
 # хосте 2026-10-12): IPv6-петля в правиле Hyper-V не задаётся.
 
@@ -1280,13 +1284,13 @@ if ($Install) {
     # По одному юниту: is-enabled со списком даёт код 0, если включён хоть
     # один. Признак — вывод enabled, как в -Check.
     $disabled = New-Object System.Collections.Generic.List[string]
-    foreach ($unit in 'docker.service', 'containerd.service') {
+    foreach ($unit in $EngineUnits) {
         $isEnabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)
         if ($isEnabled.Text -ne 'enabled') { $disabled.Add("$unit «$(Format-Native $isEnabled)»") }
     }
     $null = Invoke-Wsl @('--terminate', $Distro)
     if ($disabled.Count) { Stop-Install "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
-    Write-Output 'docker.service и containerd.service в автозапуске systemd дистрибутива'
+    Write-Output "$($EngineUnits -join ', ') в автозапуске systemd дистрибутива"
 
     # 3–4. Задачи; -Force заменяет прежние.
     # Отказ регистрации — тоже после остановки дистрибутива: через Stop-Install.
@@ -1581,12 +1585,12 @@ elseif ($startupNow.State -eq 'none') { Add-Result 'OK' 'автозапуск Do
 else { Add-Result 'OK' 'автозапуск Docker Desktop при входе выключен' "StartupApproved\Run $($startupNow.Hex)" }
 
 $running = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
-$inner = @('docker.service в автозапуске', 'containerd.service в автозапуске', 'restart: unless-stopped у контейнеров проекта', 'порт замера = опубликованный порт api')
+$inner = @($EngineUnits | ForEach-Object { "$_ в автозапуске" }) + @('restart: unless-stopped у контейнеров проекта', 'порт замера = опубликованный порт api')
 if (-not $running) {
     foreach ($link in $inner) { Add-Result 'SKIP' $link 'не проверено — дистрибутив не запущен' }
 }
 else {
-    foreach ($unit in 'docker.service', 'containerd.service') {
+    foreach ($unit in $EngineUnits) {
         $isEnabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)
         $isActive = Format-Native (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-active', $unit))
         # OK — по is-enabled: «active» после ручного старта автозапуска не доказывает.

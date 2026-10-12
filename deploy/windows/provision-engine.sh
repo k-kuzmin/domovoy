@@ -13,7 +13,12 @@
 #      docker-compose-plugin и git;
 #   4. systemctl enable docker.service и containerd.service — автозапуск
 #      движка вместе с systemd дистрибутива;
-#   5. git safe.directory (--system) для клона: клон лежит на диске Windows
+#   5. юнит domovoy-mss-clamp.service: правило iptables (mangle FORWARD)
+#      TCPMSS --clamp-mss-to-pmtu. Без него HTTPS из контейнеров в сети моста
+#      (MTU 1500) через интерфейс хоста с MTU меньше (VPN) висит: крупные
+#      пакеты TLS теряются, nuget при сборке api не отвечает. Сеть хоста
+#      (--network host) этим не страдает;
+#   6. git safe.directory (--system) для клона: клон лежит на диске Windows
 #      (/mnt/<диск>/…) и принадлежит не root, а ops/backup/*.sh вызывают git.
 #
 # systemd начинает работать только после перезапуска дистрибутива. Если он
@@ -70,6 +75,33 @@ install_docker() {
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
+# ensure_mss_clamp — юнит systemd, ставящий правило при каждом старте
+# дистрибутива (правила iptables не переживают перезапуск). -C перед -A —
+# повторный старт правило не дублирует.
+ensure_mss_clamp() {
+  local unit=/etc/systemd/system/domovoy-mss-clamp.service
+  local rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
+  local content
+  content="[Unit]
+Description=domovoy: TCP MSS clamp to PMTU for container traffic
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptables -t mangle -A FORWARD $rule'
+
+[Install]
+WantedBy=multi-user.target"
+  if [ "$(cat "$unit" 2>/dev/null || true)" != "$content" ]; then
+    printf '%s
+' "$content" >"$unit"
+    systemctl daemon-reload
+  fi
+  systemctl enable domovoy-mss-clamp.service
+  systemctl start domovoy-mss-clamp.service
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "provision-engine: нужен root — wsl.exe -d domovoy-engine -u root …" >&2
@@ -88,10 +120,11 @@ main() {
   fi
   install_docker
   systemctl enable docker.service containerd.service
+  ensure_mss_clamp
   if ! git config --system --get-all safe.directory 2>/dev/null | grep -qxF "$clone"; then
     git config --system --add safe.directory "$clone"
   fi
-  echo "provision-engine: готово — systemd включён в /etc/wsl.conf, docker и containerd в автозапуске, safe.directory: $clone"
+  echo "provision-engine: готово — systemd включён в /etc/wsl.conf, docker, containerd и MSS clamp в автозапуске, safe.directory: $clone"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
