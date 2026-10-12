@@ -261,6 +261,72 @@ test_backup_drops_leftover_verify_databases() {
   ok "$name"
 }
 
+test_backup_max_size_prunes_oldest_before_writing() {
+  local name=backup_max_size_prunes_oldest_before_writing
+  local fake_path
+  fake_path="$(fake_prewrite_path)"
+
+  # Без --max-size до записи ничего не удаляется и du не вызывается.
+  fake_dest_with_backups "$work/limit"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit"
+  if [ "$(list_dest "$work/limit")" != 'domovoy-backup-20200101T000000Z domovoy-backup-20200102T000000Z domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
+    fail "$name/no-limit" "без --max-size на носителе: $(list_dest "$work/limit")"; return
+  fi
+  if [ -e "$work/du-called" ]; then fail "$name/no-limit" "du вызывался без --max-size"; return; fi
+
+  # 1 ГБ: 4 × 300 МБ и оценка 300 МБ не помещаются — удаляются два самых
+  # старых, .partial и посторонний каталог в сумму не входят и целы.
+  fake_dest_with_backups "$work/limit"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size 1
+  if [ "$rc" -eq 0 ]; then fail "$name" "подделка не дошла до отказа pg_dump"; show_out; return; fi
+  if [ "$(list_dest "$work/limit")" != 'domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
+    fail "$name" "после лимита на носителе: $(list_dest "$work/limit")"; show_out; return
+  fi
+  [ "$(grep -c 'лимит --max-size 1 ГБ: удалён' "$work/limit/backup.log")" = 2 ] \
+    || { fail "$name" "в backup.log не две строки удаления"; return; }
+  ok "$name"
+
+  # Последний успешный не удаляется: 2 × 600 МБ больше 1 ГБ — отказ до
+  # удаления чего-либо, с советом в выводе и в backup.log.
+  name=backup_max_size_never_deletes_last_backup
+  fake_dest_with_backups "$work/limit"
+  echo 614400 >"$work/limit/domovoy-backup-20200104T000000Z/fake-kb"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size 1
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0"; return; fi
+  if [ "$(list_dest "$work/limit")" != 'domovoy-backup-20200101T000000Z domovoy-backup-20200102T000000Z domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
+    fail "$name" "при отказе что-то удалено: $(list_dest "$work/limit")"; return
+  fi
+  grep -q 'увеличьте --max-size' "$work/out" || { fail "$name" "в выводе нет совета"; show_out; return; }
+  grep -q 'увеличьте --max-size' "$work/limit/backup.log" || { fail "$name" "в backup.log нет причины"; return; }
+  ok "$name"
+
+  # Свободного места меньше оценки — отказ с советом.
+  name=backup_refuses_when_medium_has_no_room
+  fake_dest_with_backups "$work/limit"
+  echo 102400 >"$work/fake-free-kb"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size 10
+  if [ "$rc" -eq 0 ]; then fail "$name" "код 0"; return; fi
+  grep -q 'на носителе свободно 100 МБ, новому бэкапу нужно около 300 МБ' "$work/out" \
+    || { fail "$name" "отказ не по месту"; show_out; return; }
+  grep -q 'Освободите место' "$work/limit/backup.log" || { fail "$name" "в backup.log нет причины"; return; }
+  ok "$name"
+
+  # Первый бэкап: оценки нет — строка об этом, ничего не удаляется.
+  name=backup_max_size_first_backup_has_no_estimate
+  rm -rf -- "$work/limit" && mkdir "$work/limit"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size 1
+  grep -q 'первый бэкап — оценки размера нет' "$work/limit/backup.log" || { fail "$name" "нет строки о первом бэкапе"; show_out; return; }
+  ok "$name"
+
+  name=backup_max_size_rejects_bad_value
+  local value
+  for value in 0 -1 1.5 abc; do
+    PATH="$fake_path" run bash ops/backup/backup.sh "$work/limit" --max-size "$value"
+    if [ "$rc" -ne 2 ]; then fail "$name" "--max-size $value: код $rc, ожидался 2"; return; fi
+  done
+  ok "$name"
+}
+
 test_backup_refuses_missing_destination() {
   local name=backup_refuses_missing_destination
   local fake_path
@@ -688,6 +754,7 @@ test_backup_refuses_missing_destination
 test_restore_project_refuses_while_other_ha_runs_static
 test_restore_refuses_manifest_without_ha_count
 test_backup_drops_leftover_verify_databases
+test_backup_max_size_prunes_oldest_before_writing
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"

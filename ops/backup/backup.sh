@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Бэкап Домового: база Backend и том конфигурации Home Assistant.
 #
-#   bash ops/backup/backup.sh <каталог-назначения> [--keep N]
+#   bash ops/backup/backup.sh <каталог-назначения> [--keep N] [--max-size ГБ]
 #
 # Каталог назначения — корень на внешнем носителе, например
 # <внешний-диск>/domovoy-backups. Он должен существовать: неподключённый
@@ -22,6 +22,13 @@
 #   5. каталог .partial переименовывается в domovoy-backup-<UTC-метка>;
 #   6. ротация: остаются N последних полных бэкапов (по умолчанию 14).
 #
+# --max-size ГБ — лимит на суммарный объём полных бэкапов на носителе
+# (ГБ = 1024^3 байт). До записи нового его размер оценивается по последнему
+# успешному; если с ним сумма выходит за лимит, самые старые полные бэкапы
+# удаляются по одному, пока не влезет. Последний успешный не удаляется
+# никогда: не влезает и без остальных, или свободного места на носителе
+# меньше оценки — отказ. Без параметра до записи ничего не удаляется.
+#
 # Проект compose — тот, что задан в .env клона (COMPOSE_PROJECT_NAME),
 # или переменная окружения COMPOSE_PROJECT_NAME. Лог — <назначение>/backup.log.
 # Токены и пароли в вывод и лог не пишутся: учётные данные базы берутся
@@ -38,17 +45,23 @@ umask 077
 export MSYS_NO_PATHCONV=1
 
 usage() {
-  echo "использование: bash ops/backup/backup.sh <каталог-назначения> [--keep N]" >&2
+  echo "использование: bash ops/backup/backup.sh <каталог-назначения> [--keep N] [--max-size ГБ]" >&2
   exit 2
 }
 
 dest_arg=''
 keep=14
+max_size_gb=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep)
       [ $# -ge 2 ] || usage
       keep="$2"
+      shift 2
+      ;;
+    --max-size)
+      [ $# -ge 2 ] || usage
+      max_size_gb="$2"
       shift 2
       ;;
     -h | --help) usage ;;
@@ -62,6 +75,10 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$dest_arg" ] || usage
 [[ "$keep" =~ ^[1-9][0-9]*$ ]] || { echo "backup: --keep — целое число не меньше 1" >&2; exit 2; }
+if [ -n "$max_size_gb" ] && ! [[ "$max_size_gb" =~ ^[1-9][0-9]{0,5}$ ]]; then
+  echo "backup: --max-size — целое число гигабайт от 1" >&2
+  exit 2
+fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root"
@@ -168,6 +185,58 @@ while read -r leftover; do
   fi
 done <<<"$leftovers"
 log "остатки временных баз проверки от прошлых прогонов: удалено $dropped"
+
+# Место на носителе — до записи нового бэкапа (только с --max-size).
+# Оценка размера нового — размер последнего успешного. Удаляются только
+# полные каталоги domovoy-backup-<метка>, от старых к новым, последний —
+# никогда; .partial и посторонние каталоги не трогаются.
+size_kb() {
+  local out
+  out="$(du -sk -- "$1")" || return 1
+  out="${out%%[[:space:]]*}"
+  [[ "$out" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$out"
+}
+mb() { echo "$((($1 + 1023) / 1024))"; }
+if [ -n "$max_size_gb" ]; then
+  existing=()
+  for entry in "$dest"/domovoy-backup-*; do
+    base="${entry##*/}"
+    if [ -d "$entry" ] && [[ "$base" =~ ^domovoy-backup-[0-9]{8}T[0-9]{6}Z$ ]]; then
+      existing+=("$base")
+    fi
+  done
+  if [ "${#existing[@]}" -eq 0 ]; then
+    log "место: первый бэкап — оценки размера нет, лимит --max-size и свободное место не проверяются"
+  else
+    mapfile -t existing < <(printf '%s\n' "${existing[@]}" | sort)
+    newest="${existing[${#existing[@]} - 1]}"
+    estimate_kb="$(size_kb "$dest/$newest")" || fail "размер последнего бэкапа $newest не определён (du)"
+    limit_kb=$((max_size_gb * 1024 * 1024))
+    if [ $((estimate_kb * 2)) -gt "$limit_kb" ]; then
+      fail "лимит --max-size $max_size_gb ГБ мал: последний бэкап $newest занимает $(mb "$estimate_kb") МБ, и вместе с новым такого же размера в лимит не помещается. Последний успешный бэкап не удаляется — увеличьте --max-size."
+    fi
+    sizes=()
+    total_kb=0
+    for base in "${existing[@]}"; do
+      size="$(size_kb "$dest/$base")" || fail "размер бэкапа $base не определён (du)"
+      sizes+=("$size")
+      total_kb=$((total_kb + size))
+    done
+    i=0
+    while [ $((total_kb + estimate_kb)) -gt "$limit_kb" ] && [ "$i" -lt $((${#existing[@]} - 1)) ]; do
+      rm -rf -- "${dest:?}/${existing[i]}"
+      total_kb=$((total_kb - sizes[i]))
+      log "лимит --max-size $max_size_gb ГБ: удалён ${existing[i]} ($(mb "${sizes[i]}") МБ)"
+      i=$((i + 1))
+    done
+    free_kb="$(df -Pk -- "$dest" | awk 'NR == 2 { print $4 }')" || fail "свободное место на носителе не определено (df)"
+    [[ "$free_kb" =~ ^[0-9]+$ ]] || fail "свободное место на носителе не определено (df)"
+    if [ "$free_kb" -lt "$estimate_kb" ]; then
+      fail "на носителе свободно $(mb "$free_kb") МБ, новому бэкапу нужно около $(mb "$estimate_kb") МБ (размер последнего). Освободите место на носителе или уменьшите --max-size, чтобы старые бэкапы удалялись раньше."
+    fi
+  fi
+fi
 
 [ ! -e "$final" ] && [ ! -e "$partial" ] || fail "каталог $name уже есть"
 mkdir -- "$partial"
