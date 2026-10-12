@@ -107,7 +107,7 @@
     {
       "path": "ops/backup/backup.sh",
       "action": "create",
-      "why": "снимок БД (pg_dump -Fc), тома HA (tar с онлайн-копией sqlite рекордера) и манифеста в каталог на внешнем носителе; отказ на отсутствующем каталоге и на каталоге внутри клона; ротация N последних; лог на носителе"
+      "why": "снимок БД (pg_dump -Fc), тома HA (tar с онлайн-копией sqlite рекордера) и манифеста в каталог на внешнем носителе; отказ на отсутствующем каталоге и на каталоге внутри клона; ротация N последних; лог на носителе; без аргумента каталога берёт BACKUP_DIR, без --max-size — BACKUP_MAX_SIZE_GB из .env клона (разбор строк, без source)"
     },
     {
       "path": "ops/backup/restore.sh",
@@ -157,14 +157,25 @@
     {
       "path": "README.md",
       "action": "modify",
-      "why": "раздел «Резервное копирование и восстановление»: состав, место и расписание плейсхолдерами, команда планировщика, проверка и полное восстановление, хранение бэкапа как секрета; строка в таблице команд"
+      "why": "раздел «Резервное копирование и восстановление» — коротко, без ручных шагов: что входит, место и расписание плейсхолдерами (настройки в .env), одна команда установки расписания при развёртывании, проверка восстановления одной командой; бэкап как секрет. Подробности поведения — в шапках сценариев (решение владельца 2026-10-12: «всё должно работать при развёртывании, а не вручную»)"
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "action": "create",
+      "why": "идемпотентная регистрация задачи Планировщика domovoy-backup (ежедневно 03:30, S4U — без входа пользователя, как в #6): bash.exe из Git for Windows, backup.sh без аргументов — каталог и лимит читаются из .env при каждом запуске, правка .env не требует переустановки; -Check печатает состояние и Last Result; вызывается установщиком развёртывания (#6)"
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "BACKUP_DIR и BACKUP_MAX_SIZE_GB с плейсхолдерами — место и лимит бэкапа задаются конфигурацией, а не командой"
     }
   ],
   "boundaries": [
     "ops/backup/**",
     ".github/workflows/ci-heavy.yml",
     ".gitignore",
-    "README.md"
+    "README.md",
+    ".env.example"
   ],
   "flags": {
     "new_dependency": false,
@@ -175,105 +186,137 @@
       "name": "markers_survive_backup_and_restore_check",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism", "A2-backend-data"],
+      "covers": [
+        "A2-mechanism",
+        "A2-backend-data"
+      ],
       "behavior": "в БД стека засеяна таблица с одной строкой, в томе HA — файл-маркер; после backup.sh во временный каталог вне клона и restore.sh --check --ha-api-check skip код 0, а внутри проверочного проекта до его down -v таблица содержит ту же строку и файл-маркер на месте с тем же содержимым; без засева маркера сравнение «0 таблиц = 0 таблиц» не принимается тестом как успех"
     },
     {
       "name": "restore_check_fails_on_manifest_mismatch",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "в копии бэкапа число строк маркерной таблицы в manifest.txt увеличено на 1 — restore.sh --check возвращает ненулевой код и называет расходящуюся таблицу; проверочный проект после отказа всё равно удалён (docker volume ls не показывает его томов)"
     },
     {
       "name": "restore_check_fails_on_missing_marker",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "в копии бэкапа db.dump заменён дампом той же БД, из которой маркерная строка удалена, manifest.txt оставлен исходным — restore.sh --check возвращает ненулевой код: проверка сравнивает восстановленные данные с манифестом, а не сама с собой"
     },
     {
       "name": "backup_refuses_destination_inside_repository",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A3-gitignored"],
+      "covers": [
+        "A3-gitignored"
+      ],
       "behavior": "backup.sh с каталогом назначения внутри клона завершается ненулевым кодом до первого docker-вызова и ничего не создаёт — для каждой формы пути: прямой путь под закрытым .gitignore backups/; путь вне клона с .., который разрешается внутрь клона (/tmp/x/../<клон>/backups); симлинк вне клона, указывающий внутрь клона; сам корень клона. Запись в форме Windows (D:\\…) проверяется, когда в окружении есть cygpath (Git Bash на хосте); на ubuntu в CI этот случай печатает «пропущен: нет cygpath», а не проходит молча"
     },
     {
       "name": "backup_refuses_missing_destination",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A1-schedule"],
+      "covers": [
+        "A1-schedule"
+      ],
       "behavior": "несуществующий каталог назначения (имитация неподключённого USB-диска) — ненулевой код, каталог не создаётся, частичного .partial нигде нет"
     },
     {
       "name": "working_tree_unchanged_after_backup_and_restore",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A3-gitignored"],
+      "covers": [
+        "A3-gitignored"
+      ],
       "behavior": "вывод git status --porcelain --ignored до и после полного прогона бэкапа и проверки восстановления совпадает построчно: ни дампов, ни архивов, ни логов в дереве клона не появилось"
     },
     {
       "name": "backup_artifacts_are_ignored_in_tree",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A3-gitignored"],
+      "covers": [
+        "A3-gitignored"
+      ],
       "behavior": "в корень клона кладутся образцы db.dump, ha-config.tar.gz, backup.log и каталог domovoy-backup-<метка>/ с manifest.txt внутри; git status --ignored --porcelain показывает каждый с префиксом !! и ни одного с ??; образцы удаляются в trap. Без новых масок .gitignore тест падает на ha-config.tar.gz и backup.log"
     },
     {
       "name": "restore_into_fresh_project_restores_markers",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism", "A2-backend-data"],
+      "covers": [
+        "A2-mechanism",
+        "A2-backend-data"
+      ],
       "behavior": "restore.sh --project <временное имя> --from <бэкап> поднимает проект без internal-сетей: маркерная строка в БД и файл-маркер в томе HA на месте, код 0; повторный вызов на тот же, уже поднятый проект — ненулевой код и маркерная строка не перезаписана (в неё до повтора дописано изменение, после отказа оно на месте); после docker compose -p <имя> stop (контейнеры остановлены, тома есть) — тоже отказ; тест сам делает down -v временного проекта в trap"
     },
     {
       "name": "ha_registry_and_recorder_survive_backup",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "в том HA до старта засеян вымышленный реестр с K не отключёнными записями, в живую базу рекордера при работающем HA записана таблица-маркер; manifest.txt бэкапа содержит K (не 0); архив не содержит home-assistant_v2.db-wal/-shm; в восстановленном томе число записей реестра равно K, копия рекордера проходит integrity_check и содержит строку маркера"
     },
     {
       "name": "backup_fails_without_entity_registry",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "файл .storage/core.entity_registry убран из тома HA — backup.sh возвращает ненулевой код, полного каталога domovoy-backup-<метка> не появляется, манифест с нулём сущностей не пишется"
     },
     {
       "name": "rotation_keeps_foreign_and_partial_directories",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A1-schedule"],
+      "covers": [
+        "A1-schedule"
+      ],
       "behavior": "в каталоге назначения лежат три старых domovoy-backup-<метка>, один domovoy-backup-<метка>.partial и посторонний каталог; backup.sh --keep 2 оставляет два новейших полных бэкапа (включая только что созданный), .partial и посторонний каталог целы; при провале бэкапа (реестр убран) ротация не запускается и ни один старый бэкап не удалён"
     },
     {
       "name": "registry_compare_counts_only_enabled_entities",
       "file": "ops/backup/ha-registry-check.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "на фикстурах: count печатает число записей без disabled_by; compare на states.json с одной недостающей включённой сущностью печатает «N-1 из N» и ненулевой код, на полном ответе — «N из N» и код 0, отключённая запись, отсутствующая в состояниях, расхождения не даёт; в выводе нет ни одного entity_id"
     },
     {
       "name": "registry_check_fails_on_missing_or_broken_registry",
       "file": "ops/backup/ha-registry-check.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "count на несуществующем файле, на пустом файле и на JSON без data.entities — ненулевой код и сообщение, а не 0"
     },
     {
       "name": "restore_check_prints_elapsed_time",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A4-restore-time"],
+      "covers": [
+        "A4-restore-time"
+      ],
       "behavior": "успешный restore.sh --check печатает ровно одну строку замера вида «восстановление и проверки: <M> мин <S> с» с неотрицательными целыми, и печатает её только после прохождения всех проверок — на отказе (подменённый манифест) строки замера нет, чтобы в issue не ушло время неудачного восстановления"
     },
     {
       "name": "restore_check_reports_skipped_ha_api",
       "file": "ops/backup/backup.test.sh",
       "new": true,
-      "covers": ["A2-mechanism"],
+      "covers": [
+        "A2-mechanism"
+      ],
       "behavior": "при --ha-api-check skip вывод содержит строку о пропуске проверки HA API; без флага на стеке из CI (токен-плейсхолдер) restore.sh --check возвращает ненулевой код — проверка HA по умолчанию не пропускается молча"
     }
   ],
