@@ -563,7 +563,7 @@ test_install_schedule_dry_run() {
     # читаются из .env при каждом запуске.
     grep -qxF "Arguments: $script_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$script_arg»"; show_out; return; }
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значение из .env кроме BACKUP_DIR"; return; fi
-    # Вывод 5.1 и 7 совпадает: файл читается обоими одинаково (BOM).
+    # Задача, собранная под Windows PowerShell 5.1 и под pwsh 7, одна и та же.
     if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
       fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
     fi
@@ -586,11 +586,13 @@ test_install_schedule_dry_run() {
   # BACKUP_DIR проверяется по .env: задача в 03:30 не видит окружения
   # терминала, из которого её ставили.
   name=install_schedule_requires_backup_dir_in_env_file
-  for env_text in $'HA_TOKEN=x\r\n' $'BACKUP_DIR=\r\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\r\n'; do
-    fake_clone "$env_text"
-    BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
-    if [ "$rc" -eq 0 ]; then fail "$name" "«${env_text%%$'\r'*}»: задача собрана без BACKUP_DIR в .env"; show_out; return; fi
-    grep -q 'BACKUP_DIR' "$work/out" || { fail "$name" "в выводе нет BACKUP_DIR"; show_out; return; }
+  for shell in "${shells[@]}"; do
+    for env_text in $'HA_TOKEN=x\r\n' $'BACKUP_DIR=\r\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\r\n'; do
+      fake_clone "$env_text"
+      BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      if [ "$rc" -eq 0 ]; then fail "$name/$shell" "«${env_text%%$'\r'*}»: задача собрана без BACKUP_DIR в .env"; show_out; return; fi
+      grep -q 'BACKUP_DIR' "$work/out" || { fail "$name/$shell" "в выводе нет BACKUP_DIR"; show_out; return; }
+    done
   done
   ok "$name"
 }

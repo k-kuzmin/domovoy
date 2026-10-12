@@ -172,7 +172,7 @@ if ($Install) {
         Write-Output "UserId: $userId"
         Write-Output 'LogonType: S4U'
         Write-Output 'RunLevel: Limited'
-        Write-Output 'Settings: StartWhenAvailable, ExecutionTimeLimit 02:00:00, MultipleInstances IgnoreNew'
+        Write-Output 'Settings: StartWhenAvailable, ExecutionTimeLimit 02:00:00, MultipleInstances IgnoreNew, AllowStartIfOnBatteries, DontStopIfGoingOnBatteries'
         Write-Output "BACKUP_DIR: $backupDir"
         Write-Output 'DryRun: not registered'
         exit 0
