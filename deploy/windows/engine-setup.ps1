@@ -652,15 +652,15 @@ else {
 }
 
 # Расписание бэкапа (#8): S4U и состояние по install-schedule.ps1 -Check.
-$backupTask = Get-ScheduledTask -TaskName $BackupTask -ErrorAction SilentlyContinue
-if (-not $backupTask) {
+$backupTaskObject = Get-ScheduledTask -TaskName $BackupTask -ErrorAction SilentlyContinue
+if (-not $backupTaskObject) {
     Add-Result 'FAIL' 'расписание бэкапа' "нет задачи $BackupTask"
 }
 else {
     $schedule = Invoke-Native (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Check')
     $scheduleCode = $schedule.Code
     foreach ($line in $schedule.Lines) { Write-Output "     | $line" }
-    if ([string]$backupTask.Principal.LogonType -ne 'S4U') { Add-Result 'FAIL' 'расписание бэкапа' "LogonType $($backupTask.Principal.LogonType), нужен S4U" }
+    if ([string]$backupTaskObject.Principal.LogonType -ne 'S4U') { Add-Result 'FAIL' 'расписание бэкапа' "LogonType $($backupTaskObject.Principal.LogonType), нужен S4U" }
     elseif ($scheduleCode -ne 0) { Add-Result 'FAIL' 'расписание бэкапа' "install-schedule.ps1 -Check: код $scheduleCode" }
     else { Add-Result 'OK' 'расписание бэкапа' 'S4U' }
 }
