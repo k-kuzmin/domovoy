@@ -49,7 +49,8 @@
        все дистрибутивы, в том числе Docker Desktop), выполняет -Migrate;
     6. правило Hyper-V firewall domovoy-engine-ports: входящие TCP на порты
        API и Home Assistant, только с локальной подсети и с адресов петли
-       хоста (127.0.0.1, ::1);
+       хоста (127.0.0.1, ::1), только в профиле Private — сеть хоста должна
+       быть частной, в общественной порты закрыты;
     7. последним шагом — расписание бэкапа:
        ops/backup/install-schedule.ps1 -Install -LogonType S4U.
 
@@ -180,6 +181,8 @@ $WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 $ImageBase = 'https://cloud-images.ubuntu.com/wsl/releases/24.04/current'
 $ImageFile = 'ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz'
 $RemoteAddresses = @('LocalSubnet', '127.0.0.1', '::1')
+# Профиль сети правила: только частная — в общественной сети порты закрыты.
+$RuleProfile = 'Private'
 
 function Stop-WithError([string]$Message, [int]$Code = 1) {
     [Console]::Error.WriteLine("engine-setup: $Message")
@@ -321,6 +324,14 @@ function Get-WslConfigPlan([string]$Path) {
         $content = "[wsl2]`r`nnetworkingMode=mirrored`r`n"
     }
     return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content }
+}
+
+# Профиль правила — только Private. Прочитанное правило отдаёт Profiles
+# перечислением или числом (2 — Private); Any (0) и сочетания с Public —
+# нет. Та же функция — в сухом прогоне и в -Check.
+function Test-PrivateProfileOnly($Value) {
+    $text = [string]$Value
+    return ($text -eq 'Private' -or $text -eq '2')
 }
 
 function Test-Administrator {
@@ -1116,6 +1127,7 @@ if ($Install) {
         Protocol        = 'TCP'
         LocalPorts      = @([string]$apiPort, [string]$haPort)
         RemoteAddresses = $RemoteAddresses
+        Profiles        = $RuleProfile
         Action          = 'Allow'
     }
 
@@ -1193,11 +1205,12 @@ if ($Install) {
                 if ($line) { Write-Output "wslconfig.line: $line" }
             }
         }
-        foreach ($key in 'Name', 'Direction', 'VMCreatorId', 'Protocol', 'Action') {
+        foreach ($key in 'Name', 'Direction', 'VMCreatorId', 'Protocol', 'Profiles', 'Action') {
             Write-Output ('firewall.{0}: {1}' -f $key.ToLowerInvariant(), $ruleParams[$key])
         }
         Write-Output ('firewall.localports: {0}' -f ($ruleParams.LocalPorts -join ','))
         Write-Output ('firewall.remoteaddresses: {0}' -f ($ruleParams.RemoteAddresses -join ','))
+        Write-Output ('firewall.profiles.private_only: {0}' -f (Test-PrivateProfileOnly $ruleParams.Profiles))
         $schedule = Invoke-Native (Get-Process -Id $PID).Path $scheduleArgs
         $scheduleCode = $schedule.Code
         foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
@@ -1327,7 +1340,7 @@ if ($Install) {
         Remove-NetFirewallHyperVRule -Name $RuleName
     }
     $null = New-NetFirewallHyperVRule @ruleParams
-    Write-Output ('правило {0}: TCP {1}, с адресов {2}' -f $RuleName, ($ruleParams.LocalPorts -join ','), ($RemoteAddresses -join ','))
+    Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}' -f $RuleName, ($ruleParams.LocalPorts -join ','), ($RemoteAddresses -join ','), $RuleProfile)
 
     # 7. Расписание бэкапа — последним шагом.
     $hostExe = (Get-Process -Id $PID).Path
@@ -1544,11 +1557,12 @@ try {
     if ($addresses -notcontains 'LocalSubnet') { $problems.Add('нет LocalSubnet') }
     $wider = @($addresses | Where-Object { $RemoteAddresses -notcontains $_ })
     if ($wider.Count) { $problems.Add('адреса шире локальной подсети и петли: ' + ($wider -join ',')) }
+    if (-not (Test-PrivateProfileOnly $rule.Profiles)) { $problems.Add("профиль $($rule.Profiles), нужен только Private: в общественной сети правило открывало бы порты") }
     foreach ($port in $apiPort, $haPort) {
         if ($ports -notcontains [string]$port) { $problems.Add("нет порта $port") }
     }
     if ($problems.Count) { Add-Result 'FAIL' 'правило firewall' ($problems -join '; ') }
-    else { Add-Result 'OK' 'правило firewall' ('TCP {0} с {1}' -f ($ports -join ','), ($addresses -join ',')) }
+    else { Add-Result 'OK' 'правило firewall' ('TCP {0} с {1}, профиль {2}' -f ($ports -join ','), ($addresses -join ','), $rule.Profiles) }
 }
 catch {
     if (Get-Command Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue) {

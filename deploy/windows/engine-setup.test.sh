@@ -324,6 +324,7 @@ test_engine_setup_dry_run() {
       'firewall.name: domovoy-engine-ports' 'firewall.direction: Inbound' 'firewall.protocol: TCP' \
       'firewall.vmcreatorid: {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' \
       "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet,127.0.0.1,::1' \
+      'firewall.profiles: Private' 'firewall.profiles.private_only: True' \
       'wslconfig.exists: False' 'wslconfig.changed: True' 'wslconfig.line: [wsl2]' 'wslconfig.line: networkingMode=mirrored' \
       'backup.LogonType: S4U' 'backup.exitcode: 0' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name/$shell" "нет «$line»"; show_out; return; }
