@@ -347,7 +347,9 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 
 **Проверочные перезагрузки и замер.** Задача `domovoy-measure-boot` после
 каждой загрузки дописывает строку в
-`%ProgramData%\domovoy-engine\measure-boot.log`:
+`%LOCALAPPDATA%\domovoy-engine\measure-boot.log` пользователя, от
+которого идёт держалка (S4U, обычные права — не SYSTEM: сценарий лежит в
+клоне):
 
 - старт ОС (событие Kernel-General 12) и `LastBootUpTime`;
 - время POST (`FwPOSTTime`);

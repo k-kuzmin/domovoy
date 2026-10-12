@@ -26,8 +26,11 @@
        пока жив хоть один процесс wsl.exe; без предела времени
        (ExecutionTimeLimit 0), не останавливается на батарее (UPS по USB
        Windows видит батареей), перезапуск при сбое;
-    4. задача domovoy-measure-boot: при запуске системы, под SYSTEM,
-       deploy/windows/measure-boot.ps1 -Port <порт API>;
+    4. задача domovoy-measure-boot: при запуске системы, тем же принципалом,
+       что держалка (пользователь, S4U, обычные права): она исполняет файл
+       из клона, а клон пользователь может менять — под SYSTEM это было бы
+       повышением прав. deploy/windows/measure-boot.ps1 -Port <порт API>
+       -LogPath %LOCALAPPDATA%\domovoy-engine\measure-boot.log;
     5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=mirrored — порты
        дистрибутива видны на адресе хоста. Прежний файл сохраняется копией
        .wslconfig.domovoy-backup, отсутствие — отметкой .wslconfig.domovoy-absent.
@@ -236,9 +239,15 @@ if ($Install) {
         -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1}' -f $measureScript, $apiPort
+    # Журнал — в профиле пользователя: путь задаётся при регистрации, задача
+    # под S4U не зависит от того, загружено ли окружение профиля.
+    $measureLog = Join-Path $env:LOCALAPPDATA 'domovoy-engine\measure-boot.log'
+    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1} -LogPath "{2}"' -f $measureScript, $apiPort, $measureLog
     $measureAction = New-ScheduledTaskAction -Execute $powershellExe -Argument $measureArgument
-    $measurePrincipal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    # Не SYSTEM: действие исполняет файл из клона, который пользователь
+    # может менять. Журнал System (Kernel-General 12), LastBootUpTime и
+    # FwPOSTTime читаются без прав администратора.
+    $measurePrincipal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
     $measureSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
@@ -282,7 +291,7 @@ if ($Install) {
             Write-Output "${p}.trigger: $($bootTrigger.CimClass.CimClassName)"
             Write-Output "${p}.execute: $($task.Action.Execute)"
             Write-Output "${p}.arguments: $($task.Action.Arguments)"
-            # Имя SYSTEM локализовано («СИСТЕМА» в русской Windows) — печатается и SID.
+            # SID рядом с именем: имена встроенных учётных записей локализованы.
             Write-Output "${p}.userid: $($task.Principal.UserId)"
             $sid = (New-Object Security.Principal.NTAccount($task.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
             Write-Output "${p}.usersid: $sid"
@@ -379,7 +388,7 @@ if ($Install) {
     Write-Output "задача $KeeperTask зарегистрирована: при запуске системы, S4U"
     $null = Register-ScheduledTask -TaskName $MeasureTask -Trigger $bootTrigger -Action $measureAction -Principal $measurePrincipal `
         -Settings $measureSettings -Description 'Домовой: замер от старта ОС до первого ответа /health' -Force
-    Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, журнал %ProgramData%\domovoy-engine\measure-boot.log"
+    Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, S4U, журнал $measureLog"
 
     # 5. .wslconfig.
     if ($wslConfig.Changed) {
@@ -462,6 +471,9 @@ else {
     $m = [regex]::Match([string](@($measure.Actions)[0].Arguments), '-Port\s+(\d+)')
     if ($m.Success) { $measurePort = [int]$m.Groups[1].Value }
     if ($measurePort -ne $apiPort) { Add-Result 'FAIL' 'задача замера' "порт задачи $measurePort, API_HTTP_PORT $apiPort — переустановите: -Install" }
+    elseif ([string]$measure.Principal.LogonType -ne 'S4U' -or [string]$measure.Principal.RunLevel -ne 'Limited') {
+        Add-Result 'FAIL' 'задача замера' "принципал $($measure.Principal.UserId), $($measure.Principal.LogonType), $($measure.Principal.RunLevel) — нужен пользователь с S4U и Limited: задача исполняет файл из клона"
+    }
     else { Add-Result 'OK' 'задача замера' "порт $measurePort" }
 }
 

@@ -5,8 +5,10 @@
 
 .DESCRIPTION
   Ставится deploy/windows/engine-setup.ps1 -Install задачей
-  domovoy-measure-boot: при запуске системы, под SYSTEM — дистрибутив WSL
-  ей не нужен, она только опрашивает порт с хоста:
+  domovoy-measure-boot: при запуске системы, от пользователя с типом входа
+  S4U и обычными правами — не SYSTEM: сценарий лежит в клоне, который
+  пользователь может менять. Дистрибутив WSL задаче не нужен, она только
+  опрашивает порт с хоста:
 
     http://localhost:<Port>/health — каждые -IntervalSeconds (5 с),
     пока не придёт ответ 200 формы стека или не выйдет -TimeoutMinutes (30).
@@ -20,7 +22,8 @@
   базы или Home Assistant — «первый ответ», но не «первый 200».
 
   Одна строка на загрузку дописывается в -LogPath (по умолчанию
-  %ProgramData%\domovoy-engine\measure-boot.log, UTF-8):
+  %LOCALAPPDATA%\domovoy-engine\measure-boot.log; установщик задаёт путь
+  явно), UTF-8:
 
     os_start      — событие System / Microsoft-Windows-Kernel-General ID 12
                     (старт ядра); рядом last_boot — LastBootUpTime, который
@@ -43,7 +46,7 @@ param(
     [double]$TimeoutMinutes = 30,
     [ValidateRange(1, 300)]
     [int]$IntervalSeconds = 5,
-    [string]$LogPath = (Join-Path $env:ProgramData 'domovoy-engine\measure-boot.log')
+    [string]$LogPath = (Join-Path $env:LOCALAPPDATA 'domovoy-engine\measure-boot.log')
 )
 
 Set-StrictMode -Version Latest

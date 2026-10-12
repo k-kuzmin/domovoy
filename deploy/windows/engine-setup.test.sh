@@ -232,7 +232,7 @@ test_engine_setup_dry_run() {
       'keeper.arguments: -d domovoy-engine --exec sleep infinity' 'keeper.logontype: S4U' 'keeper.runlevel: Limited' \
       'keeper.executiontimelimit: PT0S' 'keeper.disallowstartifonbatteries: False' 'keeper.stopifgoingonbatteries: False' \
       'keeper.restartcount: 3' 'keeper.restartinterval: PT1M' \
-      'measure.task: domovoy-measure-boot' 'measure.trigger: MSFT_TaskBootTrigger' 'measure.logontype: ServiceAccount' \
+      'measure.task: domovoy-measure-boot' 'measure.trigger: MSFT_TaskBootTrigger' \
       'firewall.name: domovoy-engine-ports' 'firewall.direction: Inbound' 'firewall.protocol: TCP' \
       'firewall.vmcreatorid: {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' \
       "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet,127.0.0.1,::1' \
@@ -241,10 +241,17 @@ test_engine_setup_dry_run() {
       has "$shell" "$line" || { fail "$name/$shell" "нет «$line»"; show_out; return; }
     done
     grep -qix 'keeper.execute: .*\\system32\\wsl\.exe' "$work/out.$shell" || { fail "$name/$shell" "держалка не wsl.exe"; show_out; return; }
-    # SYSTEM — по SID: имя учётной записи локализовано.
-    has "$shell" 'measure.usersid: S-1-5-18' || { fail "$name/$shell" "замер не под SYSTEM"; show_out; return; }
-    has "$shell" 'measure.runlevel: Highest' || { fail "$name/$shell" "замер не Highest"; show_out; return; }
-    grep -q '^measure.arguments: .*measure-boot\.ps1" -Port 28081$' "$work/out.$shell" || { fail "$name/$shell" "порт замера не из API_HTTP_PORT"; show_out; return; }
+    # Замер исполняет файл из клона, который пользователь может менять, —
+    # поэтому тем же принципалом, что держалка: пользователь, S4U, Limited,
+    # и никогда SYSTEM (S-1-5-18) или Highest.
+    has "$shell" 'measure.logontype: S4U' || { fail "$name/$shell" "замер не S4U"; show_out; return; }
+    has "$shell" 'measure.runlevel: Limited' || { fail "$name/$shell" "замер не Limited"; show_out; return; }
+    if grep -q '^measure.usersid: S-1-5-18$' "$work/out.$shell"; then fail "$name/$shell" "замер под SYSTEM"; return; fi
+    [ "$(sed -n 's/^measure.usersid: //p' "$work/out.$shell")" = "$(sed -n 's/^keeper.usersid: //p' "$work/out.$shell")" ]       || { fail "$name/$shell" "принципал замера не тот, что у держалки"; show_out; return; }
+    # Ни одна задача -Install не идёт с повышенными правами.
+    if grep -qE '^(keeper|measure|backup\.)(\.)?[Rr]un[Ll]evel: Highest$' "$work/out.$shell"; then fail "$name/$shell" "задача с Highest"; return; fi
+    grep -q '^measure.arguments: .* -LogPath "[^"]*measure-boot\.log"$' "$work/out.$shell" || { fail "$name/$shell" "журнал замера не задан при регистрации"; show_out; return; }
+    grep -q '^measure.arguments: .*measure-boot\.ps1" -Port 28081 ' "$work/out.$shell" || { fail "$name/$shell" "порт замера не из API_HTTP_PORT"; show_out; return; }
     grep -q '^provision: wsl.exe -d domovoy-engine -u root --cd .* --exec bash deploy/windows/provision-engine.sh$' "$work/out.$shell" \
       || { fail "$name/$shell" "нет строки провижининга"; show_out; return; }
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значения .env"; return; fi
@@ -259,7 +266,7 @@ test_engine_setup_dry_run() {
   name=engine_setup_port_from_compose_default
   fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   dry_run "${shells[0]}"
-  grep -q "^measure.arguments: .* -Port $api_default\$" "$work/out.${shells[0]}" || { fail "$name" "порт не $api_default"; show_out; return; }
+  grep -q "^measure.arguments: .* -Port $api_default " "$work/out.${shells[0]}" || { fail "$name" "порт не $api_default"; show_out; return; }
   has "${shells[0]}" "firewall.localports: $api_default,$ha_default" || { fail "$name" "порты правила не по умолчанию"; show_out; return; }
   ok "$name"
 
