@@ -22,9 +22,11 @@ trap 'rm -rf "$work"' EXIT
 
 passed=0
 failed=0
+skipped=0
 
 ok() { echo "ok   $1"; passed=$((passed + 1)); }
 fail() { echo "FAIL $1: $2"; failed=$((failed + 1)); }
+skip() { echo "skip $1: $2"; skipped=$((skipped + 1)); }
 
 # Запуск модуля: stdout и stderr в разные файлы, код — в $rc.
 run() {
@@ -324,6 +326,111 @@ test_archive_skips_vanished_file_but_not_registry() {
   ok "$name"
 }
 
+test_archive_reads_replaced_file_whole() {
+  local name=archive_reads_replaced_file_whole
+  # HA пишет .storage/* атомарной заменой: временный файл и os.replace.
+  # Каждое обращение lstat к файлу подменяет его версией длиннее прежней —
+  # замена приходится между тем, как модуль узнал о файле, и тем, как его
+  # читает. В архиве обязана лечь одна из версий целиком, а не размер
+  # одной с байтами другой.
+  mkdir -p "$work/replaced/.storage"
+  cp "$registry" "$work/replaced/.storage/core.entity_registry"
+  "$py" - "$module" "$work/replaced" "$work/replaced.tar.gz" "$work/replaced.err" <<'EOF'
+import importlib.util, json, os, sys
+module, config, archive, errlog = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("m", module)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+target = os.path.join(os.path.abspath(config), ".storage", "core.restore_state")
+def version(k):
+    return json.dumps({"version": k, "pad": "x" * (1000 * (k + 1))}).encode()
+with open(target, "wb") as handle:
+    handle.write(version(0))
+written = [0]
+real_lstat = os.lstat
+def lstat(path, *args, **kwargs):
+    result = real_lstat(path, *args, **kwargs)
+    if os.path.abspath(os.fspath(path)) == target:
+        written[0] += 1
+        with open(target + ".tmp", "wb") as handle:
+            handle.write(version(written[0]))
+        os.replace(target + ".tmp", target)
+    return result
+m.os.lstat = lstat
+sys.stdout = type(sys.stdout)(open(archive, "wb"), encoding="utf-8")
+sys.stderr = open(errlog, "w", encoding="utf-8")
+rc = m.main(["archive", config])
+m.os.lstat = real_lstat
+sys.stderr.write(f"versions {written[0] + 1}\n")
+sys.exit(rc)
+EOF
+  rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$name" "archive: код $rc: $(cat "$work/replaced.err")"; return; fi
+  grep -q '^versions [2-9]' "$work/replaced.err" || { fail "$name" "подмена не случилась: $(cat "$work/replaced.err")"; return; }
+  "$py" - "$work/replaced.tar.gz" <<'EOF'
+import json, sys, tarfile
+with tarfile.open(sys.argv[1], "r:gz") as tar:
+    raw = tar.extractfile(".storage/core.restore_state").read()
+doc = json.loads(raw)
+expected = json.dumps({"version": doc["version"], "pad": "x" * (1000 * (doc["version"] + 1))}).encode()
+sys.exit(0 if raw == expected else 1)
+EOF
+  rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$name" "в архиве не целая версия файла (обрезан или смешан)"; return; fi
+  ok "$name"
+}
+
+test_archive_keeps_directory_links_and_survives_vanished_directory() {
+  local name=archive_keeps_directory_links
+  # Ссылка на каталог: os.walk в неё не спускается и в files её не кладёт —
+  # без отдельной обработки она пропадает из архива молча.
+  mkdir -p "$work/dirlink/.storage" "$work/dirlink/themes"
+  cp "$registry" "$work/dirlink/.storage/core.entity_registry"
+  echo 'example theme' >"$work/dirlink/themes/example.yaml"
+  if ! "$py" -c 'import os,sys; os.symlink("themes", sys.argv[1], target_is_directory=True)' "$work/dirlink/themes-link" 2>/dev/null; then
+    skip "$name" "симлинки в этом окружении недоступны"
+  else
+    run archive "$work/dirlink"
+    cp "$work/out" "$work/dirlink.tar.gz"
+    if [ "$rc" -ne 0 ]; then fail "$name" "archive: код $rc: $(cat "$work/err")"; return; fi
+    if ! "$py" - "$work/dirlink.tar.gz" <<'EOF'
+import sys, tarfile
+with tarfile.open(sys.argv[1], "r:gz") as tar:
+    member = tar.getmember("themes-link")
+    names = tar.getnames()
+sys.exit(0 if member.issym() and member.linkname == "themes" and "themes/example.yaml" in names
+         and not any(n.startswith("themes-link/") for n in names) else 1)
+EOF
+    then fail "$name" "ссылки на каталог нет в архиве ссылкой"; return; fi
+    ok "$name"
+  fi
+
+  # Каталог, исчезнувший между os.walk и записью его заголовка, — пропуск
+  # с предупреждением без имени, а не отказ всего архива.
+  name=archive_skips_vanished_directory
+  "$py" - "$module" "$work/dirlink" "$work/vanished-dir.tar.gz" "$work/vanished-dir.err" <<'EOF'
+import importlib.util, os, sys
+module, config, archive, errlog = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("m", module)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+real_walk = os.walk
+def walk(top, *args, **kwargs):
+    yield from real_walk(top, *args, **kwargs)
+    yield os.path.join(os.path.abspath(top), "gone-example"), [], ["file-example"]
+m.os.walk = walk
+sys.stdout = type(sys.stdout)(open(archive, "wb"), encoding="utf-8")
+sys.stderr = open(errlog, "w", encoding="utf-8")
+sys.exit(m.main(["archive", config]))
+EOF
+  rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$name" "archive: код $rc: $(cat "$work/vanished-dir.err")"; return; fi
+  grep -q 'каталог исчез во время архивации' "$work/vanished-dir.err" || { fail "$name" "нет предупреждения: $(cat "$work/vanished-dir.err")"; return; }
+  if grep -q 'gone-example' "$work/vanished-dir.err"; then fail "$name" "в предупреждении имя каталога"; return; fi
+  tar -tzf "$work/vanished-dir.tar.gz" | grep -qxF .storage/core.entity_registry || { fail "$name" "архив неполон"; return; }
+  ok "$name"
+}
+
 test_count_counts_only_enabled
 test_compare_reports_missing_entity
 test_compare_full_states_and_disabled_ignored
@@ -333,6 +440,8 @@ test_sqlite_backup_and_check
 test_archive_roundtrip_with_live_wal
 test_archive_counts_registry_from_archived_bytes
 test_archive_skips_vanished_file_but_not_registry
+test_archive_reads_replaced_file_whole
+test_archive_keeps_directory_links_and_survives_vanished_directory
 
-echo "итог: пройдено $passed, упало $failed"
+echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]

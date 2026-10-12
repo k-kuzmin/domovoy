@@ -212,8 +212,14 @@ def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str) -> None:
     """Обычный файл или ссылка; исчезнувший после обхода — пропуск.
 
     HA пишет временные файлы рядом с .storage и удаляет их: такой файл
-    может пропасть между os.walk и tar.add. tar.add открывает файл до
-    записи заголовка, поэтому FileNotFoundError поток архива не портит.
+    может пропасть между os.walk и записью. Пропажа обнаруживается при
+    lstat или open, до записи заголовка, поэтому поток архива она не портит.
+
+    Обычный файл открывается один раз, и размер в заголовке берётся fstat
+    того же открытого файла. HA заменяет .storage/* атомарно (временный
+    файл и os.replace): tar.add взял бы размер по пути, а читал бы путь
+    заново — уже другой файл, и в архив лёг бы обрезанный JSON.
+
     Реестр и базы sqlite сюда не попадают — их пропажа остаётся ошибкой.
     Имя файла в предупреждение не пишется: вывод модуля — только числа и
     служебные строки.
@@ -221,8 +227,12 @@ def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str) -> None:
     try:
         mode = os.lstat(path).st_mode
         # Сокеты и FIFO в архив не идут: восстанавливать в них нечего.
-        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+        if stat.S_ISLNK(mode):
             tar.add(path, arcname=arcname, recursive=False)
+        elif stat.S_ISREG(mode):
+            with open(path, "rb") as handle:
+                info = tar.gettarinfo(arcname=arcname, fileobj=handle)
+                tar.addfile(info, handle)
     except FileNotFoundError:
         print("предупреждение: файл исчез во время архивации и пропущен", file=sys.stderr)
 
@@ -247,7 +257,20 @@ def archive(config_dir: str) -> int:
                 dirs.sort()
                 relative_root = os.path.relpath(root, config_dir)
                 if relative_root != ".":
-                    tar.add(root, arcname=relative_root.replace(os.sep, "/"), recursive=False)
+                    try:
+                        tar.add(root, arcname=relative_root.replace(os.sep, "/"), recursive=False)
+                    except FileNotFoundError:
+                        # Каталог удалён после обхода: его файлов тоже нет.
+                        print("предупреждение: каталог исчез во время архивации и пропущен", file=sys.stderr)
+                        dirs[:] = []
+                        continue
+                # Ссылку на каталог os.walk кладёт в dirs и в неё не
+                # спускается: в архив она идёт ссылкой, а не пропадает.
+                for name in dirs:
+                    path = os.path.join(root, name)
+                    if os.path.islink(path):
+                        arcname = os.path.normpath(os.path.join(relative_root, name)).replace(os.sep, "/")
+                        add_ordinary(tar, path, arcname)
                 names = set(files)
                 databases = {name for name in names if is_sqlite(os.path.join(root, name))}
                 sidecars = {db + suffix for db in databases for suffix in SQLITE_SIDECARS}
