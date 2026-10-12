@@ -793,14 +793,21 @@ else {
         Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "контейнеров проекта $project нет"
     }
     else {
-        $policies = (Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker', 'inspect', '-f', '{{.Name}} {{.HostConfig.RestartPolicy.Name}}') + $names)).Text -split "`r?`n" | Where-Object { $_ }
+        $inspected = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker', 'inspect', '-f', '{{.Name}} {{.HostConfig.RestartPolicy.Name}}') + $names)
+        $policies = @($inspected.Text -split "`r?`n" | Where-Object { $_ })
         $bad = @($policies | Where-Object { $_ -notmatch '\sunless-stopped$' })
-        if ($bad.Count) { Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' ($bad -join '; ') }
+        # Отказ inspect или неполный ответ — не OK: пустой stdout дал бы
+        # «0 контейнеров» без единой проверенной политики.
+        if ($inspected.Code -ne 0 -or $policies.Count -ne $names.Count) {
+            Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "docker inspect: код $($inspected.Code), политик $($policies.Count) из $($names.Count): $(Format-Native $inspected)"
+        }
+        elseif ($bad.Count) { Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' ($bad -join '; ') }
         else { Add-Result 'OK' 'restart: unless-stopped у контейнеров проекта' ('{0} контейнеров' -f @($policies).Count) }
     }
-    $apiPorts = (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '--filter', $label, '--filter', 'label=com.docker.compose.service=api', '--format', '{{.Ports}}')).Text
-    $published = [regex]::Match($apiPorts, ':(\d+)->\d+/tcp')
-    if (-not $published.Success) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' 'api не запущен или порт не опубликован' }
+    $apiPorts = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '--filter', $label, '--filter', 'label=com.docker.compose.service=api', '--format', '{{.Ports}}')
+    $published = [regex]::Match($apiPorts.Text, ':(\d+)->\d+/tcp')
+    if ($apiPorts.Code -ne 0) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' "docker ps: код $($apiPorts.Code): $(Format-Native $apiPorts)" }
+    elseif (-not $published.Success) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' 'api не запущен или порт не опубликован' }
     elseif ([int]$published.Groups[1].Value -ne $measurePort) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' "api опубликован на $($published.Groups[1].Value), задача замера — $measurePort" }
     else { Add-Result 'OK' 'порт замера = опубликованный порт api' "$measurePort" }
 }
