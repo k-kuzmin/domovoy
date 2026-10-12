@@ -150,20 +150,36 @@ function Get-Port([string]$Key) {
     return $port
 }
 
-# Внешняя программа с выводом stdout и stderr одной строкой. stderr при
-# 2>&1 в Windows PowerShell 5.1 приходит записями ошибок, и при
-# ErrorActionPreference Stop первая строка прервала бы сценарий.
+# Внешняя программа: Lines и Text — только stdout, по ним идут сравнения;
+# stderr — отдельно, ErrLines и Err, для деталей в выводе. Предупреждения
+# wsl.exe в stderr иначе попадали бы в «enabled» и в список контейнеров.
+# stderr при 2>&1 приходит записями ошибок — по ним потоки и делятся; при
+# ErrorActionPreference Stop первая такая запись прервала бы сценарий.
 function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $out = New-Object System.Collections.Generic.List[string]
+    $err = New-Object System.Collections.Generic.List[string]
     try {
-        $lines = @(& $Exe @Arguments 2>&1 | ForEach-Object { [string]$_ })
+        & $Exe @Arguments 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $err.Add([string]$_) } else { $out.Add([string]$_) }
+        }
         $code = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previous
     }
-    return [pscustomobject]@{ Code = $code; Lines = $lines; Text = ($lines -join "`n").Trim() }
+    $lines = @($out)
+    $errLines = @($err | Where-Object { $_.Trim() })
+    return [pscustomobject]@{ Code = $code; Lines = $lines; Text = ($lines -join "`n").Trim(); ErrLines = $errLines; Err = ($errLines -join '; ').Trim() }
+}
+
+# Текст для деталей: stdout, затем stderr с пометкой.
+function Format-Native($Result) {
+    $parts = @()
+    if ($Result.Text) { $parts += $Result.Text }
+    if ($Result.Err) { $parts += "stderr: $($Result.Err)" }
+    return ($parts -join '; ')
 }
 
 # wsl.exe по умолчанию пишет UTF-16; WSL_UTF8 переводит вывод в UTF-8.
@@ -364,6 +380,7 @@ if ($Install) {
         $schedule = Invoke-Native (Get-Process -Id $PID).Path $scheduleArgs
         $scheduleCode = $schedule.Code
         foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
+        foreach ($line in $schedule.ErrLines) { Write-Output "backup.stderr: $line" }
         Write-Output "backup.exitcode: $scheduleCode"
         Write-Output 'DryRun: nothing changed'
         if ($wslConfig.Conflict -or $scheduleCode -ne 0) { exit 1 }
@@ -400,7 +417,7 @@ if ($Install) {
             Stop-WithError "SHA256 образа не сошёлся с SHA256SUMS (ожидалось «$expected», получено «$actual») — загрузка повреждена или неполна; образ удалён, дистрибутив не создан"
         }
         $import = Invoke-Wsl $importArgs
-        if ($import.Code -ne 0) { Stop-WithError "wsl --import: код $($import.Code): $($import.Text)" }
+        if ($import.Code -ne 0) { Stop-WithError "wsl --import: код $($import.Code): $(Format-Native $import)" }
         Remove-Item -LiteralPath $tar, $sumsFile -Force -ErrorAction SilentlyContinue
         Write-Output "дистрибутив $Distro создан из $ImageFile (целостность загрузки: SHA256 сошёлся с SHA256SUMS того же сервера; подлинность не проверялась)"
     }
@@ -436,8 +453,8 @@ if ($Install) {
     # один. Признак — вывод enabled, как в -Check.
     $disabled = New-Object System.Collections.Generic.List[string]
     foreach ($unit in 'docker.service', 'containerd.service') {
-        $isEnabled = (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)).Text
-        if ($isEnabled -ne 'enabled') { $disabled.Add("$unit «$isEnabled»") }
+        $isEnabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)
+        if ($isEnabled.Text -ne 'enabled') { $disabled.Add("$unit «$(Format-Native $isEnabled)»") }
     }
     $null = Invoke-Wsl @('--terminate', $Distro)
     if ($disabled.Count) { Stop-Install "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
@@ -599,17 +616,17 @@ if (-not $running) {
 }
 else {
     foreach ($unit in 'docker.service', 'containerd.service') {
-        $isEnabled = (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)).Text
-        $isActive = (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-active', $unit)).Text
+        $isEnabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', $unit)
+        $isActive = Format-Native (Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-active', $unit))
         # OK — по is-enabled: «active» после ручного старта автозапуска не доказывает.
-        if ($isEnabled -eq 'enabled') { Add-Result 'OK' "$unit в автозапуске" "is-enabled enabled; is-active $isActive" }
-        else { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled «$isEnabled»; is-active $isActive" }
+        if ($isEnabled.Text -eq 'enabled') { Add-Result 'OK' "$unit в автозапуске" "is-enabled enabled; is-active $isActive" }
+        else { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled «$(Format-Native $isEnabled)»; is-active $isActive" }
     }
     $label = "label=com.docker.compose.project=$project"
     $listed = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '-a', '--filter', $label, '--format', '{{.Names}}')
     $names = @($listed.Lines | Where-Object { $_ })
     if ($listed.Code -ne 0) {
-        Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "docker ps: код $($listed.Code): $($listed.Text)"
+        Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "docker ps: код $($listed.Code): $(Format-Native $listed)"
     }
     elseif (-not $names.Count) {
         Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "контейнеров проекта $project нет"
@@ -660,6 +677,7 @@ else {
     $schedule = Invoke-Native (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Check')
     $scheduleCode = $schedule.Code
     foreach ($line in $schedule.Lines) { Write-Output "     | $line" }
+    foreach ($line in $schedule.ErrLines) { Write-Output "     | stderr: $line" }
     if ([string]$backupTaskObject.Principal.LogonType -ne 'S4U') { Add-Result 'FAIL' 'расписание бэкапа' "LogonType $($backupTaskObject.Principal.LogonType), нужен S4U" }
     elseif ($scheduleCode -ne 0) { Add-Result 'FAIL' 'расписание бэкапа' "install-schedule.ps1 -Check: код $scheduleCode" }
     else { Add-Result 'OK' 'расписание бэкапа' 'S4U' }

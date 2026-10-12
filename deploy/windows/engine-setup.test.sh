@@ -342,6 +342,21 @@ test_engine_setup_dry_run() {
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeEngineState Running
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeEngineState без -DryRun код $rc, ожидался 2"; show_out; return; }
   ok "$name"
+
+  # stderr внешней программы — отдельным полем: в строках stdout его нет,
+  # в выводе он виден с пометкой. Отказ вложенного install-schedule.ps1
+  # (нет BACKUP_DIR) пишется в stderr.
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\n')"
+  rm -f "$work/wslconfig"*
+  for shell in "${shells[@]}"; do
+    name="engine_setup_stderr_apart/$shell"
+    dry_run "$shell"
+    [ "$rc" -ne 0 ] || { fail "$name" "отказ расписания бэкапа не дал ненулевой код"; show_out; return; }
+    grep -q '^backup\.stderr: .*BACKUP_DIR' "$work/out.$shell" || { fail "$name" "текст отказа не показан отдельной строкой stderr"; show_out; return; }
+    if grep -q '^backup\.install-schedule:' "$work/out.$shell"; then fail "$name" "stderr попал в строки stdout"; show_out; return; fi
+    has "$shell" 'backup.exitcode: 1' || { fail "$name" "нет кода расписания"; show_out; return; }
+    ok "$name"
+  done
 }
 
 python_cmd() {
