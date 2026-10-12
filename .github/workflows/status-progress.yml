@@ -1,0 +1,78 @@
+name: Картинка прогресса этапов
+
+# Раздел «Статус» README показывает картинку прогресса этапов 0–6 из ветки
+# status (#140). Картинку рисует и публикует scripts/status-progress.sh;
+# здесь — только когда и с какими правами. В main ничего не пишется.
+#
+# Событий данных два — задачи и майлстоуны. push по путям даёт первую
+# отрисовку в момент мерджа (иначе README до первого закрытия задачи
+# показывал бы битую картинку), schedule — страховка от пропущенного или
+# отставшего события. pull_request по тем же путям — проверочный прогон до
+# мерджа: всё то же на настоящем runner, но publish --dry-run, без записи.
+# Запись — только из main: workflow_dispatch из другой ветки тоже идёт
+# проверочным прогоном, код ветки в status не публикуется.
+on:
+  issues:
+    types: [opened, closed, reopened, deleted, transferred, milestoned, demilestoned]
+  milestone:
+    types: [created, edited, deleted, opened, closed]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/status-progress.yml
+      - scripts/status-progress.sh
+  schedule:
+    - cron: '17 3 * * *'
+  pull_request:
+    paths:
+      - .github/workflows/status-progress.yml
+      - scripts/status-progress.sh
+
+# Единственное право — запись содержимого: пуш в ветку status. Задачи и
+# майлстоуны публичного репозитория читаются тем же токеном.
+permissions:
+  contents: write
+
+# Публикующие прогоны идут по одному и не отменяются: в очереди остаётся
+# последний, и он читает задачи после завершения предыдущего. Проверочный
+# прогон — PR или запуск из другой ветки — в своей группе и публикацию не
+# вытесняет; условие группы то же, что у шага записи.
+concurrency:
+  group: status-progress-${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'publish' || 'dry-run' }}
+  cancel-in-progress: false
+
+jobs:
+  progress:
+    name: Отрисовка и публикация
+    runs-on: ubuntu-latest
+    # У PR из форка токен только на чтение — проверять там нечего.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Данные события в run не подставляются нигде: сценарий берёт только
+      # ответы API, а из задач — только состояние и номер майлстоуна.
+      - name: Чтение майлстоунов и задач
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate 'repos/{owner}/{repo}/milestones?state=all&per_page=100' > "$RUNNER_TEMP/milestones.json"
+          gh api --paginate 'repos/{owner}/{repo}/issues?state=all&milestone=*&per_page=100' > "$RUNNER_TEMP/issues.json"
+
+      - name: Отрисовка
+        run: |
+          set -euo pipefail
+          bash scripts/status-progress.sh render light "$RUNNER_TEMP/milestones.json" "$RUNNER_TEMP/issues.json" > "$RUNNER_TEMP/progress-light.svg"
+          bash scripts/status-progress.sh render dark "$RUNNER_TEMP/milestones.json" "$RUNNER_TEMP/issues.json" > "$RUNNER_TEMP/progress-dark.svg"
+
+      - name: Публикация в ветку status
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        run: bash scripts/status-progress.sh publish "$RUNNER_TEMP/progress-light.svg" "$RUNNER_TEMP/progress-dark.svg"
+
+      - name: Проверка публикации без записи
+        if: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
+        run: bash scripts/status-progress.sh publish "$RUNNER_TEMP/progress-light.svg" "$RUNNER_TEMP/progress-dark.svg" --dry-run
