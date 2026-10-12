@@ -547,37 +547,170 @@ function Get-MigrateSetup {
     }
 }
 
+# Шаги переезда — один список на план сухого прогона и на действие: -DryRun
+# печатает Key и Plan, настоящий прогон исполняет Run в том же порядке, —
+# переставить шаг в одном месте, не переставив в другом, нельзя (тот же
+# приём, что список задач в -Uninstall). Stage — какой откат печатает
+# Stop-Migrate при отказе шага. Plan — строки ASCII: первая идёт после
+# «Key: », остальные печатаются как есть. Run исполняется точкой
+# (. $step.Run) в области сценария: переменные, которые шаг оставляет
+# следующим ($restoreFrom), видны дальше.
+$migrateSteps = @(
+    [pscustomobject]@{
+        Key   = 'migrate.stop_api'; Stage = 'desktop'
+        Title = 'docker compose stop api (Docker Desktop) — Backend больше не пишет в базу'
+        Plan  = { 'docker.exe {0}' -f ($desktopStopApiArgs -join ' ') }
+        Run   = {
+            Invoke-Passthru $dockerExe $desktopStopApiArgs
+            if ($script:passCode -ne 0) { Stop-Migrate "docker compose stop api: код $($script:passCode)" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.backup'; Stage = 'desktop'
+        Title = 'ops/backup/backup.sh (Git Bash)'
+        Plan  = { '{0} {1} <BACKUP_DIR>' -f $script:migrateSetup.GitBash, $backupScriptPath }
+        # Каталог — аргументом, чтобы backup.sh и восстановление смотрели в
+        # один каталог, а не в BACKUP_DIR окружения.
+        Run   = {
+            try { $backupsBefore = Get-BackupNames $script:migrateSetup.BackupDir }
+            catch { Stop-Migrate "каталог BACKUP_DIR не читается: $($_.Exception.Message)" }
+            Invoke-Passthru $script:migrateSetup.GitBash @($backupScriptPath, $script:migrateSetup.BackupDirForward)
+            if ($script:passCode -ne 0) { Stop-Migrate "ops/backup/backup.sh: код $($script:passCode)" }
+            try { $backupsAfter = Get-BackupNames $script:migrateSetup.BackupDir }
+            catch { Stop-Migrate "каталог BACKUP_DIR не читается: $($_.Exception.Message)" }
+            $newBackups = @($backupsAfter | Where-Object { $backupsBefore -notcontains $_ })
+            if ($newBackups.Count -ne 1) { Stop-Migrate "после backup.sh в BACKUP_DIR новых полных бэкапов $($newBackups.Count), ожидался ровно один" }
+            $restoreFrom = '{0}/{1}' -f $script:migrateSetup.BackupDirForward.TrimEnd('/'), $newBackups[0]
+            Write-Output "бэкап для переноса: $($newBackups[0])"
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.stop_stack'; Stage = 'desktop'
+        Title = 'docker compose --profile ha stop (Docker Desktop, тома не трогаются)'
+        Plan  = { 'docker.exe {0} (stop: Docker Desktop volumes stay - rollback path)' -f ($desktopStopStackArgs -join ' ') }
+        Run   = {
+            Invoke-Passthru $dockerExe $desktopStopStackArgs
+            if ($script:passCode -ne 0) { Stop-Migrate "docker compose --profile ha stop: код $($script:passCode)" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.desktop_stop'; Stage = 'engine'
+        Title = 'docker desktop stop — процессы не убиваются, ожидается их уход'
+        Plan  = { 'docker.exe {0}; wait up to {1} s for Docker Desktop processes to exit (no kill)' -f ($desktopQuitArgs -join ' '), $DesktopWaitSeconds }
+        Run   = {
+            Invoke-Passthru $dockerExe $desktopQuitArgs
+            if ($script:passCode -ne 0) { Stop-Migrate "docker desktop stop: код $($script:passCode)" }
+            if (-not (Wait-DesktopGone)) { Stop-Migrate "процессы Docker Desktop не завершились за $DesktopWaitSeconds с — wsl --shutdown не выполнялся" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.desktop_autostart'; Stage = 'engine'
+        Title = 'автозапуск Docker Desktop при входе — выключить, иначе после входа он займёт порты стека'
+        Plan  = {
+            $desktopSettings = Get-DesktopSettings
+            if (-not $desktopSettings) {
+                'WARN no {0} in the Docker Desktop settings dir - AutoStart unchanged; turn it off in Docker Desktop, or at logon it takes the stack ports' -f (($desktopSettingsFiles | ForEach-Object { $_.Leaf }) -join ' or ')
+            }
+            elseif ($desktopSettings.Value -eq 'false') {
+                "$($desktopSettings.Leaf) $($desktopSettings.Key) already false - unchanged"
+            }
+            else {
+                $previousValue = if ($desktopSettings.Value) { $desktopSettings.Value } else { 'absent' }
+                "$($desktopSettings.Leaf) $($desktopSettings.Key) $previousValue -> false (copy $($desktopSettings.Leaf).domovoy-backup; -Uninstall restores the value)"
+            }
+        }
+        # Пишется после остановки Desktop: работающий Desktop переписывает файл.
+        Run   = {
+            $desktopSettings = Get-DesktopSettings
+            if (-not $desktopSettings) {
+                Write-Warning "в $DockerSettingsDir нет settings-store.json и settings.json — автозапуск Docker Desktop не выключен; выключите его в настройках Desktop, иначе после входа он займёт порты стека"
+            }
+            elseif ($desktopSettings.Value -eq 'false') {
+                Write-Output "Docker Desktop, $($desktopSettings.Leaf): $($desktopSettings.Key) уже false — не тронут"
+            }
+            else {
+                $disabledText = Set-JsonBool $desktopSettings.Text $desktopSettings.Key 'false'
+                if ($null -eq $disabledText) {
+                    Write-Warning "$($desktopSettings.Leaf) — не объект JSON; автозапуск Docker Desktop не выключен, выключите его в настройках Desktop"
+                }
+                else {
+                    if (-not (Test-Path -LiteralPath $desktopSettings.Backup)) { Copy-Item -LiteralPath $desktopSettings.Path -Destination $desktopSettings.Backup }
+                    [IO.File]::WriteAllText($desktopSettings.Path, $disabledText, (New-Object Text.UTF8Encoding($false)))
+                    Write-Output "Docker Desktop, $($desktopSettings.Leaf): $($desktopSettings.Key) false (копия .domovoy-backup; -Uninstall вернёт прежнее значение)"
+                }
+            }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.wsl_shutdown'; Stage = 'engine'
+        Title = 'wsl --shutdown — гасит все дистрибутивы WSL, применяет networkingMode=mirrored'
+        Plan  = { "wsl.exe --shutdown - stops ALL WSL distributions, not only $Distro (applies networkingMode=mirrored)" }
+        Run   = {
+            $shutdown = Invoke-Wsl @('--shutdown')
+            if ($shutdown.Code -ne 0) { Stop-Migrate "wsl --shutdown: код $($shutdown.Code): $(Format-Native $shutdown)" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.keeper_start'; Stage = 'engine'
+        Title = "Start-ScheduledTask $KeeperTask"
+        Plan  = { "Start-ScheduledTask $KeeperTask" }
+        Run   = {
+            try { Start-ScheduledTask -TaskName $KeeperTask }
+            catch { Stop-Migrate "Start-ScheduledTask ${KeeperTask}: $($_.Exception.Message)" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.engine_wait'; Stage = 'engine'
+        Title = "ожидание docker в $Distro"
+        Plan  = { "docker info in $Distro, up to $EngineWaitSeconds s" }
+        Run   = {
+            $engineInfo = Wait-EngineDocker
+            if ($engineInfo.Code -ne 0 -or -not $engineInfo.Text) {
+                Stop-Migrate "docker в $Distro не ответил за $EngineWaitSeconds с: код $($engineInfo.Code): $(Format-Native $engineInfo)"
+            }
+            Write-Output "docker в $Distro отвечает: $($engineInfo.Text)"
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.restore'; Stage = 'engine'
+        Title = "ops/backup/restore.sh --project $project (в $Distro); стек поднимает сам restore.sh"
+        Plan  = { 'wsl.exe {0}' -f ((Get-RestoreArgs '<BACKUP_DIR>/<domovoy-backup-* new after migrate.backup>') -join ' ') }
+        Run   = {
+            $env:WSL_UTF8 = '1'
+            Invoke-Passthru $wslExe (Get-RestoreArgs $restoreFrom)
+            if ($script:passCode -ne 0) { Stop-Migrate "ops/backup/restore.sh: код $($script:passCode)" }
+        }
+    },
+    [pscustomobject]@{
+        Key   = 'migrate.check'; Stage = 'engine'
+        Title = 'engine-setup.ps1 -Check — его код и есть код -Migrate'
+        Plan  = { 'engine-setup.ps1 -Check - its exit code is the exit code of -Migrate' }
+        Run   = {
+            Invoke-Passthru (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Check', '-WslConfigPath', $WslConfigPath)
+            $checkCode = $script:passCode
+            if ($checkCode -ne 0) {
+                [Console]::Error.WriteLine("engine-setup: -Migrate: данные перенесены, но -Check не закрыл звенья (код $checkCode). Тома Docker Desktop не тронуты; откат — README, «Откат на Docker Desktop», или engine-setup.ps1 -Uninstall")
+            }
+            exit $checkCode
+        }
+    })
+
 # План переезда для -DryRun: те же отказы по предусловиям, без действий и
 # без обращений к docker.exe и WSL. ASCII, как остальные строки сухого
 # прогона: кириллица в выводе Windows PowerShell уходит в OEM-кодировке.
 function Write-MigratePlan {
-    $setup = Get-MigrateSetup
-    if ($setup.Problems.Count) { Stop-WithError ('переезд не начат: ' + ($setup.Problems -join '; ')) }
+    $script:migrateSetup = Get-MigrateSetup
+    if ($script:migrateSetup.Problems.Count) { Stop-WithError ('переезд не начат: ' + ($script:migrateSetup.Problems -join '; ')) }
     $engineSource = if ($Install) { 'installed by -Install above' } elseif ($AssumeEngineState) { "assumed $AssumeEngineState" } else { 'distro, keeper task, mirrored' }
     Write-Output "migrate.engine: $Distro ($engineSource)"
     Write-Output "migrate.project: $project"
     Write-Output "migrate.precheck: Docker Desktop answers docker info; containers of project $project exist; postgres and homeassistant running (checked by the run, not by DryRun)"
     Write-Output "migrate.precheck: no containers and no volumes of project $project in $Distro (the run starts the distro and waits for docker up to $EngineWaitSeconds s; stops it again on refusal)"
-    Write-Output ('migrate.stop_api: docker.exe {0}' -f ($desktopStopApiArgs -join ' '))
-    Write-Output ('migrate.backup: {0} {1} <BACKUP_DIR>' -f $setup.GitBash, $backupScriptPath)
-    Write-Output ('migrate.stop_stack: docker.exe {0} (stop: Docker Desktop volumes stay - rollback path)' -f ($desktopStopStackArgs -join ' '))
-    Write-Output ('migrate.desktop_stop: docker.exe {0}; wait up to {1} s for Docker Desktop processes to exit (no kill)' -f ($desktopQuitArgs -join ' '), $DesktopWaitSeconds)
-    $desktopSettings = Get-DesktopSettings
-    if (-not $desktopSettings) {
-        Write-Output ('migrate.desktop_autostart: WARN no {0} in the Docker Desktop settings dir - AutoStart unchanged; turn it off in Docker Desktop, or at logon it takes the stack ports' -f (($desktopSettingsFiles | ForEach-Object { $_.Leaf }) -join ' or '))
+    foreach ($migrateStep in $migrateSteps) {
+        $planLines = @(& $migrateStep.Plan)
+        Write-Output ('{0}: {1}' -f $migrateStep.Key, $planLines[0])
+        $planLines | Select-Object -Skip 1
     }
-    elseif ($desktopSettings.Value -eq 'false') {
-        Write-Output "migrate.desktop_autostart: $($desktopSettings.Leaf) $($desktopSettings.Key) already false - unchanged"
-    }
-    else {
-        $previousValue = if ($desktopSettings.Value) { $desktopSettings.Value } else { 'absent' }
-        Write-Output "migrate.desktop_autostart: $($desktopSettings.Leaf) $($desktopSettings.Key) $previousValue -> false (copy $($desktopSettings.Leaf).domovoy-backup; -Uninstall restores the value)"
-    }
-    Write-Output "migrate.wsl_shutdown: wsl.exe --shutdown - stops ALL WSL distributions, not only $Distro (applies networkingMode=mirrored)"
-    Write-Output "migrate.keeper_start: Start-ScheduledTask $KeeperTask"
-    Write-Output "migrate.engine_wait: docker info in $Distro, up to $EngineWaitSeconds s"
-    Write-Output ('migrate.restore: wsl.exe {0}' -f ((Get-RestoreArgs '<BACKUP_DIR>/<domovoy-backup-* new after migrate.backup>') -join ' '))
-    Write-Output 'migrate.check: engine-setup.ps1 -Check - its exit code is the exit code of -Migrate'
     Write-Output 'migrate.rollback: no automatic rollback; Docker Desktop volumes stay intact. Failure before migrate.desktop_stop: docker compose --profile ha start. After it: engine-setup.ps1 -Uninstall (administrator); wsl --shutdown; docker desktop start; docker compose --profile ha start'
 }
 
@@ -1035,8 +1168,8 @@ if ($Migrate) {
     if (-not (Test-Administrator)) {
         Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
     }
-    $plan = Get-MigrateSetup
-    if ($plan.Problems.Count) { Stop-WithError ("переезд не начат, ничего не изменено: " + ($plan.Problems -join '; ')) }
+    $script:migrateSetup = Get-MigrateSetup
+    if ($script:migrateSetup.Problems.Count) { Stop-WithError ("переезд не начат, ничего не изменено: " + ($script:migrateSetup.Problems -join '; ')) }
 
     # Docker Desktop: docker.exe хоста, в каталоге клона — compose берёт
     # docker-compose.yml и .env отсюда. Функция docker() из ~/.bashrc
@@ -1088,7 +1221,8 @@ if ($Migrate) {
         Stop-WithError "переезд не начат, ничего не изменено: $engineProblem"
     }
 
-    # Отказ после остановки api: автоматического отката нет — только текст.
+    # Отказ после остановки api: автоматического отката нет — только текст;
+    # какой — по Stage шага.
     $script:migrateStage = 'desktop'
     function Stop-Migrate([string]$Message) {
         if ($script:migrateStage -eq 'desktop') {
@@ -1106,88 +1240,16 @@ if ($Migrate) {
         Stop-WithError "-Migrate: $Message`n$rollback"
     }
 
-    # 1. Desktop: api — Backend больше не пишет в базу.
-    Write-Output "== 1. docker compose stop api (Docker Desktop)"
-    Invoke-Passthru $dockerExe $desktopStopApiArgs
-    if ($script:passCode -ne 0) { Stop-Migrate "docker compose stop api: код $($script:passCode)" }
-
-    # 2. Бэкап через Git Bash; каталог — аргументом, чтобы backup.sh и
-    # восстановление смотрели в один каталог, а не в BACKUP_DIR окружения.
-    Write-Output "== 2. ops/backup/backup.sh (Git Bash)"
-    try { $backupsBefore = Get-BackupNames $plan.BackupDir }
-    catch { Stop-Migrate "каталог BACKUP_DIR не читается: $($_.Exception.Message)" }
-    Invoke-Passthru $plan.GitBash @($backupScriptPath, $plan.BackupDirForward)
-    if ($script:passCode -ne 0) { Stop-Migrate "ops/backup/backup.sh: код $($script:passCode)" }
-    try { $backupsAfter = Get-BackupNames $plan.BackupDir }
-    catch { Stop-Migrate "каталог BACKUP_DIR не читается: $($_.Exception.Message)" }
-    $newBackups = @($backupsAfter | Where-Object { $backupsBefore -notcontains $_ })
-    if ($newBackups.Count -ne 1) { Stop-Migrate "после backup.sh в BACKUP_DIR новых полных бэкапов $($newBackups.Count), ожидался ровно один" }
-    $restoreFrom = '{0}/{1}' -f $plan.BackupDirForward.TrimEnd('/'), $newBackups[0]
-    Write-Output "бэкап для переноса: $($newBackups[0])"
-
-    # 3. Стек Desktop — stop: тома остаются путём отката.
-    Write-Output "== 3. docker compose --profile ha stop (Docker Desktop, тома не трогаются)"
-    Invoke-Passthru $dockerExe $desktopStopStackArgs
-    if ($script:passCode -ne 0) { Stop-Migrate "docker compose --profile ha stop: код $($script:passCode)" }
-
-    # 4. Desktop целиком; процессы не убиваются — ждём их ухода.
-    $script:migrateStage = 'engine'
-    Write-Output "== 4. docker desktop stop"
-    Invoke-Passthru $dockerExe $desktopQuitArgs
-    if ($script:passCode -ne 0) { Stop-Migrate "docker desktop stop: код $($script:passCode)" }
-    if (-not (Wait-DesktopGone)) { Stop-Migrate "процессы Docker Desktop не завершились за $DesktopWaitSeconds с — wsl --shutdown не выполнялся" }
-
-    # 5. Автозапуск Desktop при входе — выключить, иначе после входа он
-    # займёт порты стека. Пишется после остановки: работающий Desktop
-    # переписывает файл.
-    $desktopSettings = Get-DesktopSettings
-    if (-not $desktopSettings) {
-        Write-Warning "в $DockerSettingsDir нет settings-store.json и settings.json — автозапуск Docker Desktop не выключен; выключите его в настройках Desktop, иначе после входа он займёт порты стека"
+    # Шаги — из того же списка, что печатает -DryRun, в том же порядке.
+    $migrateStepNumber = 0
+    foreach ($migrateStep in $migrateSteps) {
+        $migrateStepNumber++
+        $script:migrateStage = $migrateStep.Stage
+        Write-Output "== $migrateStepNumber. $($migrateStep.Title)"
+        . $migrateStep.Run
     }
-    elseif ($desktopSettings.Value -eq 'false') {
-        Write-Output "Docker Desktop, $($desktopSettings.Leaf): $($desktopSettings.Key) уже false — не тронут"
-    }
-    else {
-        $disabledText = Set-JsonBool $desktopSettings.Text $desktopSettings.Key 'false'
-        if ($null -eq $disabledText) {
-            Write-Warning "$($desktopSettings.Leaf) — не объект JSON; автозапуск Docker Desktop не выключен, выключите его в настройках Desktop"
-        }
-        else {
-            if (-not (Test-Path -LiteralPath $desktopSettings.Backup)) { Copy-Item -LiteralPath $desktopSettings.Path -Destination $desktopSettings.Backup }
-            [IO.File]::WriteAllText($desktopSettings.Path, $disabledText, (New-Object Text.UTF8Encoding($false)))
-            Write-Output "Docker Desktop, $($desktopSettings.Leaf): $($desktopSettings.Key) false (копия .domovoy-backup; -Uninstall вернёт прежнее значение)"
-        }
-    }
-
-    # 6. wsl --shutdown — применяет mirrored; гасит ВСЕ дистрибутивы WSL.
-    Write-Output "== 6. wsl --shutdown — гасит все дистрибутивы WSL, применяет networkingMode=mirrored"
-    $shutdown = Invoke-Wsl @('--shutdown')
-    if ($shutdown.Code -ne 0) { Stop-Migrate "wsl --shutdown: код $($shutdown.Code): $(Format-Native $shutdown)" }
-
-    # 7. Держалка и движок.
-    Write-Output "== 7. Start-ScheduledTask $KeeperTask"
-    try { Start-ScheduledTask -TaskName $KeeperTask }
-    catch { Stop-Migrate "Start-ScheduledTask ${KeeperTask}: $($_.Exception.Message)" }
-    $engineInfo = Wait-EngineDocker
-    if ($engineInfo.Code -ne 0 -or -not $engineInfo.Text) {
-        Stop-Migrate "docker в $Distro не ответил за $EngineWaitSeconds с: код $($engineInfo.Code): $(Format-Native $engineInfo)"
-    }
-    Write-Output "docker в $Distro отвечает: $($engineInfo.Text)"
-
-    # 8. Восстановление в движке; стек поднимает сам restore.sh.
-    Write-Output "== 8. ops/backup/restore.sh --project $project (в $Distro)"
-    $env:WSL_UTF8 = '1'
-    Invoke-Passthru $wslExe (Get-RestoreArgs $restoreFrom)
-    if ($script:passCode -ne 0) { Stop-Migrate "ops/backup/restore.sh: код $($script:passCode)" }
-
-    # 9. Итог — -Check; его код — код -Migrate.
-    Write-Output "== 9. engine-setup.ps1 -Check"
-    Invoke-Passthru (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Check', '-WslConfigPath', $WslConfigPath)
-    $checkCode = $script:passCode
-    if ($checkCode -ne 0) {
-        [Console]::Error.WriteLine("engine-setup: -Migrate: данные перенесены, но -Check не закрыл звенья (код $checkCode). Тома Docker Desktop не тронуты; откат — README, «Откат на Docker Desktop», или engine-setup.ps1 -Uninstall")
-    }
-    exit $checkCode
+    # Последний шаг (-Check) выходит сам; сюда сценарий не доходит.
+    Stop-WithError '-Migrate: список шагов кончился без -Check'
 }
 
 # ---------------------------------------------------------------- -Check

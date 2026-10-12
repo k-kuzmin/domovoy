@@ -483,6 +483,8 @@ test_engine_setup_uninstall_dry_run() {
 
 # Переезд одной командой (-Migrate): сухой прогон печатает шаги в порядке
 # контракта и ничего не трогает — ни docker.exe, ни WSL, ни настроек Desktop.
+# План и настоящий прогон идут по одному списку $migrateSteps, поэтому
+# порядок строк плана — это порядок действий.
 # Состояние движка подменяется: на машине владельца он может быть и
 # установлен, и нет.
 migrate_order=(migrate.stop_api migrate.backup migrate.stop_stack migrate.desktop_stop migrate.desktop_autostart
