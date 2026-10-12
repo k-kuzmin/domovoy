@@ -25,6 +25,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import tarfile
 import tempfile
@@ -178,6 +179,25 @@ def add_registry(tar: tarfile.TarFile, path: str, arcname: str) -> int:
     return enabled
 
 
+def add_ordinary(tar: tarfile.TarFile, path: str, arcname: str) -> None:
+    """Обычный файл или ссылка; исчезнувший после обхода — пропуск.
+
+    HA пишет временные файлы рядом с .storage и удаляет их: такой файл
+    может пропасть между os.walk и tar.add. tar.add открывает файл до
+    записи заголовка, поэтому FileNotFoundError поток архива не портит.
+    Реестр и базы sqlite сюда не попадают — их пропажа остаётся ошибкой.
+    Имя файла в предупреждение не пишется: вывод модуля — только числа и
+    служебные строки.
+    """
+    try:
+        mode = os.lstat(path).st_mode
+        # Сокеты и FIFO в архив не идут: восстанавливать в них нечего.
+        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+            tar.add(path, arcname=arcname, recursive=False)
+    except FileNotFoundError:
+        print("предупреждение: файл исчез во время архивации и пропущен", file=sys.stderr)
+
+
 def archive(config_dir: str) -> int:
     """tar.gz каталога в stdout; каждая база sqlite — онлайн-копией.
 
@@ -214,9 +234,8 @@ def archive(config_dir: str) -> int:
                         os.remove(snapshot)
                     elif arcname == REGISTRY_ARCNAME:
                         registry_enabled = add_registry(tar, path, arcname)
-                    elif os.path.islink(path) or os.path.isfile(path):
-                        tar.add(path, arcname=arcname, recursive=False)
-            # Сокеты и FIFO в архив не идут: восстанавливать в них нечего.
+                    else:
+                        add_ordinary(tar, path, arcname)
             if registry_enabled is None:
                 raise CheckError(f"реестр сущностей HA: в томе нет {REGISTRY_ARCNAME}")
     finally:

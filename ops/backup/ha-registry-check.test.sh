@@ -8,6 +8,8 @@
 # в вывод модуля: вывод уходит в лог CI и в комментарий issue.
 
 set -uo pipefail
+# Тесты импортируют модуль из клона: без этого рядом с ним остаётся __pycache__.
+export PYTHONDONTWRITEBYTECODE=1
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 py="${PYTHON:-python3}"
@@ -247,6 +249,56 @@ EOF
   ok "$name"
 }
 
+# Обход отдаёт файл, которого на диске уже нет, — как временный файл HA,
+# удалённый между os.walk и tar.add. $1 — имя пропавшего файла
+# относительно каталога, вывод в $work/vanish.tar.gz и $work/vanish.err.
+archive_with_vanished() {
+  "$py" - "$module" "$work/vanish" "$1" "$work/vanish.tar.gz" "$work/vanish.err" <<'EOF'
+import importlib.util, os, sys
+module, config, ghost, archive, errlog = sys.argv[1:6]
+spec = importlib.util.spec_from_file_location("m", module)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+ghost_dir, ghost_name = os.path.split(os.path.join(os.path.abspath(config), ghost))
+real_walk = os.walk
+def walk(top, *args, **kwargs):
+    for root, dirs, files in real_walk(top, *args, **kwargs):
+        if os.path.abspath(root) == ghost_dir and ghost_name not in files:
+            files = files + [ghost_name]
+        yield root, dirs, files
+m.os.walk = walk
+sys.stdout = type(sys.stdout)(open(archive, "wb"), encoding="utf-8")
+sys.stderr = open(errlog, "w", encoding="utf-8")
+sys.exit(m.main(["archive", config]))
+EOF
+  rc=$?
+}
+
+test_archive_skips_vanished_file_but_not_registry() {
+  local name=archive_skips_vanished_file_but_not_registry
+  mkdir -p "$work/vanish/.storage"
+  cp "$registry" "$work/vanish/.storage/core.entity_registry"
+  echo 'example marker' >"$work/vanish/domovoy-marker.txt"
+
+  archive_with_vanished .storage/core.restore_state.tmp-example
+  if [ "$rc" -ne 0 ]; then fail "$name" "исчезнувший временный файл: код $rc: $(cat "$work/vanish.err")"; return; fi
+  grep -q 'исчез во время архивации' "$work/vanish.err" || { fail "$name" "нет предупреждения: $(cat "$work/vanish.err")"; return; }
+  if grep -q 'tmp-example' "$work/vanish.err"; then fail "$name" "в предупреждении имя файла"; return; fi
+  local listing
+  listing="$(tar -tzf "$work/vanish.tar.gz")" || { fail "$name" "архив не читается tar"; return; }
+  for member in .storage/core.entity_registry domovoy-marker.txt; do
+    grep -qxF "$member" <<<"$listing" || { fail "$name" "в архиве нет $member"; return; }
+  done
+
+  # Реестр, пропавший так же, — ошибка, а не пропуск.
+  mv "$work/vanish/.storage/core.entity_registry" "$work/registry.aside"
+  archive_with_vanished .storage/core.entity_registry
+  mv "$work/registry.aside" "$work/vanish/.storage/core.entity_registry"
+  if [ "$rc" -ne 2 ]; then fail "$name" "исчезнувший реестр: ожидался код 2, получен $rc"; return; fi
+  grep -q 'реестр сущностей HA' "$work/vanish.err" || { fail "$name" "исчезнувший реестр: отказ не по реестру"; return; }
+  ok "$name"
+}
+
 test_count_counts_only_enabled
 test_compare_reports_missing_entity
 test_compare_full_states_and_disabled_ignored
@@ -255,6 +307,7 @@ test_broken_registry_is_error
 test_sqlite_backup_and_check
 test_archive_roundtrip_with_live_wal
 test_archive_counts_registry_from_archived_bytes
+test_archive_skips_vanished_file_but_not_registry
 
 echo "итог: пройдено $passed, упало $failed"
 [ "$failed" -eq 0 ]
