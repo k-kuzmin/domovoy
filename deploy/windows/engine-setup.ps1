@@ -224,7 +224,9 @@ function Get-Health([string]$Url) {
     catch {
         $inner = $_.Exception
         while ($inner.InnerException) { $inner = $inner.InnerException }
-        return [pscustomobject]@{ Code = 0; Stack = $false; Error = $inner.Message }
+        # Тип, а не текст: текст сокетной ошибки несёт адрес:порт, а адрес
+        # хоста в ЛВС в вывод -Check не попадает.
+        return [pscustomobject]@{ Code = 0; Stack = $false; Error = $inner.GetType().Name }
     }
     finally {
         $client.Dispose()
