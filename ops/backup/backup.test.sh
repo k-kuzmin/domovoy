@@ -518,10 +518,15 @@ test_restore_into_fresh_project_restores_markers() {
   # Рядом с работающим HA --project отказывает, поэтому HA исходного
   # проекта останавливается. HA вне тестовых проектов (рабочий стек
   # владельца на его машине) тест не трогает — тогда он пропускается.
-  dcs stop homeassistant </dev/null >/dev/null 2>&1
-  local others
-  others="$(docker ps --filter 'label=com.docker.compose.service=homeassistant' \
-    --format '{{.Label "com.docker.compose.project"}}' | tr -d '\r' | grep -vxF "$fresh_project" | sort -u || true)"
+  dcs stop homeassistant </dev/null >/dev/null 2>&1 || { fail "$name" "HA проекта $src_project не остановлен"; return; }
+  local running others
+  running="$(docker ps --filter 'label=com.docker.compose.service=homeassistant' \
+    --format '{{.Label "com.docker.compose.project"}}' | tr -d '\r' | sort -u)"
+  if grep -qxF -e "$src_project" -e "$check_project" -e "$fresh_project" <<<"$running"; then
+    fail "$name" "работает HA тестового проекта: $(tr '\n' ' ' <<<"$running")"; return
+  fi
+  # Пропуск — только из-за HA вне трёх тестовых проектов.
+  others="$running"
   if [ -n "$others" ]; then
     skip "$name" "на хосте работает HA проекта $(tr '\n' ' ' <<<"$others")— восстановление в проект рядом с ним запрещено, тест его не останавливает"
     return
