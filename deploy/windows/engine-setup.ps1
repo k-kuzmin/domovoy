@@ -195,14 +195,15 @@ function Get-WslConfigPlan([string]$Path) {
     # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
     # только перед LF.
     $wsl2 = '(?im)^([ \t]*\[wsl2\][ \t]*)(?=\r?$)'
+    # Файл без CRLF остаётся с LF; новый или с CRLF — CRLF.
+    $newline = if ($current -and -not $current.Contains("`r`n") -and $current.Contains("`n")) { "`n" } else { "`r`n" }
     if ($current -match $wsl2) {
-        $newline = if ($current.Contains("`r`n")) { "`r`n" } else { "`n" }
         # Экземпляр, а не [regex]::Replace: у статического четвёртый аргумент —
         # RegexOptions, а не число замен.
         $content = ([regex]$wsl2).Replace($current, "`$1${newline}networkingMode=mirrored", 1)
     }
     elseif ($current.Trim()) {
-        $content = $current.TrimEnd() + "`r`n`r`n[wsl2]`r`nnetworkingMode=mirrored`r`n"
+        $content = $current.TrimEnd() + "$newline$newline[wsl2]${newline}networkingMode=mirrored$newline"
     }
     else {
         $content = "[wsl2]`r`nnetworkingMode=mirrored`r`n"

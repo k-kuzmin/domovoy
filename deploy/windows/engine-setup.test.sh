@@ -312,6 +312,13 @@ test_engine_setup_dry_run() {
   printf '[wsl2]\nmemory=4GB\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
   wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=mirrored\nmemory=4GB\n' || return
+  # Без секции [wsl2] она дописывается в конец — тоже переводом строки файла.
+  printf '[boot]\nsystemd=true\n' >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  wslconfig_bytes_are "$name" $'[boot]\nsystemd=true\n\n[wsl2]\nnetworkingMode=mirrored\n' || return
+  printf '[boot]\r\nsystemd=true\r\n' >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  wslconfig_bytes_are "$name" $'[boot]\r\nsystemd=true\r\n\r\n[wsl2]\r\nnetworkingMode=mirrored\r\n' || return
   printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
   has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "mirrored уже задан, а файл меняется"; show_out; return; }
