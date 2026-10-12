@@ -1045,7 +1045,7 @@ if ($Migrate) {
     $dockerCommand = Get-Command docker.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $dockerCommand) { Stop-WithError 'переезд не начат: docker.exe Docker Desktop не найден в PATH' }
     $dockerExe = $dockerCommand.Source
-    $label = "label=com.docker.compose.project=$project"
+    $projectLabel = "label=com.docker.compose.project=$project"
 
     # Предусловия на работающих системах — до любых действий, каждая проба
     # fail-closed: ненулевой код — отказ, пустой вывод «пустотой» не считается.
@@ -1053,12 +1053,12 @@ if ($Migrate) {
     if ($desktopInfo.Code -ne 0 -or $desktopInfo.Text -notmatch 'Docker Desktop') {
         Stop-WithError "переезд не начат: Docker Desktop не отвечает (docker info: код $($desktopInfo.Code): $(Format-Native $desktopInfo)) — запустите его: docker desktop start"
     }
-    $desktopAll = Invoke-Native $dockerExe @('ps', '-aq', '--filter', $label)
+    $desktopAll = Invoke-Native $dockerExe @('ps', '-aq', '--filter', $projectLabel)
     if ($desktopAll.Code -ne 0) { Stop-WithError "переезд не начат: docker ps на Docker Desktop: код $($desktopAll.Code): $(Format-Native $desktopAll)" }
     if (-not $desktopAll.Text) { Stop-WithError "переезд не начат: на Docker Desktop нет контейнеров проекта $project — переносить нечего" }
     # backup.sh работает только при запущенных postgres и homeassistant.
     foreach ($service in 'postgres', 'homeassistant') {
-        $desktopService = Invoke-Native $dockerExe @('ps', '-q', '--filter', $label, '--filter', "label=com.docker.compose.service=$service", '--filter', 'status=running')
+        $desktopService = Invoke-Native $dockerExe @('ps', '-q', '--filter', $projectLabel, '--filter', "label=com.docker.compose.service=$service", '--filter', 'status=running')
         if ($desktopService.Code -ne 0) { Stop-WithError "переезд не начат: docker ps на Docker Desktop: код $($desktopService.Code): $(Format-Native $desktopService)" }
         if (-not $desktopService.Text) { Stop-WithError "переезд не начат: на Docker Desktop не запущен $service проекта $project — бэкапу он нужен; docker compose --profile ha up -d" }
     }
@@ -1074,7 +1074,7 @@ if ($Migrate) {
         $engineProblem = "docker в $Distro не ответил за $EngineWaitSeconds с: код $($engineInfo.Code): $(Format-Native $engineInfo)"
     }
     else {
-        foreach ($probe in @(@('ps', '-aq', '--filter', $label), @('volume', 'ls', '-q', '--filter', $label))) {
+        foreach ($probe in @(@('ps', '-aq', '--filter', $projectLabel), @('volume', 'ls', '-q', '--filter', $projectLabel))) {
             $engineProbe = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker') + $probe)
             if ($engineProbe.Code -ne 0) { $engineProblem = "docker $($probe[0]) в ${Distro}: код $($engineProbe.Code): $(Format-Native $engineProbe)"; break }
             if ($engineProbe.Text) {
