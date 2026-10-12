@@ -147,6 +147,28 @@ for service in postgres homeassistant; do
   grep -qx "$service" <<<"$running" || fail "сервис $service не запущен"
 done
 
+# Остатки временных баз проверки дампа (шаг 3) от прогонов, убитых раньше,
+# чем сработал trap: SIGKILL, выключение хоста. Удаляются только базы с
+# точной формой имени шага 3; занятая (идёт параллельный прогон) dropdb
+# без --force не удаляет — это предупреждение, а не отказ бэкапа.
+verify_pattern='^domovoy_backup_verify_[0-9]{8}t[0-9]{6}z$'
+# shellcheck disable=SC2016
+leftovers="$(dc exec -T postgres sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -At -v ON_ERROR_STOP=1 -c "$1"' sh \
+  "SELECT datname FROM pg_database WHERE datname ~ '$verify_pattern' ORDER BY 1" \
+  </dev/null | tr -d '\r')" || fail "список временных баз проверки не получен"
+dropped=0
+while read -r leftover; do
+  [[ "$leftover" =~ $verify_pattern ]] || continue
+  # shellcheck disable=SC2016
+  if dc exec -T postgres sh -c 'dropdb -U "$POSTGRES_USER" "$1"' sh "$leftover" </dev/null >/dev/null; then
+    dropped=$((dropped + 1))
+  else
+    log "предупреждение: временная база $leftover не удалена (занята?) — dropdb вручную" >&2
+  fi
+done <<<"$leftovers"
+log "остатки временных баз проверки от прошлых прогонов: удалено $dropped"
+
 [ ! -e "$final" ] && [ ! -e "$partial" ] || fail "каталог $name уже есть"
 mkdir -- "$partial"
 created_partial=1

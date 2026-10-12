@@ -186,6 +186,81 @@ test_backup_refuses_destination_inside_repository() {
   ok "$name"
 }
 
+# Подделки для шагов бэкапа до записи: docker с запущенными сервисами,
+# список баз postgres из $work/fake-dbs, dropdb — запись в $work/dropped,
+# любой другой docker (pg_dump и дальше) — отказ. du читает размер каталога
+# из файла fake-kb в нём и отмечает вызов, df отдаёт свободное место из
+# $work/fake-free-kb. Сценарий доходит до pg_dump и падает: тест смотрит,
+# что к этому моменту стало с носителем.
+fake_prewrite_path() {
+  local bin="$work/fakebin-prewrite"
+  mkdir -p "$bin"
+  cat >"$bin/docker" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  info*) exit 0 ;;
+  *' ps --status running --services'*) printf 'postgres\nhomeassistant\n'; exit 0 ;;
+  *'exec -T postgres sh -c psql '*'pg_database'*) cat "$work/fake-dbs" 2>/dev/null; exit 0 ;;
+  *'exec -T postgres sh -c dropdb '*) echo "\${!#}" >>"$work/dropped"; exit 0 ;;
+esac
+exit 1
+EOF
+  cat >"$bin/du" <<EOF
+#!/usr/bin/env bash
+echo called >>"$work/du-called"
+dir="\${!#}"
+echo "\$(cat "\$dir/fake-kb") \$dir"
+EOF
+  cat >"$bin/df" <<EOF
+#!/usr/bin/env bash
+echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+echo "example 99999999 0 \$(cat "$work/fake-free-kb") 1% /example"
+EOF
+  chmod +x "$bin/docker" "$bin/du" "$bin/df"
+  echo "$bin:$PATH"
+}
+
+# Носитель с полными бэкапами по 300 МБ (по подделке du), чужим .partial и
+# посторонним каталогом.
+fake_dest_with_backups() {
+  local dest="$1" day
+  rm -rf -- "$dest"
+  for day in 01 02 03 04; do
+    mkdir -p "$dest/domovoy-backup-202001${day}T000000Z"
+    echo 307200 >"$dest/domovoy-backup-202001${day}T000000Z/fake-kb"
+  done
+  mkdir -p "$dest/domovoy-backup-20200105T000000Z.partial" "$dest/foreign-dir"
+  echo 307200 >"$dest/domovoy-backup-20200105T000000Z.partial/fake-kb"
+  echo 307200 >"$dest/foreign-dir/fake-kb"
+  echo 99999999 >"$work/fake-free-kb"
+  rm -f "$work/dropped" "$work/du-called" "$work/fake-dbs"
+}
+
+list_dest() {
+  local entry
+  for entry in "$1"/*/; do
+    entry="${entry%/}"
+    printf '%s ' "${entry##*/}"
+  done
+}
+
+test_backup_drops_leftover_verify_databases() {
+  local name=backup_drops_leftover_verify_databases
+  local fake_path
+  fake_path="$(fake_prewrite_path)"
+  fake_dest_with_backups "$work/leftovers"
+  printf '%s\n' domovoy_backup_verify_20200101t000000z domovoy_backup_verify_20200102t000000z \
+    domovoy_backup_verify_x domovoy_example >"$work/fake-dbs"
+  PATH="$fake_path" run bash ops/backup/backup.sh "$work/leftovers"
+  if [ "$rc" -eq 0 ]; then fail "$name" "подделка не дошла до отказа pg_dump"; show_out; return; fi
+  if [ "$(cat "$work/dropped" 2>/dev/null | tr '\n' ' ')" != 'domovoy_backup_verify_20200101t000000z domovoy_backup_verify_20200102t000000z ' ]; then
+    fail "$name" "удалены не те базы: $(cat "$work/dropped" 2>/dev/null | tr '\n' ' ')"; return
+  fi
+  grep -q 'остатки временных баз проверки от прошлых прогонов: удалено 2$' "$work/leftovers/backup.log" \
+    || { fail "$name" "в backup.log нет строки с числом удалённых"; return; }
+  ok "$name"
+}
+
 test_backup_refuses_missing_destination() {
   local name=backup_refuses_missing_destination
   local fake_path
@@ -612,6 +687,7 @@ test_backup_refuses_destination_inside_repository
 test_backup_refuses_missing_destination
 test_restore_project_refuses_while_other_ha_runs_static
 test_restore_refuses_manifest_without_ha_count
+test_backup_drops_leftover_verify_databases
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"
