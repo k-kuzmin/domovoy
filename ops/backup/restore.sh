@@ -181,7 +181,13 @@ if [ "$actual_tables" != "$expected_tables" ]; then
     | sed -n 's/^< /  в манифесте: /p; s/^> /  восстановлено: /p' >&2 || true
   fail "БД: восстановленные таблицы расходятся с манифестом"
 fi
-echo "БД: таблицы совпадают с манифестом ($(grep -c . <<<"$expected_tables" || true) таблиц)"
+# Пустая схема (Backend ещё не создал таблиц) сверку проходит, но строка
+# «совпадают (0 таблиц)» выглядела бы проверкой данных — говорится прямо.
+if [ -z "$expected_tables" ]; then
+  echo "БД: схема Backend пуста — данных для сверки нет"
+else
+  echo "БД: таблицы совпадают с манифестом ($(grep -c . <<<"$expected_tables" || true) таблиц)"
+fi
 
 # 2. Том HA — до первого старта HA, во временном контейнере с тем же томом.
 dc run -d --no-deps --name "$helper" --entrypoint sleep homeassistant 3600 </dev/null >/dev/null \
