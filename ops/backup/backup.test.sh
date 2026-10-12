@@ -503,6 +503,98 @@ test_restore_check_defaults_to_latest_backup() {
   ok "$name"
 }
 
+install_schedule_parses() {
+  # Windows PowerShell 5.1 читает файл без BOM в кодировке ANSI, и
+  # кириллица в сообщениях бьётся.
+  local name=install_schedule_has_utf8_bom
+  if [ "$(head -c 3 "$here/install-schedule.ps1" | od -An -tx1 | tr -d ' \n')" = 'efbbbf' ]; then
+    ok "$name"
+  else
+    fail "$name" "install-schedule.ps1 без BOM UTF-8"
+  fi
+  name=install_schedule_parses
+  if ! command -v pwsh >/dev/null 2>&1; then
+    skip "$name" "нет pwsh — синтаксис install-schedule.ps1 не проверен"
+    return
+  fi
+  local path="$here/install-schedule.ps1"
+  if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -w "$path")"; fi
+  # shellcheck disable=SC2016
+  PS1_PATH="$path" run pwsh -NoProfile -NonInteractive -Command '
+    $errors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$errors)
+    if ($errors) { $errors | ForEach-Object { $_.ToString() }; exit 1 }'
+  if [ "$rc" -ne 0 ]; then fail "$name" "ошибки разбора"; show_out; return; fi
+  ok "$name"
+}
+
+# Сухой прогон печатает собранную задачу и ничего не регистрирует; прав
+# администратора не требует. Только на Windows: ищет bash.exe Git for
+# Windows в реестре и PATH.
+test_install_schedule_dry_run() {
+  install_schedule_parses
+  local name=install_schedule_dry_run
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *) skip "$name" "не Windows — сухой прогон ищет bash.exe Git for Windows"; return ;;
+  esac
+  local shells=() shell
+  command -v pwsh >/dev/null 2>&1 && shells+=(pwsh)
+  command -v powershell.exe >/dev/null 2>&1 && shells+=(powershell.exe)
+  if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
+
+  rm -rf -- "$work/sched-dest" && mkdir "$work/sched-dest"
+  fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
+  local ps1 script_arg
+  ps1="$(cygpath -w "$work/clone/ops/backup/install-schedule.ps1")"
+  script_arg="\"$(cygpath -m "$work/clone/ops/backup/backup.sh")\""
+  local first=''
+  for shell in "${shells[@]}"; do
+    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+    if [ "$rc" -ne 0 ]; then fail "$name/$shell" "код $rc"; show_out; return; fi
+    tr -d '\r' <"$work/out" >"$work/out.$shell"
+    grep -qx 'Task: domovoy-backup' "$work/out.$shell" || { fail "$name/$shell" "нет имени задачи"; show_out; return; }
+    grep -qx 'Daily: 03:30' "$work/out.$shell" || { fail "$name/$shell" "не 03:30"; show_out; return; }
+    grep -qx 'LogonType: S4U' "$work/out.$shell" || { fail "$name/$shell" "не S4U"; show_out; return; }
+    grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
+    grep -qix 'Execute: .*\\bin\\bash\.exe' "$work/out.$shell" || { fail "$name/$shell" "не bash.exe Git for Windows"; show_out; return; }
+    if grep -qi '^Execute: .*\\system32\\' "$work/out.$shell"; then fail "$name/$shell" "выбран bash.exe из System32 (WSL)"; return; fi
+    # Аргумент — только путь к backup.sh этого клона: каталог и лимит
+    # читаются из .env при каждом запуске.
+    grep -qxF "Arguments: $script_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$script_arg»"; show_out; return; }
+    if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значение из .env кроме BACKUP_DIR"; return; fi
+    # Вывод 5.1 и 7 совпадает: файл читается обоими одинаково (BOM).
+    if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
+      fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
+    fi
+  done
+  ok "$name"
+
+  name=install_schedule_custom_time
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 04:15
+  tr -d '\r' <"$work/out" | grep -qx 'Daily: 04:15' || { fail "$name" "-At не применён"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 25:00
+  if [ "$rc" -eq 0 ]; then fail "$name" "-At 25:00 принят"; return; fi
+  ok "$name"
+
+  name=install_schedule_refuses_wsl_bash
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -BashPath 'C:\Windows\System32\bash.exe'
+  if [ "$rc" -eq 0 ]; then fail "$name" "bash.exe из System32 принят"; show_out; return; fi
+  grep -q 'WSL' "$work/out" || { fail "$name" "отказ не назван"; show_out; return; }
+  ok "$name"
+
+  # BACKUP_DIR проверяется по .env: задача в 03:30 не видит окружения
+  # терминала, из которого её ставили.
+  name=install_schedule_requires_backup_dir_in_env_file
+  for env_text in $'HA_TOKEN=x\r\n' $'BACKUP_DIR=\r\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\r\n'; do
+    fake_clone "$env_text"
+    BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+    if [ "$rc" -eq 0 ]; then fail "$name" "«${env_text%%$'\r'*}»: задача собрана без BACKUP_DIR в .env"; show_out; return; fi
+    grep -q 'BACKUP_DIR' "$work/out" || { fail "$name" "в выводе нет BACKUP_DIR"; show_out; return; }
+  done
+  ok "$name"
+}
+
 test_restore_project_refuses_while_other_ha_runs_static() {
   local name=restore_project_refuses_while_other_ha_runs/static
   # Подделка docker: работает homeassistant проекта example-other, всё
@@ -901,6 +993,7 @@ test_backup_max_size_prunes_oldest_before_writing
 test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
 test_restore_check_defaults_to_latest_backup
+test_install_schedule_dry_run
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"
