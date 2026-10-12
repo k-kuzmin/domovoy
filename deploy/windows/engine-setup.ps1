@@ -1030,8 +1030,12 @@ if ($Uninstall) {
     # 1. Стек внутри движка — stop, тома целы. Отказ — до любых удалений.
     if ($engineRunning) {
         $env:WSL_UTF8 = '1'
-        & $wslExe @stopArgs
-        $stopCode = $LASTEXITCODE
+        $encoding = Set-NativeOutputEncoding $wslExe
+        try {
+            & $wslExe @stopArgs
+            $stopCode = $LASTEXITCODE
+        }
+        finally { Restore-NativeOutputEncoding $encoding }
         if ($stopCode -ne 0) {
             Stop-WithError "docker compose --profile ha stop внутри ${Distro}: код $stopCode — ничего не удалено; без остановки после перезагрузки поднялись бы два стека"
         }
@@ -1334,12 +1338,20 @@ if ($Install) {
     # 2. Провижининг. Код 3 — systemd записан в wsl.conf, но ещё не PID 1:
     # перезапуск только этого дистрибутива и второй проход уже под systemd.
     $env:WSL_UTF8 = '1'
-    & $wslExe @provisionArgs
-    $provisionCode = $LASTEXITCODE
-    if ($provisionCode -eq 3) {
-        $null = Invoke-Wsl @('--terminate', $Distro)
+    $encoding = Set-NativeOutputEncoding $wslExe
+    try {
         & $wslExe @provisionArgs
         $provisionCode = $LASTEXITCODE
+    }
+    finally { Restore-NativeOutputEncoding $encoding }
+    if ($provisionCode -eq 3) {
+        $null = Invoke-Wsl @('--terminate', $Distro)
+        $encoding = Set-NativeOutputEncoding $wslExe
+        try {
+            & $wslExe @provisionArgs
+            $provisionCode = $LASTEXITCODE
+        }
+        finally { Restore-NativeOutputEncoding $encoding }
     }
     if ($provisionCode -ne 0) { Stop-Install "провижининг дистрибутива: код $provisionCode" }
     $null = Invoke-Wsl @('--terminate', $Distro)
