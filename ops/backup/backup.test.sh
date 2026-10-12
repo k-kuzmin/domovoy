@@ -404,6 +404,9 @@ test_backup_max_size_from_env_file() {
   if [ "$(list_dest "$work/env-limit")" != 'domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z domovoy-backup-20200105T000000Z.partial foreign-dir ' ]; then
     fail "$name" "лимит из .env не применён: $(list_dest "$work/env-limit")"; show_out; return
   fi
+  # Лог называет источник лимита, а не --max-size, которого не было.
+  [ "$(grep -c 'лимит BACKUP_MAX_SIZE_GB 1 ГБ: удалён' "$work/env-limit/backup.log")" = 2 ] \
+    || { fail "$name" "в backup.log источник лимита не BACKUP_MAX_SIZE_GB"; show_out; return; }
   ok "$name"
 
   # --max-size важнее .env: лимит 10 ГБ ничего не удаляет.

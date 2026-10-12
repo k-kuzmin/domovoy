@@ -210,7 +210,8 @@ while read -r leftover; do
 done <<<"$leftovers"
 log "остатки временных баз проверки от прошлых прогонов: удалено $dropped"
 
-# Место на носителе — до записи нового бэкапа (только с --max-size).
+# Место на носителе — до записи нового бэкапа (только с лимитом: --max-size
+# или BACKUP_MAX_SIZE_GB).
 # Оценка размера нового — размер последнего успешного. Удаляются только
 # полные каталоги domovoy-backup-<метка>, от старых к новым, последний —
 # никогда; .partial и посторонние каталоги не трогаются.
@@ -231,14 +232,14 @@ if [ -n "$max_size_gb" ]; then
     fi
   done
   if [ "${#existing[@]}" -eq 0 ]; then
-    log "место: первый бэкап — оценки размера нет, лимит --max-size и свободное место не проверяются"
+    log "место: первый бэкап — оценки размера нет, лимит $max_size_source и свободное место не проверяются"
   else
     mapfile -t existing < <(printf '%s\n' "${existing[@]}" | sort)
     newest="${existing[${#existing[@]} - 1]}"
     estimate_kb="$(size_kb "$dest/$newest")" || fail "размер последнего бэкапа $newest не определён (du)"
     limit_kb=$((max_size_gb * 1024 * 1024))
     if [ $((estimate_kb * 2)) -gt "$limit_kb" ]; then
-      fail "лимит --max-size $max_size_gb ГБ мал: последний бэкап $newest занимает $(mb "$estimate_kb") МБ, и вместе с новым такого же размера в лимит не помещается. Последний успешный бэкап не удаляется — увеличьте --max-size."
+      fail "лимит $max_size_source $max_size_gb ГБ мал: последний бэкап $newest занимает $(mb "$estimate_kb") МБ, и вместе с новым такого же размера в лимит не помещается. Последний успешный бэкап не удаляется — увеличьте $max_size_source."
     fi
     sizes=()
     total_kb=0
@@ -251,13 +252,13 @@ if [ -n "$max_size_gb" ]; then
     while [ $((total_kb + estimate_kb)) -gt "$limit_kb" ] && [ "$i" -lt $((${#existing[@]} - 1)) ]; do
       rm -rf -- "${dest:?}/${existing[i]}"
       total_kb=$((total_kb - sizes[i]))
-      log "лимит --max-size $max_size_gb ГБ: удалён ${existing[i]} ($(mb "${sizes[i]}") МБ)"
+      log "лимит $max_size_source $max_size_gb ГБ: удалён ${existing[i]} ($(mb "${sizes[i]}") МБ)"
       i=$((i + 1))
     done
     free_kb="$(df -Pk -- "$dest" | awk 'NR == 2 { print $4 }')" || fail "свободное место на носителе не определено (df)"
     [[ "$free_kb" =~ ^[0-9]+$ ]] || fail "свободное место на носителе не определено (df)"
     if [ "$free_kb" -lt "$estimate_kb" ]; then
-      fail "на носителе свободно $(mb "$free_kb") МБ, новому бэкапу нужно около $(mb "$estimate_kb") МБ (размер последнего). Освободите место на носителе или уменьшите --max-size, чтобы старые бэкапы удалялись раньше."
+      fail "на носителе свободно $(mb "$free_kb") МБ, новому бэкапу нужно около $(mb "$estimate_kb") МБ (размер последнего). Освободите место на носителе или уменьшите $max_size_source, чтобы старые бэкапы удалялись раньше."
     fi
   fi
 fi
