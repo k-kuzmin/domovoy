@@ -188,7 +188,8 @@ echo "БД: таблицы совпадают с манифестом ($(grep -c
 if [ "$ha_api_check" = 'skip' ]; then
   echo "HA: проверка HA API пропущена (--ha-api-check skip)"
 else
-  dc cp ops/backup/ha_registry_check.py homeassistant:/tmp/ha_registry_check.py >/dev/null
+  dc cp ops/backup/ha_registry_check.py homeassistant:/tmp/ha_registry_check.py >/dev/null 2>&1 \
+    || fail "модуль проверки не скопирован в контейнер HA"
   # Токен берётся из окружения контейнера api и не выходит из него: ни в
   # командную строку хоста, ни в вывод.
   # shellcheck disable=SC2016
