@@ -470,7 +470,7 @@ test_restore_check_defaults_to_latest_backup() {
   fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(env_path "$work/restore-dir")")"
   PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check
   if [ "$rc" -eq 2 ]; then fail "$name" "без --from — код 2"; show_out; return; fi
-  grep -q '^бэкап: .*/domovoy-backup-20200102T000000Z$' "$work/out" \
+  grep -qx 'бэкап: domovoy-backup-20200102T000000Z' "$work/out" \
     || { fail "$name" "выбран не последний полный бэкап"; show_out; return; }
   ok "$name"
 
@@ -478,7 +478,7 @@ test_restore_check_defaults_to_latest_backup() {
   name=restore_check_from_overrides_backup_dir
   PATH="$fake_path" run clone_backup bash "$work/clone/ops/backup/restore.sh" --check \
     --from "$work/restore-dir/domovoy-backup-20200101T000000Z"
-  grep -q '^бэкап: .*/domovoy-backup-20200101T000000Z$' "$work/out" || { fail "$name" "--from не взят"; show_out; return; }
+  grep -qx 'бэкап: domovoy-backup-20200101T000000Z' "$work/out" || { fail "$name" "--from не взят"; show_out; return; }
   ok "$name"
 
   # Полное восстановление выбирает бэкап явно: без --from — код 2.

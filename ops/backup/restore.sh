@@ -153,7 +153,7 @@ grep -qx 'format 1' "$from/manifest.txt" || { echo "restore: неизвестн�
 expected_tables="$(grep '^db_table ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2- | sort || true)"
 expected_ha="$(grep '^ha_registry_enabled ' "$from/manifest.txt" | tr -d '\r' | cut -d' ' -f2 || true)"
 [[ "$expected_ha" =~ ^[0-9]+$ ]] || { echo "restore: в манифесте нет числа сущностей HA" >&2; exit 1; }
-echo "бэкап: $from"
+echo "бэкап: ${from##*/}"
 
 files=()
 if [ "$mode" = 'check' ]; then
