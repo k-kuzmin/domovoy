@@ -16,9 +16,11 @@
 #   5. git safe.directory (--system) для клона: клон лежит на диске Windows
 #      (/mnt/<диск>/…) и принадлежит не root, а ops/backup/*.sh вызывают git.
 #
-# systemd начинает работать после перезапуска дистрибутива
-# (wsl --terminate domovoy-engine) — это делает engine-setup.ps1 после
-# провижининга. systemctl enable работает и без запущенного systemd.
+# systemd начинает работать только после перезапуска дистрибутива. Если он
+# ещё не PID 1, сценарий записывает wsl.conf и выходит с кодом 3:
+# engine-setup.ps1 выполняет wsl --terminate domovoy-engine и запускает
+# провижининг повторно — пакеты ставятся и службы включаются уже под
+# systemd, как у обычной Ubuntu.
 
 set -euo pipefail
 
@@ -80,6 +82,10 @@ main() {
   [ -d "$clone" ] || { echo "provision-engine: каталога клона нет: $clone" >&2; exit 1; }
 
   ensure_wsl_conf /etc/wsl.conf
+  if [ "$(cat /proc/1/comm 2>/dev/null || true)" != systemd ]; then
+    echo "provision-engine: systemd включён в /etc/wsl.conf, но ещё не запущен — перезапустите дистрибутив (wsl --terminate) и повторите" >&2
+    exit 3
+  fi
   install_docker
   systemctl enable docker.service containerd.service
   if ! git config --system --get-all safe.directory 2>/dev/null | grep -qxF "$clone"; then

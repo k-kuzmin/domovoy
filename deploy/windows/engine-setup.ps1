@@ -16,9 +16,10 @@
        24.04 для WSL (cloud-images.ubuntu.com), SHA256 сверяется с SHA256SUMS
        того же каталога; уже зарегистрированный не трогается;
     2. провижининг внутри под root — deploy/windows/provision-engine.sh:
-       systemd, Docker Engine с compose, git, safe.directory клона; затем
-       wsl --terminate domovoy-engine (только этот дистрибутив) — systemd
-       включается со следующего старта;
+       systemd, Docker Engine с compose, git, safe.directory клона. Если
+       systemd ещё не запущен, первый проход только включает его, затем
+       wsl --terminate domovoy-engine (только этот дистрибутив) и второй
+       проход под systemd;
     3. задача domovoy-engine: при запуске системы, от текущего пользователя
        с типом входа S4U (пароль не хранится), держалка
        wsl.exe -d domovoy-engine --exec sleep infinity — экземпляр WSL живёт,
@@ -271,6 +272,7 @@ if ($Install) {
             Write-Output ('distro.import: wsl.exe {0}' -f ($importArgs -join ' '))
         }
         Write-Output ('provision: wsl.exe {0}' -f ($provisionArgs -join ' '))
+        Write-Output ('provision.restart: код 3 — wsl.exe --terminate {0} и повтор' -f $Distro)
         Write-Output ('provision.terminate: wsl.exe --terminate {0}' -f $Distro)
         foreach ($task in @(
                 @{ Prefix = 'keeper'; Name = $KeeperTask; Action = $keeperAction; Principal = $keeperPrincipal; Settings = $keeperSettings },
@@ -354,10 +356,17 @@ if ($Install) {
         Write-Output "дистрибутив $Distro создан из $ImageFile (SHA256 сошёлся)"
     }
 
-    # 2. Провижининг; systemd включается со следующего старта дистрибутива.
+    # 2. Провижининг. Код 3 — systemd записан в wsl.conf, но ещё не PID 1:
+    # перезапуск только этого дистрибутива и второй проход уже под systemd.
     $env:WSL_UTF8 = '1'
     & $wslExe @provisionArgs
-    if ($LASTEXITCODE -ne 0) { Stop-WithError "провижининг дистрибутива: код $LASTEXITCODE" }
+    $provisionCode = $LASTEXITCODE
+    if ($provisionCode -eq 3) {
+        $null = Invoke-Wsl @('--terminate', $Distro)
+        & $wslExe @provisionArgs
+        $provisionCode = $LASTEXITCODE
+    }
+    if ($provisionCode -ne 0) { Stop-WithError "провижининг дистрибутива: код $provisionCode" }
     $null = Invoke-Wsl @('--terminate', $Distro)
     $enabled = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemctl', 'is-enabled', 'docker.service', 'containerd.service')
     $null = Invoke-Wsl @('--terminate', $Distro)
