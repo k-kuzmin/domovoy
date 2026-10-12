@@ -1,0 +1,216 @@
+{
+  "issue": 4,
+  "current_state": [
+    {
+      "path": "config/entities.example.yaml",
+      "line": 47,
+      "observation": "телевизор вымышленной квартиры записан как switch.example_living_room_tv (domain: switch, actions [turn_on, turn_off]) — «через розетку»; у владельца телевизор LG webOS, домен media_player, набор действий из решения #51"
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "line": 78,
+      "observation": "единственная запись climate — climate.example_bedroom_ac с actions [turn_on, turn_off, set_temperature]; терморегулятора котла и домена vacuum в примере нет"
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "line": 14,
+      "observation": "areas: kitchen, living_room, bedroom — у каждой есть cases.prepositional и cases.genitive; поле area у сущности ссылается на areas[].id"
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "line": 66,
+      "observation": "датчики окна и протечки (binary_sensor.example_kitchen_window, binary_sensor.example_kitchen_leak) и свет уже есть в вымышленной квартире; binary_sensor.example_kitchen_leak используется в config/proactive-rules.example.yaml:30, поэтому эти записи остаются"
+    },
+    {
+      "path": "config/home-profile.example.md",
+      "line": 18,
+      "observation": "профиль вымышленной квартиры: «телевизор через розетку с управлением» — совпадает с текущей записью switch и разойдётся с реестром, если телевизор станет media_player"
+    },
+    {
+      "path": "src/Domovoy.Core/Models/HaEntityDescriptor.cs",
+      "line": 19,
+      "observation": "поле Domain (string) — им закрывается «тип» из критерия по ответу владельца; модель не меняется"
+    },
+    {
+      "path": "src/Domovoy.Ha/ConfiguredEntityAllowList.cs",
+      "line": 29,
+      "observation": "загрузчик реестра — заглушка: All = [], IsActionAllowed => false; файл реестра кодом пока не читается, правка примера поведение приложения не меняет"
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "line": 107,
+      "observation": "тест EveryExampleHasIgnoredCounterpart проверяет, что для каждого config/*.example.* расширение закрыто в .gitignore (config/*.yaml) — реальный реестр с настоящими entity_id в репозиторий не попадает"
+    },
+    {
+      "path": ".gitignore",
+      "line": 24,
+      "observation": "config/*.yaml закрыт; git check-ignore -v config/entities.yaml печатает .gitignore:24, git ls-files config/ показывает только *.example.*"
+    },
+    {
+      "path": "config/response-templates.example.yaml",
+      "line": 21,
+      "observation": "шаблоны есть для light, switch, climate, script; для media_player и vacuum шаблонов нет — по шапке файла (строки 8-9) это условие фолбэка на второй вызов модели, а не ошибка"
+    }
+  ],
+  "approach": {
+    "summary": "Правка только вымышленных примеров. В config/entities.example.yaml: запись switch.example_living_room_tv заменяется на media_player.example_living_room_tv (Телевизор, living_room) с действиями из решения #51 — turn_off, volume_set, volume_up, volume_down, volume_mute, select_source, без turn_on (включение через WoL в #51 не вошло в набор и на временной конфигурации может быть недоступно; строкой комментария в примере). Добавляется climate.example_kitchen_boiler_thermostat (Терморегулятор котла, kitchen, domain climate, actions [read]) с комментарием «пока только чтение температуры, управление котлом — позже». Добавляется vacuum.example_living_room_robot (Робот-пылесос, living_room, domain vacuum, actions [start, pause, return_to_base, locate]) без указания интеграции: путь подключения к HA выбирает владелец вне репозитория. Новых комнат не вводится — area ссылается на существующие areas[].id. Записи света, окна, протечки, кондиционера и замка остаются: это вымышленная квартира, а не копия набора владельца, и на протечку ссылаются правила проактивности. В config/home-profile.example.md строка о гостиной и кухне приводится к реестру (телевизор с родной интеграцией, робот-пылесос, терморегулятор котла). Отложенные пункты критерия (свет или розетка, датчик открытия или протечки) в этой итерации не выполняются — задача остаётся открытой, что осталось и почему оркестратор пишет комментарием в issue.",
+    "rejected": [
+      {
+        "option": "Оставить switch.example_living_room_tv и добавить телевизор media_player вторым",
+        "reason": "два телевизора в одной гостиной вымышленной квартиры; владелец просил запись телевизора в его домене, а запись «через розетку» к его набору не относится"
+      },
+      {
+        "option": "Терморегулятор как sensor.example_…_temperature",
+        "reason": "интеграция Tuya отдаёт терморегулятор сущностью climate с текущей температурой; climate с actions [read] сохраняет домен устройства и позволяет позже расширить действия без смены entity_id, когда владелец разрешит управление котлом"
+      },
+      {
+        "option": "Указать интеграцию пылесоса (polaris-mqtt или Яндекс Умный дом) в комментарии примера",
+        "reason": "путь подключения владелец ещё не выбрал и выбирает вне репозитория; реестр описывает домен и действия, а не интеграцию"
+      },
+      {
+        "option": "Новое поле type (device_class) в HaEntityDescriptor и реестре",
+        "reason": "владелец: «тип» закрывается полем Domain, модель не меняется"
+      },
+      {
+        "option": "Новый тест на структуру entities.example.yaml",
+        "reason": "docs/rules/implement.md:70 — «конфигурация, `.example`, документация | не нужен: проверка — способом из контракта приёмки»; YAML-библиотеки в зависимостях нет, а загрузчик реестра — заглушка"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "да: по ответу владельца в репозитории — вымышленные записи телевизора, терморегулятора и пылесоса в config/entities.example.yaml с доменом, комнатой и действиями; подключение устройств в HA делает владелец; невыполненные пункты критерия записываются в issue, задача остаётся открытой",
+    "alternative": "нет реалистичного второго способа с иным наблюдаемым результатом: содержимое примера задано ответами владельца и решением #51; выбор домена терморегулятора (climate против sensor) — внутреннее устройство вымышленного примера, на реальный реестр владельца не влияет",
+    "ripple": "греп example_living_room_tv по дереву (без bin, obj, .claude): только config/entities.example.yaml:47 и локальный config/entities.yaml владельца (закрыт .gitignore, агент не правит — в «Синхронизация» тела PR). Шаблоны switch в config/response-templates.example.yaml:21 остаются общими для домена; кодом реестр не читается (ConfiguredEntityAllowList — заглушка)",
+    "workaround": "нет",
+    "council_signs": [],
+    "executor": "оркестратор сам: 2 существующих файла, около 25 строк, место найдено в этой сессии",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "config/entities.example.yaml",
+      "action": "modify",
+      "why": "вымышленные записи телевизора (media_player), терморегулятора котла (climate, только чтение) и робота-пылесоса (vacuum) с доменом, комнатой и набором действий — пункт критерия о метаданных"
+    },
+    {
+      "path": "config/home-profile.example.md",
+      "action": "modify",
+      "why": "профиль вымышленной квартиры описывает телевизор «через розетку» (строка 18) — приводится к реестру, чтобы пара примеров не расходилась"
+    }
+  ],
+  "boundaries": [
+    "config/*.example.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "EveryExampleHasIgnoredCounterpart",
+      "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "new": false,
+      "covers": [
+        "a4"
+      ],
+      "behavior": "существующий тест: для каждого config/*.example.* расширение реального двойника закрыто в .gitignore — реестр с настоящими entity_id не уезжает в репозиторий; должен остаться зелёным после правки"
+    },
+    {
+      "name": "Сценарий: метаданные трёх устройств в примере реестра",
+      "file": "docs/tasks/4.md",
+      "new": true,
+      "covers": [
+        "a3"
+      ],
+      "behavior": "по docs/rules/implement.md:70 новый автотест на .example не пишется; проверка — греп из a3 с ожидаемым результатом: записи media_player, vacuum и climate-терморегулятора с префиксом example_, у каждой area из areas[].id, domain и непустой actions; телевизор без turn_on, терморегулятор только [read]. Команда и вывод — в журнал, «Проверено»"
+    },
+    {
+      "name": "Сценарий: в репозитории и issue нет реальных entity_id",
+      "file": "docs/tasks/4.md",
+      "new": true,
+      "covers": [
+        "a4"
+      ],
+      "behavior": "команды из a4 дают пустые выводы грепов, check-ignore печатает правило .gitignore:24, gitleaks без находок; при появлении в примере идентификатора без .example_ греп непустой — сценарий краснеет"
+    },
+    {
+      "name": "Сценарий: в issue записано, что осталось и почему",
+      "file": "docs/tasks/4.md",
+      "new": true,
+      "covers": [
+        "a5"
+      ],
+      "behavior": "в gh issue view 4 --comments есть комментарий с оставшимися пунктами (свет или розетка, датчик открытия или протечки) и причиной — покупки отложены владельцем; состояние issue — OPEN"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "a1-count",
+      "criterion": "в HA видны и работают 3–5 устройств",
+      "method": "непроверяем",
+      "evidence": "Home Assistant и устройства — у владельца, агенту недоступны. Доказательство — подтверждение владельца в комментарии issue (без entity_id), что телевизор, терморегулятор и пылесос видны и работают; пылесос — после того как владелец выберет и установит интеграцию"
+    },
+    {
+      "id": "a1-switch",
+      "criterion": "среди них минимум один управляемый (свет или розетка)",
+      "method": "непроверяем",
+      "evidence": "не выполняется в этой итерации: покупка отложена владельцем (комментарий владельца в issue, журнал docs/tasks/4.md «Решения»). Пункт записывается в issue как оставшийся, задача не закрывается"
+    },
+    {
+      "id": "a1-sensor",
+      "criterion": "минимум один датчик, дающий события для правил MVP (открытие двери/окна или протечка)",
+      "method": "непроверяем",
+      "evidence": "не выполняется в этой итерации: покупка отложена владельцем; терморегулятор даёт климат, а не открытие или протечку. Пункт записывается в issue как оставшийся, задача не закрывается"
+    },
+    {
+      "id": "a2",
+      "criterion": "каждое устройство управляется или читается из интерфейса HA",
+      "method": "непроверяем",
+      "evidence": "интерфейс HA владельца агенту недоступен; доказательство — подтверждение владельца в комментарии issue по каждому устройству: телевизор управляется, терморегулятор читается, пылесос управляется"
+    },
+    {
+      "id": "a3",
+      "criterion": "для каждого зафиксированы домен, комната, тип и набор допустимых действий в config/entities.example.yaml под вымышленными идентификаторами",
+      "method": "awk '/^  - entity_id:/{if(e)print e\"|\"a\"|\"d\"|\"x; e=$3;a=d=x=\"\"} /^    area:/{a=$2} /^    domain:/{d=$2} /^    actions:/{x=$0} END{if(e)print e\"|\"a\"|\"d\"|\"x}' config/entities.example.yaml — строка на каждую запись реестра: entity_id|area|domain|actions. Ожидается: строки media_player.example_living_room_tv, vacuum.example_living_room_robot, climate.example_kitchen_boiler_thermostat; у каждой строки area из areas[].id (kitchen, living_room, bedroom), domain совпадает с префиксом entity_id, actions непустой; у телевизора нет turn_on, у терморегулятора ровно [read]. Отрицательная проба: та же команда на копии примера, где у пылесоса удалена строка actions:, печатает у него пустое последнее поле — сверка это ловит",
+      "evidence": "вывод команды и отрицательной пробы в журнале «Проверено»; «тип» — поле domain по решению владельца (docs/tasks/4.md, «Ответы владельца»)"
+    },
+    {
+      "id": "a4",
+      "criterion": "реальные entity_id не попадают ни в репозиторий, ни в issue",
+      "method": "git ls-files config/entities.yaml — пусто; git check-ignore -v config/entities.yaml — .gitignore:24; grep -E '^\\s*- entity_id:' config/entities.example.yaml | grep -v '\\.example_' — пусто; gh issue view 4 --comments | grep -oE '\\b(light|switch|sensor|binary_sensor|climate|media_player|vacuum|lock|script)\\.[a-z0-9_]+' | grep -v '\\.example_' — пусто; dotnet test --filter \"FullyQualifiedName~ConfigurationExampleTests\" — зелёный; gitleaks git --redact --no-banner — без находок",
+      "evidence": "вывод команд в журнале «Проверено»: пустые выводы грепов, строка check-ignore, итог dotnet test и gitleaks"
+    },
+    {
+      "id": "a5",
+      "criterion": "DoD: частично заблокированная задача — в issue написано, что осталось и почему",
+      "method": "gh issue view 4 --comments — комментарий оркестратора с оставшимися пунктами a1-switch, a1-sensor и подтверждением владельца по a1-count и a2; тело PR не содержит закрывающих ключевых слов для #4 (grep -iE \"(close[sd]?|fix(e[sd])?|resolve[sd]?) #4\\b\" по телу — пусто); после мерджа gh issue view 4 --json state — OPEN",
+      "evidence": "ссылка на комментарий issue в журнале; пустой греп тела PR; состояние issue OPEN после мерджа"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "в пример попадёт настоящий entity_id или имя комнаты владельца",
+      "mitigation": "идентификаторы только с префиксом example_ и только существующие вымышленные комнаты; проверка грепом a4 и gitleaks перед коммитом; локальный config/entities.yaml не читается и не цитируется"
+    },
+    {
+      "risk": "набор действий пылесоса зависит от пути подключения (polaris-mqtt или Яндекс Умный дом): часть действий, например locate, может не поддерживаться",
+      "mitigation": "набор start, pause, return_to_base, locate предложен оркестратором в сессии и принят владельцем ответом «да включаем» (docs/tasks/4.md, «Ответы владельца»); пример интеграцию не называет; реальный набор в config/entities.yaml владелец сужает после подключения — это его файл, в «Синхронизация» тела PR"
+    },
+    {
+      "risk": "запись media_player и vacuum без шаблонов ответа ведёт к фолбэку на второй вызов модели",
+      "mitigation": "по FR-CORE-7 и шапке config/response-templates.example.yaml:8-9 отсутствие шаблона — условие фолбэка, а не ошибка; шаблоны вынесены в «Что не входит»"
+    },
+    {
+      "risk": "локальный config/entities.yaml владельца продолжит содержать старую запись switch.example_living_room_tv",
+      "mitigation": "агент локальные файлы не правит; в разделе «Синхронизация» тела PR перечисляется, что заменить и добавить, без значений"
+    }
+  ],
+  "out_of_scope": [
+    "подключение устройств в Home Assistant и выбор интеграции пылесоса — владелец, вне репозитория",
+    "свет или розетка и датчик открытия или протечки — отложены владельцем вместе с покупками; вернуться до начала #32",
+    "загрузчик реестра ConfiguredEntityAllowList (src/Domovoy.Ha) и модель HaEntityDescriptor — не меняются",
+    "шаблоны ответов для media_player и vacuum в config/response-templates.example.yaml",
+    "второй телевизор по ИК (#51, опционально)",
+    "правка локальных config/entities.yaml и config/home-profile.md владельца"
+  ]
+}
