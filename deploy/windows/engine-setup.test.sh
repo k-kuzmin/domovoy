@@ -533,6 +533,10 @@ test_engine_setup_migrate_dry_run() {
       || { fail "$name" "восстановление не restore.sh --project внутри движка"; show_out; return; }
     grep -q '^migrate\.check: .*-Check' "$work/out.$shell" || { fail "$name" "итог не -Check"; show_out; return; }
     grep -q '^migrate\.rollback: .*-Uninstall' "$work/out.$shell" || { fail "$name" "нет команд отката"; show_out; return; }
+    # docker desktop stop проверяется до шага 1; его отказ — откат стадии
+    # Desktop (docker desktop start), а не -Uninstall.
+    grep -q '^migrate\.precheck: .*docker\.exe desktop version answers' "$work/out.$shell" || { fail "$name" "нет пробы docker desktop до шага 1"; show_out; return; }
+    grep -q '^migrate\.rollback: .*up to and including migrate\.desktop_stop: docker desktop start' "$work/out.$shell" || { fail "$name" "откат при отказе docker desktop stop не тот"; show_out; return; }
     has "$shell" 'DryRun: nothing changed' || { fail "$name" "нет строки сухого прогона"; show_out; return; }
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name" "в выводе значения .env"; return; fi
     diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }

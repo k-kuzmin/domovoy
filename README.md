@@ -322,6 +322,8 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 
 - Docker Desktop работает, у него есть контейнеры проекта
   (`COMPOSE_PROJECT_NAME`), postgres и homeassistant запущены;
+- у `docker.exe` есть команда `docker desktop` (проба `docker desktop
+  version`) — ею переезд останавливает Desktop;
 - в движке ещё нет ни контейнеров, ни томов проекта — повторный перенос
   данные не затирает;
 - есть Git Bash (`bash.exe` Git for Windows);
@@ -347,7 +349,9 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 9. `engine-setup.ps1 -Check` — его код выхода и есть код `-Migrate`.
 
 Отказ после шага 1 сам ничего не откатывает: вывод говорит, что тома Docker
-Desktop целы, и печатает команды отката (раздел «Откат на Docker Desktop»).
+Desktop целы, и печатает команды отката. Пока процессы Desktop не ушли
+(шаг 4 включительно) — `docker desktop start` и `docker compose --profile ha
+start`; после — раздел «Откат на Docker Desktop».
 
 После переезда — руками:
 

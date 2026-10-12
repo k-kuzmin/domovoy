@@ -65,8 +65,10 @@
     0. предусловия — до любых действий, отказ без изменений: Git Bash
        (bash.exe Git for Windows, не bash WSL из System32); BACKUP_DIR —
        путь Windows, каталог есть и лежит вне клона; имя проекта годится
-       для restore.sh; Docker Desktop отвечает, у него есть контейнеры
-       проекта и работают postgres и homeassistant; в движке нет ни
+       для restore.sh; Docker Desktop отвечает, у docker.exe есть команда
+       desktop (docker desktop version — ею шаг 4 останавливает Desktop), у
+       Desktop есть контейнеры проекта и работают postgres и
+       homeassistant; в движке нет ни
        контейнеров, ни томов проекта — повторный перенос данные не
        затирает. Для последней пробы дистрибутив запускается; если он не
        работал, при отказе гасится только он;
@@ -92,7 +94,9 @@
        restore.sh;
     9. -Check — его код выхода и есть код -Migrate.
   Отказ после шага 1 ничего не откатывает сам: печатается, что тома Docker
-  Desktop целы, и команды отката. -Migrate -DryRun печатает план и отказывает
+  Desktop целы, и команды отката — до ухода процессов Desktop в шаге 4
+  включительно: docker desktop start и docker compose --profile ha start;
+  после — -Uninstall, wsl --shutdown, docker desktop start и тот же start. -Migrate -DryRun печатает план и отказывает
   по тем же предусловиям, что проверяются без docker.exe и WSL.
 
   -Check только читает: ничего не запускает и не останавливает, внутрь
@@ -461,6 +465,9 @@ $KeeperWaitSeconds = 30
 $desktopStopApiArgs = @('compose', 'stop', 'api')
 $desktopStopStackArgs = @('compose', '--profile', 'ha', 'stop')
 $desktopQuitArgs = @('desktop', 'stop')
+# Проба до шага 1: есть ли у docker.exe команда desktop, которой шаг 4
+# останавливает Desktop (её нет у старых версий).
+$desktopCliProbeArgs = @('desktop', 'version')
 $backupScriptPath = 'ops/backup/backup.sh'
 
 # docker в дистрибутиве: опрос docker info до ответа или предела времени.
@@ -619,7 +626,7 @@ $migrateSteps = @(
         }
     },
     [pscustomobject]@{
-        Key   = 'migrate.desktop_stop'; Stage = 'engine'
+        Key   = 'migrate.desktop_stop'; Stage = 'desktop'
         Title = 'docker desktop stop — процессы не убиваются, ожидается их уход'
         Plan  = { 'docker.exe {0}; wait up to {1} s for Docker Desktop processes to exit (no kill)' -f ($desktopQuitArgs -join ' '), $DesktopWaitSeconds }
         Run   = {
@@ -744,14 +751,16 @@ function Write-MigratePlan {
     $engineSource = if ($Install) { 'installed by -Install above' } elseif ($AssumeEngineState) { "assumed $AssumeEngineState" } else { 'distro, keeper task, mirrored' }
     Write-Output "migrate.engine: $Distro ($engineSource)"
     Write-Output "migrate.project: $project"
-    Write-Output "migrate.precheck: Docker Desktop answers docker info; containers of project $project exist; postgres and homeassistant running (checked by the run, not by DryRun)"
+    Write-Output ("migrate.precheck: Docker Desktop answers docker info; docker.exe {0} answers (migrate.desktop_stop needs it); containers of project $project exist; postgres and homeassistant running (checked by the run, not by DryRun)" -f ($desktopCliProbeArgs -join ' '))
     Write-Output "migrate.precheck: no containers and no volumes of project $project in $Distro (the run starts the distro and waits for docker up to $EngineWaitSeconds s; stops it again on refusal)"
     foreach ($migrateStep in $migrateSteps) {
         $planLines = @(& $migrateStep.Plan)
         Write-Output ('{0}: {1}' -f $migrateStep.Key, $planLines[0])
         $planLines | Select-Object -Skip 1
     }
-    Write-Output 'migrate.rollback: no automatic rollback; Docker Desktop volumes stay intact. Failure before migrate.desktop_stop: docker compose --profile ha start. After it: engine-setup.ps1 -Uninstall (administrator); wsl --shutdown; docker desktop start; docker compose --profile ha start'
+    # Граница откатов — по Stage шагов: что напечатано, то и выберет Stop-Migrate.
+    $lastDesktopStep = @($migrateSteps | Where-Object { $_.Stage -eq 'desktop' })[-1].Key
+    Write-Output "migrate.rollback: no automatic rollback; Docker Desktop volumes stay intact. Failure up to and including ${lastDesktopStep}: docker desktop start (if it stopped); docker compose --profile ha start. After it: engine-setup.ps1 -Uninstall (administrator); wsl --shutdown; docker desktop start; docker compose --profile ha start"
 }
 
 if ($Uninstall) {
@@ -1226,6 +1235,10 @@ if ($Migrate) {
     if ($desktopInfo.Code -ne 0 -or $desktopInfo.Text -notmatch 'Docker Desktop') {
         Stop-WithError "переезд не начат: Docker Desktop не отвечает (docker info: код $($desktopInfo.Code): $(Format-Native $desktopInfo)) — запустите его: docker desktop start"
     }
+    $desktopCli = Invoke-Native $dockerExe $desktopCliProbeArgs
+    if ($desktopCli.Code -ne 0) {
+        Stop-WithError "переезд не начат: docker.exe не знает команды desktop (docker $($desktopCliProbeArgs -join ' '): код $($desktopCli.Code): $(Format-Native $desktopCli)) — шаг 4 останавливает ею Docker Desktop; обновите Docker Desktop"
+    }
     $desktopAll = Invoke-Native $dockerExe @('ps', '-aq', '--filter', $projectLabel)
     if ($desktopAll.Code -ne 0) { Stop-WithError "переезд не начат: docker ps на Docker Desktop: код $($desktopAll.Code): $(Format-Native $desktopAll)" }
     if (-not $desktopAll.Text) { Stop-WithError "переезд не начат: на Docker Desktop нет контейнеров проекта $project — переносить нечего" }
@@ -1262,11 +1275,15 @@ if ($Migrate) {
     }
 
     # Отказ после остановки api: автоматического отката нет — только текст;
-    # какой — по Stage шага.
+    # какой — по Stage шага: desktop — до ухода процессов Docker Desktop
+    # включительно, engine — после.
     $script:migrateStage = 'desktop'
     function Stop-Migrate([string]$Message) {
         if ($script:migrateStage -eq 'desktop') {
-            $rollback = "Docker Desktop работает, его тома не тронуты. Вернуть стек: из каталога клона docker compose --profile ha start"
+            # До ухода процессов Desktop: wsl --shutdown не выполнялся, Desktop
+            # работает или остановлен частично (отказ docker desktop stop или
+            # его ожидания).
+            $rollback = "Тома Docker Desktop не тронуты, wsl --shutdown не выполнялся. Вернуть стек: docker desktop start (если Desktop остановился), затем из каталога клона docker compose --profile ha start"
         }
         else {
             $rollback = @"
