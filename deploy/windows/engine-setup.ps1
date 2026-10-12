@@ -252,6 +252,28 @@ function Get-Port([string]$Key) {
     return $port
 }
 
+# Кодировка, в которой PowerShell читает вывод внешней программы из канала, —
+# [Console]::OutputEncoding (в русской Windows — CP866). bash, docker и wsl.exe
+# с WSL_UTF8 пишут UTF-8: без переключения русский вывод backup.sh и
+# restore.sh приходит в чужой кодировке. Дочерний PowerShell пишет в
+# кодировке консоли — для него не переключается. Без консоли (вывод
+# перенаправлен) установка может бросить — тогда кодировка не меняется.
+function Set-NativeOutputEncoding([string]$Exe) {
+    $previous = $null
+    if ($Exe -ieq (Get-Process -Id $PID).Path) { return $previous }
+    try {
+        $previous = [Console]::OutputEncoding
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    }
+    catch { $previous = $null }
+    return $previous
+}
+
+function Restore-NativeOutputEncoding($Previous) {
+    if ($null -eq $Previous) { return }
+    try { [Console]::OutputEncoding = $Previous } catch { }
+}
+
 # Внешняя программа: Lines и Text — только stdout, по ним идут сравнения;
 # stderr — отдельно, ErrLines и Err, для деталей в выводе. Предупреждения
 # wsl.exe в stderr иначе попадали бы в «enabled» и в список контейнеров.
@@ -262,6 +284,7 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     $ErrorActionPreference = 'Continue'
     $out = New-Object System.Collections.Generic.List[string]
     $err = New-Object System.Collections.Generic.List[string]
+    $encoding = Set-NativeOutputEncoding $Exe
     try {
         & $Exe @Arguments 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $err.Add([string]$_) } else { $out.Add([string]$_) }
@@ -270,6 +293,7 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     }
     finally {
         $ErrorActionPreference = $previous
+        Restore-NativeOutputEncoding $encoding
     }
     $lines = @($out)
     $errLines = @($err | Where-Object { $_.Trim() })
@@ -370,6 +394,7 @@ function Get-Health([string]$Url) {
 function Invoke-Passthru([string]$Exe, [string[]]$Arguments) {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $encoding = Set-NativeOutputEncoding $Exe
     try {
         & $Exe @Arguments 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { [Console]::Error.WriteLine([string]$_) } else { Write-Output ([string]$_) }
@@ -378,6 +403,7 @@ function Invoke-Passthru([string]$Exe, [string[]]$Arguments) {
     }
     finally {
         $ErrorActionPreference = $previous
+        Restore-NativeOutputEncoding $encoding
     }
 }
 

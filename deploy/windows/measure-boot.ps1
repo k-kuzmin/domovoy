@@ -167,7 +167,11 @@ $dir = Split-Path -Parent $LogPath
 if ($dir -and -not (Test-Path -LiteralPath $dir -PathType Container)) {
     $null = New-Item -ItemType Directory -Path $dir -Force
 }
-[IO.File]::AppendAllText($LogPath, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+# UTF-8 с BOM: Get-Content в Windows PowerShell 5.1 без BOM читает файл в
+# кодировке ANSI, и русские слова строки приходят в чужой кодировке. BOM
+# пишется только в начало нового файла — AppendAllText кладёт его, когда
+# файла нет, и не повторяет при дописывании.
+[IO.File]::AppendAllText($LogPath, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($true)))
 Write-Output $line
 if ($first200) { exit 0 }
 exit 1
