@@ -443,12 +443,18 @@ if ($Install) {
     Write-Output 'docker.service и containerd.service в автозапуске systemd дистрибутива'
 
     # 3–4. Задачи; -Force заменяет прежние.
-    $null = Register-ScheduledTask -TaskName $KeeperTask -Trigger $bootTrigger -Action $keeperAction -Principal $keeperPrincipal `
-        -Settings $keeperSettings -Description 'Домовой: держит WSL-дистрибутив движка Docker после загрузки, без входа' -Force
-    Write-Output "задача $KeeperTask зарегистрирована: при запуске системы, S4U"
-    $null = Register-ScheduledTask -TaskName $MeasureTask -Trigger $bootTrigger -Action $measureAction -Principal $measurePrincipal `
-        -Settings $measureSettings -Description 'Домовой: замер от старта ОС до первого ответа /health' -Force
-    Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, S4U, журнал $measureLog"
+    # Отказ регистрации — тоже после остановки дистрибутива: через Stop-Install.
+    try {
+        $null = Register-ScheduledTask -TaskName $KeeperTask -Trigger $bootTrigger -Action $keeperAction -Principal $keeperPrincipal `
+            -Settings $keeperSettings -Description 'Домовой: держит WSL-дистрибутив движка Docker после загрузки, без входа' -Force
+        Write-Output "задача $KeeperTask зарегистрирована: при запуске системы, S4U"
+        $null = Register-ScheduledTask -TaskName $MeasureTask -Trigger $bootTrigger -Action $measureAction -Principal $measurePrincipal `
+            -Settings $measureSettings -Description 'Домовой: замер от старта ОС до первого ответа /health' -Force
+        Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, S4U, журнал $measureLog"
+    }
+    catch {
+        Stop-Install "регистрация задач: $($_.Exception.Message)"
+    }
 
     # Держалка — сразу после регистрации, до шагов, которые могут отказать.
     try { $resumed = Resume-Keeper }
