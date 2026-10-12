@@ -446,6 +446,7 @@ test_backup_fails_without_entity_registry() {
   run bash ops/backup/backup.sh "$work/rotation" --keep 1
   dcs exec -T homeassistant mv /config/.storage/core.entity_registry.bt-aside /config/.storage/core.entity_registry </dev/null
   if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без реестра"; return; fi
+  grep -q 'реестр сущностей HA' "$work/out" || { fail "$name" "отказ не по реестру"; show_out; return; }
   local entries
   entries="$(ls -A "$work/rotation" | grep -v '^backup.log$' | sort | tr '\n' ' ')"
   if [ "$entries" != "domovoy-backup-20200101T000000Z domovoy-backup-20200102T000000Z domovoy-backup-20200103T000000Z domovoy-backup-20200104T000000Z.partial foreign-dir " ]; then

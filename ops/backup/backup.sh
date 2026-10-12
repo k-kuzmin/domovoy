@@ -145,15 +145,19 @@ table_counts="$(dc exec -T postgres sh -c \
   <ops/backup/table-counts.sql | tr -d '\r')" || fail "подсчёт строк в таблицах не выполнился"
 
 # 2. Том HA. Сценарий модуля передаётся python3 через stdin: в контейнер
-# ничего не копируется.
-dc exec -T homeassistant python3 - archive /config \
-  <ops/backup/ha_registry_check.py >"$partial/ha-config.tar.gz" || fail "архив тома HA не снят"
-
+# ничего не копируется. stdout — архив, stderr — число не отключённых
+# записей реестра, посчитанное по тем же байтам, что легли в архив (HA
+# переписывает реестр на ходу, второе чтение тома дало бы другую версию),
+# и предупреждения модуля.
 # Реестр сущностей обязателен: без него восстановленный HA не знает
 # устройств, а манифест с нулём сделал бы проверку восстановления пустой.
-ha_enabled="$(dc exec -T homeassistant python3 - count /config/.storage/core.entity_registry \
-  <ops/backup/ha_registry_check.py | tr -d '\r')" || fail "реестр сущностей HA не прочитан"
-[[ "$ha_enabled" =~ ^[0-9]+$ ]] || fail "реестр сущностей HA: ожидалось число"
+archive_messages() { [ -z "$archive_err" ] || grep -v '^registry_enabled ' <<<"$archive_err" >&2 || true; }
+archive_err="$(dc exec -T homeassistant python3 - archive /config \
+  <ops/backup/ha_registry_check.py 2>&1 >"$partial/ha-config.tar.gz" | tr -d '\r')" \
+  || { archive_messages; fail "архив тома HA не снят"; }
+archive_messages
+ha_enabled="$(sed -n 's/^registry_enabled //p' <<<"$archive_err")"
+[[ "$ha_enabled" =~ ^[0-9]+$ ]] || fail "реестр сущностей HA: модуль архивации не вернул число"
 
 # 3. Целостность до переименования. Дамп читается целиком, а не только
 # оглавление: --file=/dev/null проходит по каждому блоку данных.

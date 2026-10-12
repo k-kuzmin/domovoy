@@ -143,9 +143,9 @@ test_archive_roundtrip_with_live_wal() {
   echo 'example marker' >"$work/config/domovoy-marker.txt"
   echo 'log line' >"$work/config/home-assistant.log"
 
-  if ! "$py" - "$work/config" "$module" "$work/archive.tar.gz" <<'EOF'
+  if ! "$py" - "$work/config" "$module" "$work/archive.tar.gz" "$work/archive.err" <<'EOF'
 import os, sqlite3, subprocess, sys
-config, module, archive = sys.argv[1:4]
+config, module, archive, errlog = sys.argv[1:5]
 for name in ("home-assistant_v2.db", "zigbee.db"):
     c = sqlite3.connect(os.path.join(config, name))
     c.execute("PRAGMA journal_mode=WAL")
@@ -158,12 +158,15 @@ for name in ("home-assistant_v2.db", "zigbee.db"):
     else:
         c.close()
 assert os.path.getsize(os.path.join(config, "home-assistant_v2.db-wal")) > 0, "нет данных в -wal"
-with open(archive, "wb") as out:
-    rc = subprocess.run([sys.executable, module, "archive", config], stdout=out).returncode
+with open(archive, "wb") as out, open(errlog, "wb") as err:
+    rc = subprocess.run([sys.executable, module, "archive", config], stdout=out, stderr=err).returncode
 live.close()
 sys.exit(rc)
 EOF
-  then fail "$name" "archive вернул ненулевой код"; return; fi
+  then fail "$name" "archive вернул ненулевой код: $(cat "$work/archive.err")"; return; fi
+  # Число реестра — по реестру, легшему в архив, отдельной строкой stderr.
+  grep -qx 'registry_enabled 3' "$work/archive.err" \
+    || { fail "$name" "в stderr нет «registry_enabled 3»: $(cat "$work/archive.err")"; return; }
 
   local listing
   listing="$(tar -tzf "$work/archive.tar.gz")" || { fail "$name" "архив не читается tar"; return; }
@@ -198,6 +201,52 @@ EOF
   ok "$name"
 }
 
+test_archive_counts_registry_from_archived_bytes() {
+  local name=archive_counts_registry_from_archived_bytes
+  # Реестр подменяется ровно между чтением и следующим шагом обхода:
+  # число в stderr обязано описывать реестр из архива, а не тот, что лежит
+  # в томе после архивации.
+  mkdir -p "$work/swap/.storage"
+  cp "$registry" "$work/swap/.storage/core.entity_registry"
+  "$py" - "$module" "$work/swap" "$work/swap.tar.gz" "$work/swap.err" <<'EOF'
+import importlib.util, json, os, sys
+module, config, archive, errlog = sys.argv[1:5]
+spec = importlib.util.spec_from_file_location("m", module)
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+original = m.add_registry
+def add_then_swap(tar, path, arcname):
+    result = original(tar, path, arcname)
+    with open(path, encoding="utf-8") as handle:
+        doc = json.load(handle)
+    doc["data"]["entities"].append({"entity_id": "light.example_added_later", "disabled_by": None})
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle)
+    return result
+m.add_registry = add_then_swap
+out = open(archive, "wb")
+err = open(errlog, "w", encoding="utf-8")
+sys.stdout = type(sys.stdout)(out, encoding="utf-8")
+sys.stderr = err
+sys.exit(m.main(["archive", config]))
+EOF
+  rc=$?
+  if [ "$rc" -ne 0 ]; then fail "$name" "archive: код $rc: $(cat "$work/swap.err")"; return; fi
+  grep -qx 'registry_enabled 3' "$work/swap.err" \
+    || { fail "$name" "в stderr не число реестра из архива: $(cat "$work/swap.err")"; return; }
+  run count "$work/swap/.storage/core.entity_registry"
+  [ "$(cat "$work/out")" = 4 ] || { fail "$name" "подмена реестра не удалась: «$(cat "$work/out")»"; return; }
+  if grep -q 'example_' "$work/swap.err"; then fail "$name" "в stderr есть entity_id"; return; fi
+
+  # Тома без реестра — отказ с названной причиной, а не архив без реестра.
+  mkdir -p "$work/no-registry/.storage"
+  "$py" "$module" archive "$work/no-registry" >"$work/no-registry.tar.gz" 2>"$work/err"
+  rc=$?
+  if [ "$rc" -ne 2 ]; then fail "$name" "без реестра: ожидался код 2, получен $rc"; return; fi
+  grep -q 'реестр сущностей HA' "$work/err" || { fail "$name" "без реестра: отказ не по реестру: $(cat "$work/err")"; return; }
+  ok "$name"
+}
+
 test_count_counts_only_enabled
 test_compare_reports_missing_entity
 test_compare_full_states_and_disabled_ignored
@@ -205,6 +254,7 @@ test_compare_expect_mismatch
 test_broken_registry_is_error
 test_sqlite_backup_and_check
 test_archive_roundtrip_with_live_wal
+test_archive_counts_registry_from_archived_bytes
 
 echo "итог: пройдено $passed, упало $failed"
 [ "$failed" -eq 0 ]

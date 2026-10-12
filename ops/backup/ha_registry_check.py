@@ -7,7 +7,8 @@
     compare      <реестр> <состояния|-> [--expect N]   «N из M» сущностей реестра в /api/states
     sqlite-check <база>                                PRAGMA integrity_check
     sqlite-backup <база> <копия>                       онлайн-копия через sqlite3 backup API
-    archive      <каталог>                             tar.gz тома в stdout, живые sqlite — онлайн-копией
+    archive      <каталог>                             tar.gz тома в stdout, живые sqlite — онлайн-копией;
+                                                       в stderr «registry_enabled N» по реестру из архива
     extract      <каталог>                             tar.gz со stdin в пустой каталог
 
 Вывод — только числа и служебные строки. Ни entity_id, ни содержимое
@@ -19,6 +20,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -36,6 +38,9 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 # Журнал HA дописывается непрерывно и для восстановления не нужен.
 SKIPPED_PREFIXES = ("home-assistant.log",)
+# Реестр сущностей в архиве: без него восстановленный HA не знает
+# устройств, и бэкап без него — отказ.
+REGISTRY_ARCNAME = ".storage/core.entity_registry"
 
 
 class CheckError(Exception):
@@ -48,6 +53,10 @@ def load_registry(path: str) -> list:
             raw = handle.read()
     except OSError as err:
         raise CheckError(f"реестр сущностей не прочитан: {err.strerror}") from err
+    return parse_registry(raw)
+
+
+def parse_registry(raw: bytes) -> list:
     if not raw.strip():
         raise CheckError("реестр сущностей пуст")
     try:
@@ -150,6 +159,25 @@ def sqlite_backup(source_path: str, target_path: str) -> None:
         source.close()
 
 
+def add_registry(tar: tarfile.TarFile, path: str, arcname: str) -> int:
+    """Реестр сущностей в архив; число его не отключённых записей.
+
+    Файл читается один раз: в архив ложатся те же байты, по которым
+    посчитано число. HA переписывает реестр на ходу, и второе чтение того
+    же пути могло бы дать манифесту число другой версии.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+            info = tar.gettarinfo(arcname=arcname, fileobj=handle)
+    except OSError as err:
+        raise CheckError(f"реестр сущностей HA не прочитан: {err.strerror}") from err
+    enabled = len(enabled_entity_ids(parse_registry(raw)))
+    info.size = len(raw)
+    tar.addfile(info, io.BytesIO(raw))
+    return enabled
+
+
 def archive(config_dir: str) -> int:
     """tar.gz каталога в stdout; каждая база sqlite — онлайн-копией.
 
@@ -157,9 +185,13 @@ def archive(config_dir: str) -> int:
     лежит в -wal. Поэтому базы (рекордер HA, zigbee.db и любые другие)
     находятся по сигнатуре sqlite и кладутся в архив копией через backup
     API, а их -wal/-shm/-journal не кладутся вовсе.
+
+    Число не отключённых записей реестра, попавшего в архив, печатается в
+    stderr строкой «registry_enabled N»: stdout занят архивом.
     """
     config_dir = os.path.abspath(config_dir)
     staging = tempfile.mkdtemp(prefix="domovoy-backup-")
+    registry_enabled = None
     try:
         with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as tar:
             for root, dirs, files in os.walk(config_dir):
@@ -180,11 +212,16 @@ def archive(config_dir: str) -> int:
                         sqlite_backup(path, snapshot)
                         tar.add(snapshot, arcname=arcname, recursive=False)
                         os.remove(snapshot)
+                    elif arcname == REGISTRY_ARCNAME:
+                        registry_enabled = add_registry(tar, path, arcname)
                     elif os.path.islink(path) or os.path.isfile(path):
                         tar.add(path, arcname=arcname, recursive=False)
             # Сокеты и FIFO в архив не идут: восстанавливать в них нечего.
+            if registry_enabled is None:
+                raise CheckError(f"реестр сущностей HA: в томе нет {REGISTRY_ARCNAME}")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+    print(f"registry_enabled {registry_enabled}", file=sys.stderr)
     return 0
 
 
