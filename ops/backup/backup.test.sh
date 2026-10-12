@@ -436,12 +436,28 @@ test_restore_check_requires_ha_api_by_default() {
   local name=restore_check_reports_skipped_ha_api/required
   # Токен в .env из примера — плейсхолдер: восстановленный HA его не примет,
   # и проверка по умолчанию обязана упасть, а не пропуститься молча.
-  run bash ops/backup/restore.sh --from "$backup" --check
+  run bash ops/backup/restore.sh --from "$backup" --check --keep
+  local kept_rc=$rc
+  # Реестр, с которым сверяются состояния, — из бэкапа, а не тот, что HA
+  # переписал на старте: в контейнере лежит побайтно член архива.
+  local same_registry=no
+  if docker compose -p "$check_project" -f docker-compose.yml --profile ha exec -T homeassistant \
+    cat /tmp/registry.backup.json </dev/null \
+    | cmp -s - <(tar -xzOf "$backup/ha-config.tar.gz" .storage/core.entity_registry); then
+    same_registry=yes
+  fi
+  docker compose -p "$check_project" -f docker-compose.yml --profile ha down -v --remove-orphans </dev/null >/dev/null 2>&1
+  rc=$kept_rc
   if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без флага на токене-плейсхолдере"; show_out; return; fi
   if grep -q 'пропущена' "$work/out"; then fail "$name" "проверка пропущена без флага"; return; fi
   grep -q 'токен из окружения api не принят' "$work/out" \
     || { fail "$name" "отказ не по токену"; show_out; return; }
   ok "$name"
+  if [ "$same_registry" = yes ]; then
+    ok "restore_compares_states_with_backup_registry"
+  else
+    fail "restore_compares_states_with_backup_registry" "в контейнере HA нет реестра из бэкапа"
+  fi
 }
 
 test_restore_into_fresh_project_restores_markers() {

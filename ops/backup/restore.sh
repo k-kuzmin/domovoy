@@ -192,6 +192,14 @@ if [ "$ha_api_check" = 'skip' ]; then
 else
   dc cp ops/backup/ha_registry_check.py homeassistant:/tmp/ha_registry_check.py >/dev/null 2>&1 \
     || fail "модуль проверки не скопирован в контейнер HA"
+  # Сверка идёт с реестром из бэкапа, а не с /config восстановленного HA:
+  # HA при старте реестр переписывает, и запись, удалённая им на старте,
+  # исчезла бы из обеих сторон сравнения. Реестр берётся из архива
+  # бэкапа — тех байтов, что легли в том до первого старта HA, — и трубой
+  # уходит в контейнер, без файла на хосте.
+  tar -xzOf "$from/ha-config.tar.gz" .storage/core.entity_registry \
+    | dc exec -T homeassistant sh -c 'cat >/tmp/registry.backup.json' \
+    || fail "реестр сущностей из бэкапа не передан в контейнер HA"
   # Токен берётся из окружения контейнера api и не выходит из него: ни в
   # командную строку хоста, ни в вывод.
   # shellcheck disable=SC2016
@@ -217,12 +225,13 @@ else
   while :; do
     if result="$(dc exec -T api sh -c "$states_cmd" </dev/null \
       | dc exec -T homeassistant python3 /tmp/ha_registry_check.py compare \
-        /config/.storage/core.entity_registry - --expect "$expected_ha" | tr -d '\r')"; then
+        /tmp/registry.backup.json - --expect "$expected_ha" | tr -d '\r')"; then
       break
     fi
     [ "$SECONDS" -lt "$deadline" ] || fail "HA: $(head -n1 <<<"$result") сущностей реестра в состояниях; $(sed -n 2p <<<"$result")"
     sleep 5
   done
+  dc exec -T homeassistant rm -f /tmp/registry.backup.json </dev/null || true
   echo "HA: $result сущностей реестра в состояниях"
 fi
 
