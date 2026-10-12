@@ -4,8 +4,8 @@
 # Поднимается на .env.example без правок (ТЗ 5.1.3):
 #
 #   cp .env.example .env
-#   docker compose up -d --build
-#   curl -s http://localhost:8080/health
+#   docker compose up -d --build --wait
+#   curl -s http://localhost:18080/health
 #
 # По умолчанию поднимаются только Backend и база. Home Assistant
 # объявлен здесь же, но под профилем ha (запись 0027): обычный
@@ -99,7 +99,7 @@ services:
     # default — к Home Assistant по имени сервиса и в интернет, db — к базе.
     networks: ['default', 'db']
     ports:
-      - '${API_HTTP_PORT:-8080}:8080'
+      - '${API_HTTP_PORT:-18080}:8080'
     volumes:
       # Реестр сущностей и профиль дома — только на чтение: содержимое
       # приватнее токенов, менять его изнутри контейнера незачем.
