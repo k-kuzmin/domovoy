@@ -337,8 +337,11 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 5. Выключает автозапуск Docker Desktop при входе (`AutoStart` в
    `%APPDATA%\Docker\settings-store.json`, копия — `.domovoy-backup`): иначе
    после входа он займёт порты стека. Нет файла — предупреждение.
-6. `wsl --shutdown` — применяет mirrored и гасит **все** дистрибутивы WSL.
-7. `Start-ScheduledTask domovoy-engine` и ожидание docker в дистрибутиве.
+6. Держалка, если работает, останавливается (`Stop-ScheduledTask`), затем
+   `wsl --shutdown` — применяет mirrored и гасит **все** дистрибутивы WSL.
+7. `Start-ScheduledTask domovoy-engine`, ожидание, пока задача перейдёт в
+   состояние Running (иначе отказ: без держалки дистрибутив гаснет по
+   простою), затем ожидание docker в дистрибутиве.
 8. Внутри дистрибутива: `ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME>
    --from <бэкап шага 2>` — он же поднимает стек и ждёт `/health`.
 9. `engine-setup.ps1 -Check` — его код выхода и есть код `-Migrate`.

@@ -488,7 +488,7 @@ test_engine_setup_uninstall_dry_run() {
 # Состояние движка подменяется: на машине владельца он может быть и
 # установлен, и нет.
 migrate_order=(migrate.stop_api migrate.backup migrate.stop_stack migrate.desktop_stop migrate.desktop_autostart
-  migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
+  migrate.keeper_stop migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
 
 test_engine_setup_migrate_dry_run() {
   local name=engine_setup_migrate_dry_run
@@ -524,7 +524,11 @@ test_engine_setup_migrate_dry_run() {
     if grep -E '^migrate\.' "$work/out.$shell" | grep -qE '(^|[^a-z])down([^a-z]|$)| -v( |$)'; then fail "$name" "в плане переезда есть down или -v"; show_out; return; fi
     grep -q '^migrate\.desktop_autostart: settings-store\.json AutoStart true -> false ' "$work/out.$shell" || { fail "$name" "автозапуск Desktop не выключается"; show_out; return; }
     grep -q '^migrate\.wsl_shutdown: wsl\.exe --shutdown - stops ALL WSL distributions' "$work/out.$shell" || { fail "$name" "не сказано, что wsl --shutdown гасит все дистрибутивы"; show_out; return; }
-    has "$shell" 'migrate.keeper_start: Start-ScheduledTask domovoy-engine' || { fail "$name" "держалка не запускается"; show_out; return; }
+    # wsl --shutdown убивает держалку; задача с IgnoreNew молча пропустила
+    # бы запуск при «зависшем» Running — поэтому сначала остановка, а после
+    # запуска ожидание State Running.
+    grep -q '^migrate\.keeper_stop: Stop-ScheduledTask domovoy-engine if its State is Running' "$work/out.$shell" || { fail "$name" "держалка не останавливается до wsl --shutdown"; show_out; return; }
+    grep -q '^migrate\.keeper_start: Start-ScheduledTask domovoy-engine; wait up to [0-9]* s for task State Running' "$work/out.$shell" || { fail "$name" "запуск держалки без ожидания Running"; show_out; return; }
     grep -q '^migrate\.restore: wsl\.exe -d domovoy-engine -u root --cd .* --exec bash ops/backup/restore\.sh --project example-home --from ' "$work/out.$shell" \
       || { fail "$name" "восстановление не restore.sh --project внутри движка"; show_out; return; }
     grep -q '^migrate\.check: .*-Check' "$work/out.$shell" || { fail "$name" "итог не -Check"; show_out; return; }

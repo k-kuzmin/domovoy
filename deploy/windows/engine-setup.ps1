@@ -81,9 +81,12 @@
     5. автозапуск Desktop при входе выключается: %APPDATA%\Docker\
        settings-store.json, ключ AutoStart (старые версии — settings.json,
        autoStart); прежний файл — копией .domovoy-backup. Файла нет — WARN;
-    6. wsl --shutdown — гасит ВСЕ дистрибутивы WSL, применяет mirrored;
-    7. Start-ScheduledTask domovoy-engine и ожидание docker в дистрибутиве
-       (предел времени);
+    6. держалка, если работает, — Stop-ScheduledTask, затем wsl --shutdown —
+       гасит ВСЕ дистрибутивы WSL, применяет mirrored. Задача держалки
+       с MultipleInstances IgnoreNew: «зависший» Running молча проглотил
+       бы запуск в шаге 7;
+    7. Start-ScheduledTask domovoy-engine, ожидание State Running задачи
+       (иначе отказ), затем docker в дистрибутиве (предел времени);
     8. внутри дистрибутива, в клоне: ops/backup/restore.sh --project
        <COMPOSE_PROJECT_NAME> --from <бэкап шага 2>; стек поднимает сам
        restore.sh;
@@ -451,6 +454,8 @@ $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 # Docker Desktop после docker desktop stop.
 $EngineWaitSeconds = 180
 $DesktopWaitSeconds = 120
+# Предел ожидания состояния Running у задачи держалки после запуска.
+$KeeperWaitSeconds = 30
 # Аргументы шагов на Docker Desktop — одни на план сухого прогона и на
 # действие: что напечатано, то и выполняется.
 $desktopStopApiArgs = @('compose', 'stop', 'api')
@@ -467,6 +472,26 @@ function Wait-EngineDocker {
         if (($info.Code -eq 0 -and $info.Text) -or (Get-Date) -ge $deadline) { return $info }
         Start-Sleep -Seconds 3
     }
+}
+
+# Держалка запускается заново; $true — задача дошла до State Running за
+# предел времени. Задача зарегистрирована с MultipleInstances IgnoreNew:
+# пока прежний экземпляр числится Running (wsl --shutdown и
+# wsl --terminate убивают его wsl.exe, а состояние задачи может отстать),
+# Start-ScheduledTask молча ничего не делает. Поэтому прежний экземпляр
+# сначала останавливается, а после запуска ожидается Running: иначе
+# дистрибутив, поднятый чужим wsl.exe, погас бы по простою незаметно.
+function Start-Keeper {
+    if ([string](Get-ScheduledTask -TaskName $KeeperTask -ErrorAction Stop).State -eq 'Running') {
+        Stop-ScheduledTask -TaskName $KeeperTask
+    }
+    Start-ScheduledTask -TaskName $KeeperTask
+    $deadline = (Get-Date).AddSeconds($KeeperWaitSeconds)
+    while ([string](Get-ScheduledTask -TaskName $KeeperTask -ErrorAction Stop).State -ne 'Running') {
+        if ((Get-Date) -ge $deadline) { return $false }
+        Start-Sleep -Seconds 1
+    }
+    return $true
 }
 
 # $true — процессов Docker Desktop нет (те же имена, что в -Check); не
@@ -642,6 +667,17 @@ $migrateSteps = @(
         }
     },
     [pscustomobject]@{
+        Key   = 'migrate.keeper_stop'; Stage = 'engine'
+        Title = "держалка $KeeperTask — остановить, если работает (её всё равно гасит wsl --shutdown)"
+        Plan  = { "Stop-ScheduledTask $KeeperTask if its State is Running - wsl --shutdown kills it anyway; a stale Running instance would make the start below a no-op (MultipleInstances IgnoreNew)" }
+        Run   = {
+            try {
+                if ([string](Get-ScheduledTask -TaskName $KeeperTask -ErrorAction Stop).State -eq 'Running') { Stop-ScheduledTask -TaskName $KeeperTask }
+            }
+            catch { Stop-Migrate "Stop-ScheduledTask ${KeeperTask}: $($_.Exception.Message)" }
+        }
+    },
+    [pscustomobject]@{
         Key   = 'migrate.wsl_shutdown'; Stage = 'engine'
         Title = 'wsl --shutdown — гасит все дистрибутивы WSL, применяет networkingMode=mirrored'
         Plan  = { "wsl.exe --shutdown - stops ALL WSL distributions, not only $Distro (applies networkingMode=mirrored)" }
@@ -652,11 +688,15 @@ $migrateSteps = @(
     },
     [pscustomobject]@{
         Key   = 'migrate.keeper_start'; Stage = 'engine'
-        Title = "Start-ScheduledTask $KeeperTask"
-        Plan  = { "Start-ScheduledTask $KeeperTask" }
+        Title = "Start-ScheduledTask $KeeperTask и ожидание State Running"
+        Plan  = { "Start-ScheduledTask $KeeperTask; wait up to $KeeperWaitSeconds s for task State Running (refusal otherwise)" }
         Run   = {
-            try { Start-ScheduledTask -TaskName $KeeperTask }
+            try { $keeperStarted = Start-Keeper }
             catch { Stop-Migrate "Start-ScheduledTask ${KeeperTask}: $($_.Exception.Message)" }
+            if (-not $keeperStarted) {
+                Stop-Migrate "задача $KeeperTask не перешла в Running за $KeeperWaitSeconds с — без держалки дистрибутив погаснет по простою; Get-ScheduledTask $KeeperTask, журнал Планировщика"
+            }
+            Write-Output "держалка $KeeperTask работает"
         }
     },
     [pscustomobject]@{
@@ -1049,7 +1089,7 @@ if ($Install) {
     function Resume-Keeper {
         if (-not $engineRunning) { return $false }
         if (-not (Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue)) { return $false }
-        $null = Start-ScheduledTask -TaskName $KeeperTask
+        if (-not (Start-Keeper)) { throw "задача $KeeperTask не перешла в Running за $KeeperWaitSeconds с" }
         return $true
     }
     # Отказ после остановки дистрибутива: прежнее состояние возвращается
@@ -1270,6 +1310,7 @@ else { Add-Result 'FAIL' 'дистрибутив зарегистрирован'
 $keeper = Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue
 if (-not $keeper) {
     Add-Result 'FAIL' 'задача держалки' "нет задачи $KeeperTask"
+    Add-Result 'FAIL' 'держалка работает' "нет задачи $KeeperTask"
 }
 else {
     $problems = New-Object System.Collections.Generic.List[string]
@@ -1282,6 +1323,10 @@ else {
     if ($keeperArgs -notmatch ('(^|\s)-d\s+' + [regex]::Escape($Distro) + '(\s|$)')) { $problems.Add("действие не для $Distro") }
     if ($problems.Count) { Add-Result 'FAIL' 'задача держалки' ($problems -join '; ') }
     else { Add-Result 'OK' 'задача держалки' 'AtStartup, S4U, ExecutionTimeLimit 0, AllowStartIfOnBatteries, DontStopIfGoingOnBatteries' }
+    # Свойства задачи не говорят, работает ли она: дистрибутив, поднятый
+    # чужим wsl.exe (restore.sh, обёртка docker), без держалки гаснет по простою.
+    if ([string]$keeper.State -eq 'Running') { Add-Result 'OK' 'держалка работает' "задача $KeeperTask Running" }
+    else { Add-Result 'FAIL' 'держалка работает' "задача $KeeperTask в состоянии $($keeper.State) — без неё дистрибутив гаснет по простою; Start-ScheduledTask $KeeperTask" }
 }
 
 $measurePort = 0
