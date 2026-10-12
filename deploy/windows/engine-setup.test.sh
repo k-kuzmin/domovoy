@@ -830,8 +830,13 @@ stop_stub() {
 }
 
 measure() {
-  local shell="$1" port="$2"
   rm -f "$work/measure.log"
+  measure_append "$@"
+}
+
+# Замер в существующий журнал — без удаления прежнего файла.
+measure_append() {
+  local shell="$1" port="$2"
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
     -Port "$port" -TimeoutMinutes 0.15 -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")"
 }
@@ -858,6 +863,21 @@ test_measure_boot() {
     done
     if log_has 'first_200=нет'; then fail "$name" "ответ формы стека не засчитан"; return; fi
     if log_has 'foreign='; then fail "$name" "ответ формы стека назван чужим"; return; fi
+    ok "$name"
+
+    # Журнал прежней версии — UTF-8 без BOM: BOM дописывается в начало,
+    # прежняя строка цела байт в байт, второй замер BOM не повторяет.
+    name="measure_boot_adds_bom_to_old_log/$shell"
+    local old_line='os_start=2026-01-01T00:00:00; result=нет ответа 200 за 30 мин'
+    printf '%s\r\n' "$old_line" >"$work/measure.log"
+    start_stub '{"status":"healthy"}' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    measure_append "$shell" "$port"
+    [ "$(head -c 3 "$work/measure.log" | od -An -tx1 | tr -d ' \n')" = 'efbbbf' ] || { stop_stub; fail "$name" "в начале журнала нет BOM"; return; }
+    [ "$(tail -c +4 "$work/measure.log" | head -n 1 | tr -d '\r')" = "$old_line" ] || { stop_stub; fail "$name" "прежняя строка изменилась"; return; }
+    measure_append "$shell" "$port"
+    stop_stub
+    [ "$(tail -c +4 "$work/measure.log" | head -c 3 | od -An -tx1 | tr -d ' \n')" != 'efbbbf' ] || { fail "$name" "BOM записан дважды"; return; }
+    [ "$(grep -c 'result=ok' "$work/measure.log")" = 2 ] || { fail "$name" "в журнале не две новые строки"; sed 's/^/    | /' "$work/measure.log"; return; }
     ok "$name"
 
     name="measure_boot_marks_foreign_listener/$shell"

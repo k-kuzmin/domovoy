@@ -168,9 +168,17 @@ if ($dir -and -not (Test-Path -LiteralPath $dir -PathType Container)) {
     $null = New-Item -ItemType Directory -Path $dir -Force
 }
 # UTF-8 с BOM: Get-Content в Windows PowerShell 5.1 без BOM читает файл в
-# кодировке ANSI, и русские слова строки приходят в чужой кодировке. BOM
-# пишется только в начало нового файла — AppendAllText кладёт его, когда
-# файла нет, и не повторяет при дописывании.
+# кодировке ANSI, и русские слова строки приходят в чужой кодировке.
+# AppendAllText кладёт BOM, только когда файла нет. Журнал прежней версии
+# (UTF-8 без BOM) получает BOM в начало: байты строк не перекодируются —
+# они и так UTF-8.
+if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+    $existing = [IO.File]::ReadAllBytes($LogPath)
+    $hasBom = $existing.Length -ge 3 -and $existing[0] -eq 0xEF -and $existing[1] -eq 0xBB -and $existing[2] -eq 0xBF
+    if ($existing.Length -and -not $hasBom) {
+        [IO.File]::WriteAllBytes($LogPath, [byte[]](@(0xEF, 0xBB, 0xBF) + $existing))
+    }
+}
 [IO.File]::AppendAllText($LogPath, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($true)))
 Write-Output $line
 if ($first200) { exit 0 }
