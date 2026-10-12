@@ -166,7 +166,7 @@ Home Assistant объявлен в том же `docker-compose.yml`, но под
 видит.
 
 ```bash
-docker compose --profile ha up -d --build
+docker compose --profile ha up -d --build --wait
 docker compose --profile ha down
 ```
 
