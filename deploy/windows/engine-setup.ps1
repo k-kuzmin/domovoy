@@ -24,7 +24,9 @@
        вместе с его суммой проверку пройдёт; уже зарегистрированный не
        трогается;
     2. провижининг внутри под root — deploy/windows/provision-engine.sh:
-       systemd, Docker Engine с compose, git, safe.directory клона. Если
+       systemd, Docker Engine с compose, git, safe.directory клона, журнал
+       systemd на диске со сбросом раз в 10 с и драйвер логов docker
+       journald (действует после перезапуска дистрибутива ниже). Если
        systemd ещё не запущен, первый проход только включает его, затем
        wsl --terminate domovoy-engine (только этот дистрибутив) и второй
        проход под systemd;
@@ -62,6 +64,11 @@
   дистрибутива заходит, только если он уже работает. Каждое звено — строка
   OK / FAIL / SKIP; код 0 — только если все OK. SKIP — «не проверено»
   (дистрибутив не запущен, нет прав прочитать правило), код тоже ненулевой.
+  Внутри работающего дистрибутива — юниты автозапуска, журнал systemd на
+  диске со сбросом не реже 10 с (systemd-analyze cat-config), драйвер логов
+  docker journald (docker info), restart: unless-stopped и драйвер логов
+  journald у контейнеров проекта (созданные до смены драйвера — FAIL с
+  подсказкой --force-recreate), порт замера.
   Исключение — звено «/health из ЛВС»: в mirrored хост не достаёт до
   дистрибутива по своему адресу в ЛВС, поэтому оно всегда SKIP, в итог и
   код не входит, а проверяется с устройства в домашней сети.
@@ -311,6 +318,68 @@ function Get-VmFirewallProblems($Setting) {
     $found = @()
     if ([string]$Setting.Enabled -ne 'True') { $found += "Enabled $($Setting.Enabled), нужен True" }
     if ([string]$Setting.DefaultInboundAction -ne 'Block') { $found += "DefaultInboundAction $($Setting.DefaultInboundAction), нужен Block" }
+    return $found
+}
+
+# Интервал systemd в секундах: «10», «10s», «1min 30s», «500ms»; $null —
+# не разобран. Единицы — systemd.time(7).
+function ConvertFrom-SystemdTimeSpan([string]$Text) {
+    $units = @{ '' = 1; 'us' = 1e-6; 'usec' = 1e-6; 'ms' = 1e-3; 'msec' = 1e-3; 's' = 1; 'sec' = 1; 'second' = 1; 'seconds' = 1
+        'm' = 60; 'min' = 60; 'minute' = 60; 'minutes' = 60; 'h' = 3600; 'hr' = 3600; 'hour' = 3600; 'hours' = 3600 }
+    $rest = $Text.Trim()
+    if (-not $rest) { return $null }
+    $total = 0.0
+    while ($rest) {
+        $m = [regex]::Match($rest, '^(\d+(?:\.\d+)?)\s*([a-z]*)\s*')
+        if (-not $m.Success -or -not $units.ContainsKey($m.Groups[2].Value)) { return $null }
+        $total += [double]::Parse($m.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture) * $units[$m.Groups[2].Value]
+        $rest = $rest.Substring($m.Length)
+    }
+    return $total
+}
+
+# Настройка журнала systemd по выводу systemd-analyze cat-config
+# systemd/journald.conf: нужны Storage=persistent и SyncIntervalSec не
+# больше 10 с. Действует последнее присваивание (drop-in читаются после
+# основного файла); строки # и ; — комментарии; без SyncIntervalSec или с
+# пустым значением — 5 мин по умолчанию. Пустой список — замечаний нет.
+function Get-JournaldProblems([string]$Text) {
+    $storage = ''
+    $sync = ''
+    foreach ($raw in ($Text -split "`r?`n")) {
+        $line = $raw.Trim()
+        if (-not $line -or $line.StartsWith('#') -or $line.StartsWith(';') -or $line.StartsWith('[')) { continue }
+        $m = [regex]::Match($line, '^(Storage|SyncIntervalSec)\s*=\s*(.*)$')
+        if (-not $m.Success) { continue }
+        if ($m.Groups[1].Value -eq 'Storage') { $storage = $m.Groups[2].Value.Trim() } else { $sync = $m.Groups[2].Value.Trim() }
+    }
+    $found = @()
+    if ($storage -ne 'persistent') {
+        $shown = if ($storage) { $storage } else { 'не задан (auto)' }
+        $found += "Storage $shown, нужен persistent"
+    }
+    if (-not $sync) { $found += 'SyncIntervalSec не задан (по умолчанию 5 мин), нужен не больше 10 с' }
+    else {
+        $seconds = ConvertFrom-SystemdTimeSpan $sync
+        if ($null -eq $seconds) { $found += "SyncIntervalSec «$sync» не разобран" }
+        elseif ($seconds -gt 10) { $found += "SyncIntervalSec $sync, нужен не больше 10 с" }
+    }
+    return $found
+}
+
+# Драйвер логов контейнеров проекта по строкам docker inspect
+# «/имя драйвер»: каждый должен быть journald. Строк меньше, чем
+# контейнеров, — замечание, а не OK: пустой ответ не проверил ничего.
+function Get-ContainerLogProblems([string[]]$Names, [string[]]$InspectLines) {
+    $lines = @($InspectLines | Where-Object { $_ -and $_.Trim() })
+    $found = @()
+    if ($lines.Count -ne @($Names).Count) {
+        $found += "драйверов логов $($lines.Count) из $(@($Names).Count) контейнеров"
+    }
+    $bad = @($lines | Where-Object { $_.Trim() -notmatch '\sjournald$' } | ForEach-Object { $_.Trim().TrimStart('/') })
+    if ($bad.Count) {
+        $found += ('не journald: {0} — созданы до смены драйвера; пересоздать: docker compose --profile ha up -d --force-recreate (через обёртку)' -f ($bad -join '; '))
+    }
     return $found
 }
 
@@ -894,7 +963,10 @@ catch {
 }
 
 $running = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
-$inner = @($EngineUnits | ForEach-Object { "$_ в автозапуске" }) + @('restart: unless-stopped у контейнеров проекта', 'порт замера = опубликованный порт api')
+$journalLink = 'журнал systemd на диске, сброс ≤ 10 с'
+$driverLink = 'docker: драйвер логов journald'
+$containerLogLink = 'логи контейнеров проекта в journald'
+$inner = @($EngineUnits | ForEach-Object { "$_ в автозапуске" }) + @($journalLink, $driverLink, 'restart: unless-stopped у контейнеров проекта', $containerLogLink, 'порт замера = опубликованный порт api')
 if (-not $running) {
     foreach ($link in $inner) { Add-Result 'SKIP' $link 'не проверено — дистрибутив не запущен' }
 }
@@ -911,14 +983,32 @@ else {
         elseif ($needActive -and $activeResult.Text -ne 'active') { Add-Result 'FAIL' "$unit в автозапуске" "is-enabled enabled, но is-active «$isActive» — юнит упал на загрузке: systemctl status $unit" }
         else { Add-Result 'OK' "$unit в автозапуске" "is-enabled enabled; is-active $isActive" }
     }
+    # Логи переживают выключение хоста: журнал systemd на диске со сбросом
+    # раз в 10 с (provision-engine.sh, ensure_journald) — по действующей
+    # настройке, с drop-in, а не по одному файлу.
+    $journalConfig = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'systemd-analyze', 'cat-config', 'systemd/journald.conf')
+    if ($journalConfig.Code -ne 0) { Add-Result 'FAIL' $journalLink "systemd-analyze cat-config: код $($journalConfig.Code): $(Format-Native $journalConfig)" }
+    else {
+        $journalProblems = @(Get-JournaldProblems $journalConfig.Text)
+        if ($journalProblems.Count) { Add-Result 'FAIL' $journalLink (($journalProblems -join '; ') + ' — engine-setup.ps1 -Install') }
+        else { Add-Result 'OK' $journalLink 'Storage=persistent, SyncIntervalSec ≤ 10 с' }
+    }
+    # Драйвер движка (provision-engine.sh, ensure_docker_log_driver) —
+    # действующий, после перезапуска docker.
+    $loggingDriver = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'info', '--format', '{{.LoggingDriver}}')
+    if ($loggingDriver.Code -ne 0) { Add-Result 'FAIL' $driverLink "docker info: код $($loggingDriver.Code): $(Format-Native $loggingDriver)" }
+    elseif ($loggingDriver.Text -ne 'journald') { Add-Result 'FAIL' $driverLink "драйвер «$($loggingDriver.Text)» — engine-setup.ps1 -Install, затем перезапуск дистрибутива" }
+    else { Add-Result 'OK' $driverLink 'journald' }
     $label = "label=com.docker.compose.project=$project"
     $listed = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '-a', '--filter', $label, '--format', '{{.Names}}')
     $names = @($listed.Lines | Where-Object { $_ })
     if ($listed.Code -ne 0) {
         Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "docker ps: код $($listed.Code): $(Format-Native $listed)"
+        Add-Result 'FAIL' $containerLogLink "docker ps: код $($listed.Code): $(Format-Native $listed)"
     }
     elseif (-not $names.Count) {
         Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' "контейнеров проекта $project нет"
+        Add-Result 'FAIL' $containerLogLink "контейнеров проекта $project нет"
     }
     else {
         $inspected = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker', 'inspect', '-f', '{{.Name}} {{.HostConfig.RestartPolicy.Name}}') + $names)
@@ -931,6 +1021,13 @@ else {
         }
         elseif ($bad.Count) { Add-Result 'FAIL' 'restart: unless-stopped у контейнеров проекта' ($bad -join '; ') }
         else { Add-Result 'OK' 'restart: unless-stopped у контейнеров проекта' ('{0} контейнеров' -f @($policies).Count) }
+        # Драйвер задаётся контейнеру при создании: созданные до смены
+        # драйвера движка остаются на json-file, пока их не пересоздать.
+        $logConfigs = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--exec', 'docker', 'inspect', '-f', '{{.Name}} {{.HostConfig.LogConfig.Type}}') + $names)
+        $logProblems = @(Get-ContainerLogProblems $names @($logConfigs.Text -split "`r?`n"))
+        if ($logConfigs.Code -ne 0) { Add-Result 'FAIL' $containerLogLink "docker inspect: код $($logConfigs.Code): $(Format-Native $logConfigs)" }
+        elseif ($logProblems.Count) { Add-Result 'FAIL' $containerLogLink ($logProblems -join '; ') }
+        else { Add-Result 'OK' $containerLogLink ('{0} контейнеров' -f $names.Count) }
     }
     $apiPorts = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '--filter', $label, '--filter', 'label=com.docker.compose.service=api', '--format', '{{.Ports}}')
     $published = [regex]::Match($apiPorts.Text, ':(\d+)->\d+/tcp')

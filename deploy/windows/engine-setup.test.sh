@@ -164,6 +164,76 @@ test_mss_clamp_unit() {
   ok "$name"
 }
 
+# Журнал systemd на диске со сбросом раз в 10 с: drop-in во временном
+# каталоге, systemctl подменён. Повтор с тем же текстом файл не трогает и
+# systemctl не зовёт; чужой файл каталога остаётся. Имя через дефис: форма
+# domovoy.<суффикс> похожа на имя хоста для правила gitleaks. main вызывает
+# функцию.
+test_journald_dropin() {
+  local name=journald_dropin dir="$work/journald.conf.d" log="$work/systemctl-journald.log" file before
+  dropin() {
+    (
+      # shellcheck source=/dev/null
+      . "$here/provision-engine.sh"
+      systemctl() { printf '%s\n' "$*" >>"$log"; }
+      ensure_journald "$dir"
+    )
+  }
+  rm -rf -- "$dir" "$log"
+  mkdir -p "$dir"
+  printf '[Journal]\nSystemMaxUse=example\n' >"$dir/00-foreign.conf"
+  cp "$dir/00-foreign.conf" "$work/foreign.before"
+  dropin || { fail "$name" "код $?"; return; }
+  file="$dir/domovoy-journal.conf"
+  [ -f "$file" ] || { fail "$name" "нет $file"; ls -la "$dir" | sed 's/^/    | /'; return; }
+  [ "$(cat "$file")" = $'[Journal]\nStorage=persistent\nSyncIntervalSec=10s' ] || { fail "$name" "текст drop-in не тот"; sed 's/^/    | /' "$file"; return; }
+  [ "$(tail -c 1 "$file" | od -An -tx1 | tr -d ' \n')" = 0a ] || { fail "$name" "drop-in не кончается переводом строки"; return; }
+  [ "$(tr '\n' '|' <"$log")" = 'restart systemd-journald.service|' ] || { fail "$name" "вызовы systemctl не те"; sed 's/^/    | /' "$log"; return; }
+  before="$(od -An -tx1 "$file")"
+  rm -f "$log"
+  dropin || { fail "$name" "повтор: код $?"; return; }
+  [ "$(od -An -tx1 "$file")" = "$before" ] || { fail "$name" "повтор изменил drop-in"; return; }
+  [ ! -s "$log" ] || { fail "$name" "повтор зовёт systemctl"; sed 's/^/    | /' "$log"; return; }
+  cmp -s "$dir/00-foreign.conf" "$work/foreign.before" || { fail "$name" "чужой файл каталога изменён"; return; }
+  # Каталога нет — создаётся.
+  rm -rf -- "$dir" "$log"
+  dropin || { fail "$name" "без каталога: код $?"; return; }
+  [ -f "$file" ] || { fail "$name" "без каталога drop-in не записан"; return; }
+  sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_journald' || { fail "$name" "main не вызывает ensure_journald"; return; }
+  ok "$name"
+}
+
+# Драйвер логов движка — journald в /etc/docker/daemon.json (временный
+# файл). Нет файла — пишется; уже journald — байты те же; другой драйвер и
+# чужие ключи без log-driver — отказ с кодом 1, файл байт в байт прежний.
+test_docker_log_driver() {
+  local name=docker_log_driver dir="$work/docker-etc" file got code
+  file="$dir/daemon.json"
+  driver() { (. "$here/provision-engine.sh" && ensure_docker_log_driver "$file") >"$work/out" 2>&1; }
+  rm -rf -- "$dir"
+  driver || { fail "$name" "нет файла: код $?"; show_out; return; }
+  got="$(cat "$file")"
+  [ "$got" = '{"log-driver": "journald"}' ] || { fail "$name" "нет файла → «$got»"; return; }
+  cp "$file" "$work/daemon.before"
+  driver || { fail "$name" "уже journald: код $?"; show_out; return; }
+  cmp -s "$file" "$work/daemon.before" || { fail "$name" "уже journald, а файл переписан"; return; }
+  printf '{\n  "log-driver" : "journald",\n  "mtu": 1400\n}\n' >"$file"
+  cp "$file" "$work/daemon.before"
+  driver || { fail "$name" "journald с другими ключами: код $?"; show_out; return; }
+  cmp -s "$file" "$work/daemon.before" || { fail "$name" "journald с другими ключами — файл переписан"; return; }
+  for got in '{"log-driver": "json-file"}' '{"mtu":1400}'; do
+    printf '%s\n' "$got" >"$file"
+    cp "$file" "$work/daemon.before"
+    driver
+    code=$?
+    [ "$code" -eq 1 ] || { fail "$name" "«$got»: код $code, ожидался 1"; show_out; return; }
+    cmp -s "$file" "$work/daemon.before" || { fail "$name" "«$got»: чужая настройка переписана"; return; }
+    grep -qF '"log-driver": "journald"' "$work/out" || { fail "$name" "«$got»: отказ не говорит, что добавить"; show_out; return; }
+  done
+  sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_docker_log_driver' || { fail "$name" "main не вызывает ensure_docker_log_driver"; return; }
+  ok "$name"
+}
+
 # apt-get ждёт чужую блокировку dpkg (unattended-upgrades после старта
 # дистрибутива), а не падает с кодом 100: обёртка apt_get передаёт
 # DPkg::Lock::Timeout, apt-get подменён и пишет аргументы. В install_docker
@@ -684,6 +754,66 @@ test_vm_firewall_problems() {
   ok "$name"
 }
 
+# Звено -Check «журнал systemd на диске, сброс ≤ 10 с»: вывод
+# systemd-analyze cat-config systemd/journald.conf, действует последнее
+# присваивание; без SyncIntervalSec — 5 мин по умолчанию.
+test_journald_config_problems() {
+  local name=journald_config_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $base = "# /etc/systemd/journald.conf`n[Journal]`n#Storage=auto`n#SyncIntervalSec=5m`n`n"
+      $good = $base + "# /etc/systemd/journald.conf.d/domovoy-journal.conf`n[Journal]`nStorage=persistent`nSyncIntervalSec=10s`n"
+      if (@(Get-JournaldProblems $good).Count) { "drop-in не принят: $(Get-JournaldProblems $good)"; exit 1 }
+      foreach ($v in "10", "10s", "10sec", "9500ms", "1s 500ms", "5000000us") {
+        $t = $base + "[Journal]`nStorage=persistent`nSyncIntervalSec=$v`n"
+        if (@(Get-JournaldProblems $t).Count) { "отвергнут SyncIntervalSec=$v"; exit 1 }
+      }
+      $bad = @(
+        ($base + "[Journal]`nStorage=persistent`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=30s`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=1min`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=`n"),
+        ($base + "[Journal]`nStorage=volatile`nSyncIntervalSec=10s`n"),
+        ($base + "[Journal]`nStorage=auto`nSyncIntervalSec=10s`n"),
+        ($base + "[Journal]`nSyncIntervalSec=10s`n"),
+        ($good + "# /etc/systemd/journald.conf.d/zz.conf`n[Journal]`nSyncIntervalSec=5min`n"),
+        ($good + "[Journal]`nStorage=volatile`n"),
+        ($base + "[Journal]`n#Storage=persistent`n;SyncIntervalSec=10s`n")
+      )
+      foreach ($t in $bad) { if (-not @(Get-JournaldProblems $t).Count) { "принято: $($t -replace "`n", "|")"; exit 1 } }
+      $late = $base + "[Journal]`nStorage=volatile`nSyncIntervalSec=5min`n[Journal]`nStorage=persistent`nSyncIntervalSec=10s`n"
+      if (@(Get-JournaldProblems $late).Count) { "последнее присваивание не перекрыло раннее"; exit 1 }' \
+      Get-JournaldProblems ConvertFrom-SystemdTimeSpan
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Звено -Check «логи контейнеров проекта в journald»: строки docker inspect
+# «/имя драйвер» против списка контейнеров; неполный ответ — не OK.
+test_container_log_problems() {
+  local name=container_log_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $names = @("example-api-1", "example-postgres-1")
+      if (@(Get-ContainerLogProblems $names @("/example-api-1 journald", "/example-postgres-1 journald")).Count) { "все journald — не OK"; exit 1 }
+      $p = @(Get-ContainerLogProblems $names @("/example-api-1 journald", "/example-postgres-1 json-file"))
+      if (-not $p.Count) { "json-file принят"; exit 1 }
+      if (($p -join " ") -notmatch "example-postgres-1") { "замечание без имени контейнера: $p"; exit 1 }
+      if (($p -join " ") -notmatch "--force-recreate") { "замечание без подсказки --force-recreate: $p"; exit 1 }
+      if (($p -join " ") -match "example-api-1") { "назван контейнер с journald: $p"; exit 1 }
+      if (-not @(Get-ContainerLogProblems $names @("/example-api-1 journald")).Count) { "неполный ответ принят"; exit 1 }
+      if (-not @(Get-ContainerLogProblems $names @()).Count) { "пустой ответ принят"; exit 1 }' \
+      Get-ContainerLogProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 python_cmd() {
   local candidate
   for candidate in python3 python; do
@@ -800,6 +930,8 @@ test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
 test_mss_clamp_unit
+test_journald_dropin
+test_docker_log_driver
 test_apt_waits_for_lock
 test_no_localhost_url
 test_docker_wsl_passes_arguments
@@ -809,6 +941,8 @@ test_engine_setup_dry_run
 test_uninstall_dry_run_without_rollback
 test_rule_profile_private_only
 test_vm_firewall_problems
+test_journald_config_problems
+test_container_log_problems
 test_native_output_encoding
 test_measure_boot
 
