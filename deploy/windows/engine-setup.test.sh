@@ -9,7 +9,8 @@
 #     API_HTTP_PORT или из значения по умолчанию в docker-compose.yml;
 #   - provision-engine.sh дописывает /etc/wsl.conf, а не затирает его
 #     (функция на временном файле); юнит MSS clamp — текст и вызовы
-#     systemctl (подменён), юнит во временном каталоге;
+#     systemctl (подменён), юнит во временном каталоге; apt-get (подменён)
+#     получает DPkg::Lock::Timeout, в install_docker нет вызовов мимо обёртки;
 #   - -Check и замер стучатся на 127.0.0.1, а не localhost;
 #   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1), профиль
 #     правила firewall и настройка firewall Hyper-V для VM WSL — функциями
@@ -170,6 +171,34 @@ test_mss_clamp_unit() {
   if grep -qx 'daemon-reload' "$log"; then fail "$name" "повтор с тем же юнитом делает daemon-reload"; return; fi
   grep -qx 'enable domovoy-mss-clamp.service' "$log" || { fail "$name" "повтор не включает юнит"; return; }
   sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_mss_clamp' || { fail "$name" "main не вызывает ensure_mss_clamp"; return; }
+  ok "$name"
+}
+
+# apt-get ждёт чужую блокировку dpkg (unattended-upgrades после старта
+# дистрибутива), а не падает с кодом 100: обёртка apt_get передаёт
+# DPkg::Lock::Timeout, apt-get подменён и пишет аргументы. В install_docker
+# нет вызовов apt-get мимо обёртки.
+test_apt_waits_for_lock() {
+  local name=apt_waits_for_lock bin="$work/aptbin" args="$work/apt-args"
+  mkdir -p "$bin"
+  cat >"$bin/apt-get" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >"$args"
+EOF
+  chmod +x "$bin/apt-get"
+  rm -f "$args"
+  # shellcheck source=/dev/null
+  (. "$here/provision-engine.sh" && PATH="$bin:$PATH" apt_get install -y git) || { fail "$name" "код $?"; return; }
+  [ "$(sed -n 1p "$args" 2>/dev/null)" = -o ] && grep -Eqx 'DPkg::Lock::Timeout=[1-9][0-9]*' "$args" \
+    || { fail "$name" "apt-get без -o DPkg::Lock::Timeout"; sed 's/^/    | /' "$args" 2>/dev/null; return; }
+  [ "$(tail -n 3 "$args" | tr '\n' ' ')" = 'install -y git ' ] || { fail "$name" "аргументы не переданы как есть"; sed 's/^/    | /' "$args"; return; }
+  ok "$name"
+
+  name=apt_calls_through_wrapper
+  local body
+  body="$(sed -n '/^install_docker() {/,/^}/p' "$here/provision-engine.sh")"
+  [ "$(grep -c '^  apt_get ' <<<"$body")" -eq 4 ] || { fail "$name" "в install_docker не четыре вызова apt_get"; return; }
+  if grep -n 'apt-get' <<<"$body" >"$work/out"; then fail "$name" "apt-get мимо обёртки"; show_out; return; fi
   ok "$name"
 }
 
@@ -990,6 +1019,7 @@ test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
 test_mss_clamp_unit
+test_apt_waits_for_lock
 test_no_localhost_url
 test_docker_wsl_passes_arguments
 test_ps1_encoding_and_parse

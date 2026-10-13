@@ -54,10 +54,21 @@ ensure_wsl_conf() {
   rm -f -- "$tmp"
 }
 
+# apt_get <аргументы> — apt-get, ждущий чужую блокировку dpkg, а не падающий
+# сразу. После старта дистрибутива apt-daily-upgrade.service запускает
+# unattended-upgrades, и тот держит /var/lib/dpkg/lock-frontend минутами:
+# apt-get install без ожидания выходит с кодом 100 «Could not get lock».
+# DPkg::Lock::Timeout — штатный ключ apt (configure-index: dpkg::lock::timeout);
+# по истечении apt-get падает так же, как без ключа. Блокировку списков
+# /var/lib/apt/lists/lock у apt-get update ключ не ждёт — проверено на apt 2.8.
+apt_get() {
+  apt-get -o DPkg::Lock::Timeout=900 "$@"
+}
+
 install_docker() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y ca-certificates curl git
+  apt_get update
+  apt_get install -y ca-certificates curl git
   install -m 0755 -d /etc/apt/keyrings
   if [ ! -s /etc/apt/keyrings/docker.asc ]; then
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -71,8 +82,8 @@ install_docker() {
   if [ "$(cat /etc/apt/sources.list.d/docker.list 2>/dev/null || true)" != "$line" ]; then
     printf '%s\n' "$line" >/etc/apt/sources.list.d/docker.list
   fi
-  apt-get update
-  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_get update
+  apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
 
 # ensure_mss_clamp — юнит systemd, ставящий правило при каждом старте
