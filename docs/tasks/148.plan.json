@@ -194,7 +194,28 @@
       "общий механизм: plan.sh validate проверяет каждый план задачи и исторические фикстуры"
     ],
     "executor": "субагенты: три среза параллельно, каждый step-implement с isolation worktree. Срез «форма и валидатор» — scripts/plan-schema.json, scripts/plan.sh, scripts/plan.test.sh; контракт: поля fork_card.slices[{name, files, contract, after}] и fork_card.single_slice_reason, check_slices без порога и без списка исключений, первой строкой выход при непустом REF (--at), отказы с префиксом «срезы:»; after: нет. Срез «напоминание» — .claude/hooks/rules-map.json, .claude/hooks/tests/test_rules_map.py; контракт: правило implement-slices с doc docs/rules/implement.md, note ведёт в docs/rules/implement.md, раздел «Склейка срезов»; after: нет. Срез «тексты» — docs/rules/implement.md, docs/rules/plan.md, .claude/CLAUDE.md, docs/pipeline.md; контракт: раздел implement.md называется «Склейка срезов», имена полей, отсечка по --at и правила — из контрактов двух других срезов; after: нет. Оркестратор — журнал и перевод этого плана в новую форму (поле slices по этой раскладке) после переноса среза «форма и валидатор»; до переноса поле slices в этом плане не проходит действующую схему",
-    "fork": false
+    "fork": false,
+    "slices": [
+      {
+        "name": "форма и валидатор",
+        "files": ["scripts/plan-schema.json", "scripts/plan.sh", "scripts/plan.test.sh"],
+        "contract": "поля fork_card.slices[{name, files, contract, after}] и fork_card.single_slice_reason; check_slices без порога и без списка исключений, первой строкой выход при непустом REF (--at); отказы с префиксом «срезы:»",
+        "after": []
+      },
+      {
+        "name": "напоминание",
+        "files": [".claude/hooks/rules-map.json", ".claude/hooks/tests/test_rules_map.py"],
+        "contract": "правило implement-slices с doc docs/rules/implement.md; note ведёт в docs/rules/implement.md, раздел «Склейка срезов»",
+        "after": []
+      },
+      {
+        "name": "тексты",
+        "files": ["docs/rules/implement.md", "docs/rules/plan.md", ".claude/CLAUDE.md", "docs/pipeline.md"],
+        "contract": "раздел implement.md называется «Склейка срезов»; имена полей, отсечка по --at и правила — из контрактов двух других срезов",
+        "after": []
+      }
+    ],
+    "single_slice_reason": ""
   },
   "files": [
     {
