@@ -49,7 +49,17 @@
     {
       "path": "docker-compose.yml",
       "line": 116,
-      "observation": "У homeassistant нет healthcheck (116–132); healthcheck есть у postgres (38) и api (107). Перехода homeassistant в healthy у движка не бывает. Драйвер логов в compose не задан."
+      "observation": "У homeassistant нет healthcheck (116–132); healthcheck есть у postgres (38) и api (107). Перехода homeassistant в healthy у движка не бывает. Драйвер логов в compose не задан. Образ ghcr.io/home-assistant/home-assistant:2026.10.1 своего healthcheck не несёт (docker image inspect {{json .Config.Healthcheck}} → null), а в истории сборки (docker history --no-trunc) есть слой apk add … curl … и база python:3.14-alpine — curl и python3 в образе есть. Проверено чтением метаданных образа в движке 2026-10-13, контейнер не запускался."
+    },
+    {
+      "path": "ops/backup/backup.test.sh",
+      "line": 798,
+      "observation": "start_source_stack поднимает исходный стек через dcs (строка 99: --profile ha) с up -d --build --wait --wait-timeout 300 — с healthcheck у homeassistant этот шаг начнёт ждать и HA. ci-heavy.yml:88 поднимает стек без профиля ha — HA там не стартует; restore.sh ждёт --wait только postgres (219)."
+    },
+    {
+      "path": "docker-compose.override.example.yml",
+      "line": 30,
+      "observation": "Блок homeassistant в примере переопределения закомментирован и задаёт только devices; healthcheck, сети и порты HA он не трогает."
     },
     {
       "path": "ops/backup/install-schedule.ps1",
@@ -83,7 +93,7 @@
     }
   ],
   "approach": {
-    "summary": "Три логических изменения, три коммита в этом порядке. (1) Снять путь через Docker Desktop. engine-setup.ps1: убрать режим -Migrate целиком (блок 597–949, Find-GitBash, Test-WslBash, Invoke-Passthru, Wait-EngineDocker, Wait-DesktopGone, Get-BackupNames, Get-RestoreArgs), все Desktop-функции (478–590) и параметры -DockerSettingsDir, -StartupRegistryRoot; Start-Keeper остаётся. -Uninstall: стек stop (если дистрибутив работает) → снять задачи domovoy-engine и domovoy-measure-boot → снять расписание бэкапа install-schedule.ps1 -Uninstall (без движка задача ночью будила бы WSL — та же причина, что в нынешнем отказе 1068–1070) → wsl --terminate → правило firewall → .wslconfig из копии или по отметке; никакого отката, дистрибутив с томами не удаляется, текст в конце — только про wsl --unregister руками владельца и wsl --shutdown для применения .wslconfig. -Check: звенья «Docker Desktop не запущен» и «автозапуск Docker Desktop при входе» удаляются. Шапка и финальный текст -Install переписываются без Desktop: mirrored применяется после wsl --shutdown, который -Install по-прежнему не делает (гасит все дистрибутивы пользователя), — его выполняет владелец по README. install-schedule.ps1: параметры -LogonType и -BashPath, Resolve-Bash, Find-GitBash, Test-WslBash и ветка Interactive удаляются, задача всегда S4U (вывод сухого прогона «LogonType: S4U» остаётся — это свойство принципала); engine-setup.ps1 перестаёт передавать -LogonType. (2) Логи через journald. provision-engine.sh получает ensure_journald (drop-in /etc/systemd/journald.conf.d/domovoy-journal.conf — имя через дефис: форма domovoy.<суффикс> ловится правилом gitleaks domovoy-real-hostname: [Journal] Storage=persistent, SyncIntervalSec=10s; путь аргументом, пишется только при отличии) и ensure_docker_log_driver (/etc/docker/daemon.json: нет файла — пишется {\"log-driver\": \"journald\"}; уже journald — не трогается; иной log-driver или иное содержимое — отказ с кодом 1, чужая настройка не переписывается, как .wslconfig). Применяет их перезапуск дистрибутива, который -Install и так делает после провижининга. Драйвер действует на новые контейнеры: на нынешнем хосте контейнеры стека пересоздаются один раз командой README (docker compose --profile ha up -d --force-recreate через обёртку), на новом ПК их создаёт restore.sh уже под journald. -Check внутри работающего дистрибутива получает три звена: «docker: драйвер логов journald» (docker info {{.LoggingDriver}}), «журнал systemd на диске, сброс ≤ 10 с» (systemd-analyze cat-config systemd/journald.conf, действует последнее присваивание Storage= и SyncIntervalSec=, единицы us/ms/s/min) и «логи контейнеров проекта в journald» (docker inspect {{.HostConfig.LogConfig.Type}}; FAIL с подсказкой --force-recreate). Разбор — чистыми функциями Get-JournaldProblems и Get-ContainerLogProblems. docker logs с драйвером journald читает сам dockerd. (3) Хронология загрузки. Новый deploy/windows/boot-probe.sh (внутри дистрибутива под root, аргумент — имя проекта) печатает строки key=value: distro_start (время старта PID 1, ps -o lstart), docker_active (systemctl show docker.service -p ActiveEnterTimestamp), по каждому контейнеру проекта name, started_at ({{.State.StartedAt}}, UTC) и health ({{.State.Health.Status}} или none). measure-boot.ps1 получает -Distro (по умолчанию domovoy-engine), -Project и -WslExe (по умолчанию System32\\wsl.exe; тест подменяет его, чтобы видеть вызовы); -Install регистрирует их в аргументах задачи, -Check сверяет -Project с COMPOSE_PROJECT_NAME. Каждый опрос (-IntervalSeconds): /health (200 формы стека или 503 с телом {\"status\":\"unhealthy\"} — статус; иной 200 — чужой слушатель, как сейчас); wsl.exe --list --running --quiet — и только если дистрибутив уже работает, wsl.exe -d <Distro> -u root --cd <клон> --exec bash deploy/windows/boot-probe.sh <Project>: замер сам дистрибутив не поднимает. Журнал пишется событиями по мере наступления, строка на событие с меткой загрузки boot=<os_start>: os_start (с last_boot, fw_post_ms, port), distro_start, docker_active, container_start name=…, container_healthy name=… (момент — опрос, на котором впервые увиден healthy, точность -IntervalSeconds; у контейнера без healthcheck — строка container_healthy name=… healthcheck=нет с моментом running), health status=… при каждой смене статуса /health, затем итоговая строка в нынешней форме (first_response, first_200, result). Моменты изнутри ВМ (UTC) переводятся в местное время Windows, у каждой строки src=windows|engine и секунды от os_start. Опрос кончается, когда /health healthy и все контейнеры с healthcheck healthy, или когда статус /health и состояния контейнеров не менялись -StableMinutes (5) подряд, или по -TimeoutMinutes (30). Разбор вывода зонда и смена статусов — чистые функции (ConvertFrom-BootProbe, Get-HealthStatus) для проверки через AST. README: один путь для нового ПК (предусловия → клон, .env и config/* из своего хранилища, носитель BACKUP_DIR → -Install -DryRun, -Install → wsl --shutdown и Start-ScheduledTask domovoy-engine → restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<последний domovoy-backup-*> внутри дистрибутива → -Check → функция docker() в ~/.bashrc), где читать логи (docker logs через обёртку; journalctl CONTAINER_NAME=<имя> внутри дистрибутива, в том числе за прошлый запуск) и хронологию (формат событий measure-boot.log), разовое пересоздание контейнеров на нынешнем хосте, -Uninstall без отката. 0028 дополняется датированной записью: путь через Desktop снят (владелец удаляет Desktop, переезд выполнен), логи — journald с диском и сбросом 10 с, хронология загрузки — measure-boot.",
+    "summary": "Три логических изменения, три коммита в этом порядке. (1) Снять путь через Docker Desktop. engine-setup.ps1: убрать режим -Migrate целиком (блок 597–949, Find-GitBash, Test-WslBash, Invoke-Passthru, Wait-EngineDocker, Wait-DesktopGone, Get-BackupNames, Get-RestoreArgs), все Desktop-функции (478–590) и параметры -DockerSettingsDir, -StartupRegistryRoot; Start-Keeper остаётся. -Uninstall: стек stop (если дистрибутив работает) → снять задачи domovoy-engine и domovoy-measure-boot → снять расписание бэкапа install-schedule.ps1 -Uninstall (без движка задача ночью будила бы WSL — та же причина, что в нынешнем отказе 1068–1070) → wsl --terminate → правило firewall → .wslconfig из копии или по отметке; никакого отката, дистрибутив с томами не удаляется, текст в конце — только про wsl --unregister руками владельца и wsl --shutdown для применения .wslconfig. -Check: звенья «Docker Desktop не запущен» и «автозапуск Docker Desktop при входе» удаляются. Шапка и финальный текст -Install переписываются без Desktop: mirrored применяется после wsl --shutdown, который -Install по-прежнему не делает (гасит все дистрибутивы пользователя), — его выполняет владелец по README. install-schedule.ps1: параметры -LogonType и -BashPath, Resolve-Bash, Find-GitBash, Test-WslBash и ветка Interactive удаляются, задача всегда S4U (вывод сухого прогона «LogonType: S4U» остаётся — это свойство принципала); engine-setup.ps1 перестаёт передавать -LogonType. (2) Логи через journald. provision-engine.sh получает ensure_journald (drop-in /etc/systemd/journald.conf.d/domovoy-journal.conf — имя через дефис: форма domovoy.<суффикс> ловится правилом gitleaks domovoy-real-hostname: [Journal] Storage=persistent, SyncIntervalSec=10s; путь аргументом, пишется только при отличии) и ensure_docker_log_driver (/etc/docker/daemon.json: нет файла — пишется {\"log-driver\": \"journald\"}; уже journald — не трогается; иной log-driver или иное содержимое — отказ с кодом 1, чужая настройка не переписывается, как .wslconfig). Применяет их перезапуск дистрибутива, который -Install и так делает после провижининга. Драйвер действует на новые контейнеры: на нынешнем хосте контейнеры стека пересоздаются один раз командой README (docker compose --profile ha up -d --force-recreate через обёртку), на новом ПК их создаёт restore.sh уже под journald. -Check внутри работающего дистрибутива получает три звена: «docker: драйвер логов journald» (docker info {{.LoggingDriver}}), «журнал systemd на диске, сброс ≤ 10 с» (systemd-analyze cat-config systemd/journald.conf, действует последнее присваивание Storage= и SyncIntervalSec=, единицы us/ms/s/min) и «логи контейнеров проекта в journald» (docker inspect {{.HostConfig.LogConfig.Type}}; FAIL с подсказкой --force-recreate). Разбор — чистыми функциями Get-JournaldProblems и Get-ContainerLogProblems. docker logs с драйвером journald читает сам dockerd. (3) Хронология загрузки. Новый deploy/windows/boot-probe.sh (внутри дистрибутива под root, аргумент — имя проекта) печатает строки key=value: distro_start (время старта PID 1, ps -o lstart), docker_active (systemctl show docker.service -p ActiveEnterTimestamp), по каждому контейнеру проекта name, started_at ({{.State.StartedAt}}, UTC) и health ({{.State.Health.Status}} или none). measure-boot.ps1 получает -Distro (по умолчанию domovoy-engine), -Project и -WslExe (по умолчанию System32\\wsl.exe; тест подменяет его, чтобы видеть вызовы); -Install регистрирует их в аргументах задачи, -Check сверяет -Project с COMPOSE_PROJECT_NAME. Каждый опрос (-IntervalSeconds): /health (200 формы стека или 503 с телом {\"status\":\"unhealthy\"} — статус; иной 200 — чужой слушатель, как сейчас); wsl.exe --list --running --quiet — и только если дистрибутив уже работает, wsl.exe -d <Distro> -u root --cd <клон> --exec bash deploy/windows/boot-probe.sh <Project>: замер сам дистрибутив не поднимает. Журнал пишется событиями по мере наступления, строка на событие с меткой загрузки boot=<os_start>: os_start (с last_boot, fw_post_ms, port), distro_start, docker_active, container_start name=…, container_healthy name=… (момент — опрос, на котором впервые увиден healthy, точность -IntervalSeconds; у контейнера без healthcheck — строка container_healthy name=… healthcheck=нет с моментом running), health status=… при каждой смене статуса /health, затем итоговая строка в нынешней форме (first_response, first_200, result). Моменты изнутри ВМ (UTC) переводятся в местное время Windows, у каждой строки src=windows|engine и секунды от os_start. Опрос кончается, когда /health healthy и все контейнеры с healthcheck healthy, или когда статус /health и состояния контейнеров не менялись -StableMinutes (5) подряд, или по -TimeoutMinutes (30). Разбор вывода зонда и смена статусов — чистые функции (ConvertFrom-BootProbe, Get-HealthStatus) для проверки через AST. Кодировка вывода wsl.exe: measure-boot.ps1 повторяет приём engine-setup.ps1 (WSL_UTF8=1 и Set-NativeOutputEncoding, engine-setup.ps1:269, со ссылкой «та же логика, что»), а разбор списка дистрибутивов убирает все NUL и BOM, а не только по краям — имя сопоставляется и тогда, когда wsl.exe WSL_UTF8 не учитывает и отдаёт UTF-16LE. Отказ зонда (ненулевой код или неполный вывод: дистрибутив уже в списке работающих, а systemd или docker ещё не поднялись) — «нет данных на этом опросе»: замер продолжает опрос, docker_active и container_* пишутся только по появлении данных, частичный вывод (есть distro_start, нет docker) засчитывается построчно. daemon.json с чужими ключами без log-driver (например, {\"mtu\":1400}) не объединяется, а даёт отказ с кодом 1 и текстом, что добавить руками: объединение JSON без jq — своя запись парсера, а файл в дистрибутиве движка создаёт только провижининг. Healthcheck homeassistant (решение владельца 2026-10-13): в docker-compose.yml у сервиса homeassistant — test ['CMD', 'curl', '--fail', '--silent', '--output', '/dev/null', 'http://localhost:8123/manifest.json'] (манифест фронтенда отдаётся без авторизации и после онбординга), interval 30s, timeout 5s, retries 3, start_period 120s — HA стартует дольше api; curl в образе установлен по истории сборки. README: строка таблицы «Стек с Home Assistant» и раздел 159 говорят, что up --wait теперь ждёт и healthy HA. README: один путь для нового ПК (предусловия → клон, .env и config/* из своего хранилища, носитель BACKUP_DIR → -Install -DryRun, -Install → wsl --shutdown и Start-ScheduledTask domovoy-engine → restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<последний domovoy-backup-*> внутри дистрибутива → -Check → функция docker() в ~/.bashrc), где читать логи (docker logs через обёртку; journalctl CONTAINER_NAME=<имя> внутри дистрибутива, в том числе за прошлый запуск) и хронологию (формат событий measure-boot.log), разовое пересоздание контейнеров на нынешнем хосте, -Uninstall без отката. 0028 дополняется датированной записью: путь через Desktop снят (владелец удаляет Desktop, переезд выполнен), логи — journald с диском и сбросом 10 с, хронология загрузки — measure-boot.",
     "rejected": [
       {
         "option": "Драйвер журнала в docker-compose.yml (logging: driver: journald) у каждого сервиса",
@@ -112,17 +122,17 @@
     ]
   },
   "fork_card": {
-    "matches_request": "Да по всем трём пунктам решения владельца, кроме одного места: у homeassistant нет healthcheck (docker-compose.yml:116), и «переход каждого контейнера в healthy» для него буквально невыполним. План в нынешнем виде (вариант A) пишет для него строку container_healthy … healthcheck=нет с моментом running. Это и есть развилка ниже.",
-    "alternative": "Развилка, вопрос владельцу — healthcheck у homeassistant: да или нет. A (нет, как написан план): файлов вне границ нет; хронология HA — момент running, его готовность видна косвенно через смену статуса /health (компонент Home Assistant входит в агрегат health). Но пункт критерия chronology для homeassistant буквально не выполняется, а DoD (.claude/CLAUDE.md) требует буквального выполнения — A означает, что владелец правит этот пункт критерия в issue. B (да): healthcheck в docker-compose.yml (например, curl к :8123 внутри контейнера), в журнале настоящий момент healthy HA, критерий выполняется буквально. Цена B: правка состава стека (группа product, medium) — docker-compose.yml добавляется в files и boundaries, план заново проходит validate и risk; --wait есть только у команды README «Стек с Home Assistant» (docker compose --profile ha up -d --build --wait) — она станет ждать HA; restore.sh поднимает стек без --wait (ops/backup/restore.sh:261, --wait только у postgres на 219) и не изменится; наличие curl в образе HA не проверено. Прочее — не развилки: пересоздание контейнеров руками один раз вместо шага -Install (конечное состояние то же, -Check называет недоделанное); снятие расписания бэкапа в -Uninstall (следует из критерия «никуда не откатывает» и нынешней причины 1068–1070).",
-    "ripple": "Греп по символам: -LogonType передаёт только engine-setup.ps1 (1212, 970) и сценарии backup.test.sh (674, 695, 723); -DockerSettingsDir и -StartupRegistryRoot — только engine-setup.ps1 и engine-setup.test.sh; -Migrate упомянут ещё в README и шапках сценариев. Аргументы задачи замера меняются: регистрация в -Install (1172), сухой прогон (measure.arguments) и звено -Check «задача замера» (1598–1611) — сверка -Project. Драйвер журнала — глобальный переключатель движка: действует на все контейнеры дистрибутива, а не только на стек (греп: в compose и сценариях logging/log-driver не задан нигде). Удаляемые сценарии тестов: test_engine_setup_migrate_dry_run, install_schedule_dry_run_interactive, install_schedule_refuses_other_logon_types, install_schedule_refuses_wsl_bash, Desktop-часть uninstall dry run. Упоминания Desktop вне критерия: ops/backup/backup.sh:186, config/entities.example.yaml:48, docker-compose.override.example.yml:28, 0027 — не трогаются (out_of_scope).",
+    "matches_request": "Да, по всем трём пунктам решения владельца и буквально по критерию: развилка о healthcheck homeassistant решена владельцем 2026-10-13 (вариант B), и переход в healthy пишется для каждого контейнера стека — postgres, api, homeassistant.",
+    "alternative": "Решено владельцем 2026-10-13 — вариант B: healthcheck homeassistant в docker-compose.yml, критерий chronology выполняется буквально. Отвергнутый вариант A (без healthcheck, для HA — момент running и косвенная готовность через /health) требовал бы правки критерия в issue. Цена выбранного: правка состава стека (группа product); команда README «Стек с Home Assistant» и start_source_stack в backup.test.sh (up --wait с профилем ha) ждут healthy HA; restore.sh не меняется (--wait только у postgres, ops/backup/restore.sh:219; стек — без --wait, 261); ci-heavy.yml:88 поднимает стек без профиля ha и не меняется. Прочее — не развилки: пересоздание контейнеров руками один раз вместо шага -Install (конечное состояние то же, -Check называет недоделанное); снятие расписания бэкапа в -Uninstall (следует из критерия «никуда не откатывает» и нынешней причины 1068–1070).",
+    "ripple": "Греп по символам: -LogonType передаёт только engine-setup.ps1 (1212, 970) и сценарии backup.test.sh (674, 695, 723); -DockerSettingsDir и -StartupRegistryRoot — только engine-setup.ps1 и engine-setup.test.sh; -Migrate упомянут ещё в README и шапках сценариев. Аргументы задачи замера меняются: регистрация в -Install (1172), сухой прогон (measure.arguments) и звено -Check «задача замера» (1598–1611) — сверка -Project. Драйвер журнала — глобальный переключатель движка: действует на все контейнеры дистрибутива, а не только на стек (греп: в compose и сценариях logging/log-driver не задан нигде). Удаляемые сценарии тестов: test_engine_setup_migrate_dry_run, install_schedule_dry_run_interactive, install_schedule_refuses_other_logon_types, install_schedule_refuses_wsl_bash, Desktop-часть uninstall dry run. Упоминания Desktop вне критерия: ops/backup/backup.sh:186, config/entities.example.yaml:48, docker-compose.override.example.yml:28, 0027 — не трогаются (out_of_scope). Healthcheck HA: потребители health по грепу --wait|Health.Status|healthy — README (таблица, раздел 159), backup.test.sh:798 (ждёт HA), ci-heavy.yml:88–101 (без профиля ha, проверяет только postgres и api — не меняется), restore.sh:219 (только postgres). Правило синхронизации compose («Сервис, порт или сеть compose») healthcheck не задевает: сервисы, порты и сети те же; docker-compose.override.example.yml (блок homeassistant закомментирован, только devices) правки не требует, и это проверено чтением.",
     "workaround": "Нет. Логи пишутся на диск штатным драйвером и штатной настройкой journald, замер опрашивает штатные источники; // HACK: не требуется.",
     "council_signs": [
       "новая функциональность — хронология загрузки и звенья -Check",
       "глобальный переключатель — драйвер журнала движка для всех контейнеров дистрибутива (греп: logging/log-driver в compose и сценариях не задан)",
       "правка обвязки — docs/decisions/0028-docker-engine-in-wsl.md (группа harness_quality)"
     ],
-    "executor": "Субагент: порог превышен многократно (9 файлов, сотни строк удаления и добавления). Параллелить по файлам нельзя — все три части правят engine-setup.ps1 и engine-setup.test.sh; порядок последовательный: удаление Desktop, затем journald, затем хронология, по коммиту на каждую.",
-    "fork": true
+    "executor": "Субагент: порог превышен многократно (10 файлов, сотни строк удаления и добавления). Параллелить по файлам нельзя — все три части правят engine-setup.ps1 и engine-setup.test.sh; порядок последовательный: удаление Desktop, затем journald, затем healthcheck homeassistant (docker-compose.yml и README — отдельное логическое изменение состава стека), затем хронология, по коммиту на каждую.",
+    "fork": false
   },
   "files": [
     {
@@ -163,7 +173,12 @@
     {
       "path": "README.md",
       "action": "modify",
-      "why": "Убрать переезд и откат на Docker Desktop и Desktop как способ запуска; путь нового ПК; где читать логи и хронологию; разовое пересоздание контейнеров; -Uninstall без отката."
+      "why": "Убрать переезд и откат на Docker Desktop и Desktop как способ запуска; путь нового ПК; где читать логи и хронологию; разовое пересоздание контейнеров; -Uninstall без отката; в разделе «Стек с Home Assistant» и строке таблицы — up --wait теперь ждёт и healthy HA."
+    },
+    {
+      "path": "docker-compose.yml",
+      "action": "modify",
+      "why": "Healthcheck у homeassistant (curl к /manifest.json на :8123, start_period 120s) — решение владельца 2026-10-13: переход HA в healthy становится наблюдаемым. Группа product, medium."
     },
     {
       "path": "docs/decisions/0028-docker-engine-in-wsl.md",
@@ -176,6 +191,7 @@
     "ops/backup/install-schedule.ps1",
     "ops/backup/backup.test.sh",
     "README.md",
+    "docker-compose.yml",
     "docs/decisions/0028-docker-engine-in-wsl.md",
     "docs/tasks/147.*"
   ],
@@ -196,7 +212,7 @@
       "file": "deploy/windows/engine-setup.test.sh",
       "new": true,
       "covers": ["journald-check"],
-      "behavior": "ensure_docker_log_driver: нет daemon.json — появляется {\"log-driver\": \"journald\"}; уже journald — байты те же; иной log-driver или иное содержимое — код 1, файл байт в байт прежний."
+      "behavior": "ensure_docker_log_driver: нет daemon.json — появляется {\"log-driver\": \"journald\"}; уже journald — байты те же; иной log-driver — код 1; чужие ключи без log-driver ({\"mtu\":1400}) — код 1 с текстом, что добавить руками; в обоих отказах файл байт в байт прежний."
     },
     {
       "name": "test_journald_config_problems",
@@ -255,6 +271,20 @@
       "behavior": "С незарегистрированным -Distro замер не вызывает wsl.exe -d (подмена -WslExe фиксирует вызовы), пишет distro_start=нет данных и продолжает хронологию /health."
     },
     {
+      "name": "measure_boot_reads_utf16_wsl_list",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "Подмена -WslExe (.cmd-обёртка над python-сценарием, пишет сырые байты) отдаёт на --list --running --quiet UTF-16LE с BOM независимо от WSL_UTF8, на вызов зонда — UTF-8 с кириллицей в строке ошибки: замер сопоставляет имя дистрибутива, вызывает зонд и пишет distro_start; кириллица в журнале не искажена. Сломанный разбор (NUL только по краям) даёт «дистрибутив не запущен» — сценарий красный."
+    },
+    {
+      "name": "measure_boot_survives_probe_failures",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "Подмена -WslExe: дистрибутив в списке работающих, зонд первые три вызова отвечает кодом 1, затем только distro_start, затем полным выводом. Замер не падает, продолжает опрос, docker_active и container_* появляются в журнале только после вызова с данными, distro_start — один раз; итоговая строка записана."
+    },
+    {
       "name": "uninstall_dry_run_without_rollback",
       "file": "deploy/windows/engine-setup.test.sh",
       "new": true,
@@ -283,6 +313,13 @@
       "behavior": "Существующий сценарий дополняется: measure.arguments содержит -Distro domovoy-engine и -Project <проект>, строка backup не несёт -LogonType."
     },
     {
+      "name": "start_source_stack",
+      "file": "ops/backup/backup.test.sh",
+      "new": false,
+      "covers": ["chronology"],
+      "behavior": "Существующий шаг без правки: dcs up -d --build --wait --wait-timeout 300 с профилем ha теперь ждёт и healthy homeassistant на минимальной конфигурации. Зелёный прогон в ci-heavy.yml:244 доказывает, что healthcheck HA переходит в healthy за предел; сломанная команда проверки (нет curl, неверный путь) роняет шаг."
+    },
+    {
       "name": "test_install_schedule_dry_run",
       "file": "ops/backup/backup.test.sh",
       "new": false,
@@ -300,7 +337,7 @@
     {
       "id": "logs-survive",
       "criterion": "После жёсткого отключения хоста логи api за запуск до выключения читаются, кроме последних секунд до сброса. Проверено на живом хосте.",
-      "method": "Живой прогон владельца: записать время, снять питание, после загрузки внутри дистрибутива journalctl CONTAINER_NAME=<имя контейнера api> --since <время старта прошлого запуска> --until <время отключения>; journalctl -u systemd-journald | grep -i suppressed — пусто.",
+      "method": "Живой прогон владельца именно со снятием питания работающего ПК (не Restart-Computer и не «Перезагрузка»: при них Windows успевает сбросить кэш записи диска ВМ): записать время по часам с секундами, снять питание, после загрузки внутри дистрибутива journalctl CONTAINER_NAME=<имя контейнера api> --since <время старта прошлого запуска> --until <время отключения>; journalctl -u systemd-journald | grep -i suppressed — пусто. Если хвост потерян больше чем на ~10 с — работа останавливается: расхождение пишется в журнал задачи и уходит вопросом владельцу; критерий не подменяется ни -Check, ни прогоном с мягкой перезагрузкой.",
       "evidence": "Последняя строка api прошлого запуска не раньше чем ~10 с до отключения (две метки времени в журнале задачи, без содержимого строк); пустой вывод grep suppressed."
     },
     {
@@ -313,7 +350,7 @@
       "id": "chronology",
       "criterion": "Журнал measure-boot для каждой загрузки содержит моменты старта дистрибутива, docker, каждого контейнера и перехода каждого в healthy, а также смены статуса /health с отметками времени. Проверено перезагрузкой на живом хосте.",
       "method": "Сценарии test_boot_probe_output, test_boot_probe_parse, measure_boot_* ok; живой прогон владельца: перезагрузка и жёсткое отключение, затем строки measure-boot.log с меткой boot= этой загрузки.",
-      "evidence": "В журнале одной загрузки: distro_start, docker_active, container_start и container_healthy на каждый контейнер стека (у homeassistant — healthcheck=нет, пока развилка не решена иначе), health status=… на каждую смену и итоговая строка — с моментами и секундами от os_start."
+      "evidence": "В журнале одной загрузки: distro_start, docker_active, container_start и container_healthy на каждый контейнер стека — postgres, api и homeassistant, у всех с настоящим моментом healthy, health status=… на каждую смену и итоговая строка — с моментами и секундами от os_start."
     },
     {
       "id": "docs",
@@ -376,12 +413,25 @@
       "mitigation": "Отказ с текстом, что именно задано и что нужно; -Install уже обрабатывает ненулевой код провижининга через Stop-Install с возвратом держалки; сценарий test_docker_log_driver."
     },
     {
+      "risk": "Жёсткое отключение теряет запись не только в журнале systemd, но и в кэше записи vhdx на стороне Windows: SyncIntervalSec=10s сбрасывает данные на виртуальный диск ВМ, а не обязательно на физический.",
+      "mitigation": "Не лечится настройкой внутри ВМ, поэтому проверяется только живым снятием питания (приёмка logs-survive); потеря хвоста сверх ~10 с — остановка и вопрос владельцу, без подмены критерия."
+    },
+    {
+      "risk": "Healthcheck homeassistant не успевает: HA стартует минуты, и up --wait в README и в start_source_stack отказывает, или контейнер помечается unhealthy.",
+      "mitigation": "start_period 120s, retries 3 при interval 30s; доказательство — зелёный backup.test.sh в ci-heavy (wait-timeout 300) и строка container_healthy homeassistant в живом журнале замера. curl в образе установлен по метаданным (docker history --no-trunc, слой apk add … curl), запуском контейнера не проверялся — это закрывает тот же ci-heavy."
+    },
+    {
+      "risk": "Сценарии engine-setup.test.sh в CI не идут (Windows-часть требует PowerShell и ScheduledTasks), регрессия может пройти мимо PR.",
+      "mitigation": "Известное ограничение, новой работы CI задача не добавляет: правка .github/** — обвязка и отдельное решение. Исполнитель прогоняет сценарий локально на Windows перед каждым коммитом и переносит строку итога в журнал задачи; ревью диффа сверяет её."
+    },
+    {
       "risk": "Журнал замера растёт: событий на загрузку десяток вместо одной строки.",
       "mitigation": "Строка события короткая, без адресов и имён хоста; рост — десятки строк на загрузку, ротация не нужна и в план не входит."
     }
   ],
   "out_of_scope": [
-    "healthcheck для homeassistant в docker-compose.yml — только если владелец выберет этот вариант развилки.",
+    "Новая работа CI для deploy/windows/engine-setup.test.sh — известное ограничение (риски), не правка этой задачи.",
+    "Объединение чужого daemon.json — отказ с текстом, а не слияние.",
     "Упоминания Docker Desktop вне критерия: ops/backup/backup.sh:186 (подсказка «Docker Desktop не запущен?»), config/entities.example.yaml:48, docker-compose.override.example.yml:28, docs/decisions/0027 — в раздел «Попутно» тела PR.",
     "Удаление дистрибутива и томов (wsl --unregister) — только руками владельца.",
     "wsl --shutdown внутри -Install — по-прежнему не делается: гасит все дистрибутивы пользователя.",
