@@ -444,10 +444,11 @@ docker compose --profile ha up -d --force-recreate   # Git Bash, в катало
 | `container_healthy` | первый опрос, на котором контейнер healthy (точность 5 с); без healthcheck — `healthcheck=нет` и момент старта |
 | `health` | смена статуса `/health`, `status=unhealthy`, `degraded` или `healthy` |
 | `probe_error` | зонд не ответил полностью (дистрибутив уже есть, docker ещё нет) — текст ошибки |
-| итоговая строка | `first_response`, `first_200`, `foreign`, `result` |
+| итоговая строка | `first_response`, `first_200`, `foreign`, `stop` (причина конца опроса и его время), `result` |
 
 Опрос кончается, когда `/health` healthy и все контейнеры с healthcheck
-healthy, когда статусы 5 минут не менялись, или через 30 минут. Итог
+healthy (`stop=ready`), когда статусы 5 минут не менялись (`stop=stable`),
+или через 30 минут (`stop=timeout`); рядом — фактическое время опроса. Итог
 `result=ok` — только при healthy `/health` и переходе в healthy каждого
 контейнера; без ответа 200 формы стека — «нет ответа 200», без данных о
 контейнерах — «нет данных о контейнерах». Засчитывается только ответ формы

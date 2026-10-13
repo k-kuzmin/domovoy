@@ -1031,12 +1031,13 @@ probe_step() {
 # Замер в $work/measure.log. Дистрибутив по умолчанию — заведомо не
 # зарегистрированное имя: настоящий движок на машине разработчика тест не
 # трогает; с подменённым wsl.exe имя задаёт measure_distro. Малый
-# -StableMinutes — устоявшееся состояние кончает замер.
+# -StableMinutes — устоявшееся состояние кончает замер; пределы меняют
+# measure_timeout и measure_stable (повтор параметра PowerShell не примет).
 measure_run() {
   local shell="$1" port="$2"
   shift 2
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
-    -Port "$port" -Project example -Distro "${measure_distro:-example-not-registered}" -TimeoutMinutes 0.25 -StableMinutes 0.05 \
+    -Port "$port" -Project example -Distro "${measure_distro:-example-not-registered}" -TimeoutMinutes "${measure_timeout:-0.25}" -StableMinutes "${measure_stable:-0.05}" \
     -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")" "$@"
 }
 
@@ -1105,12 +1106,27 @@ test_measure_boot() {
     if log_has 'status='; then fail "$name" "чужой ответ записан статусом /health"; show_log; return; fi
     ok "$name"
 
+    # Без слушателя состояние не меняется: опрос кончается по
+    # -StableMinutes (0.05), и итог называет эту причину и фактическое
+    # время, а не -TimeoutMinutes (0.25).
     name="measure_boot_writes_line_without_answer/$shell"
     measure "$shell" "$port"
     if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без слушателя"; return; fi
-    for line in 'first_response=нет' 'first_200=нет' 'result=нет ответа 200'; do
+    for line in 'first_response=нет' 'first_200=нет' 'stop=stable через ' 'result=нет ответа 200 за '; do
       log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
+    if log_has 'за 0.25 мин' || log_has 'за 30 мин' || log_has 'stop=timeout'; then fail "$name" "итог называет тайм-аут, а опрос кончился по стабильности"; show_log; return; fi
+    grep -qE 'stop=stable через [0-9]+(\.[0-9]+)? мин; result=нет ответа 200 за [0-9]+(\.[0-9]+)? мин опроса' "$work/measure.log" \
+      || { fail "$name" "время опроса не числом с точкой"; show_log; return; }
+    ok "$name"
+
+    # Состояние не меняется, но тайм-аут короче окна стабильности: причина
+    # конца опроса — timeout.
+    name="measure_boot_reports_timeout/$shell"
+    measure_timeout=0.05 measure_stable=1 measure "$shell" "$port"
+    if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без слушателя"; return; fi
+    log_has 'stop=timeout через ' || { fail "$name" "нет «stop=timeout»"; show_log; return; }
+    if log_has 'stop=stable'; then fail "$name" "тайм-аут назван стабильностью"; show_log; return; fi
     ok "$name"
   done
 }
@@ -1160,6 +1176,7 @@ test_measure_boot_stops_on_stable_status() {
     [ "$elapsed" -lt 13 ] || { fail "$name" "замер шёл $elapsed с — не кончился по -StableMinutes до тайм-аута"; show_log; return; }
     [ "$(grep -c '; status=degraded' "$work/measure.log")" = 1 ] || { fail "$name" "строк status=degraded не одна"; show_log; return; }
     log_has 'first_response=' || { fail "$name" "нет итоговой строки"; show_log; return; }
+    log_has 'stop=stable через ' || { fail "$name" "итог не называет остановку по стабильности"; show_log; return; }
     ok "$name"
   done
 }
@@ -1268,9 +1285,13 @@ test_measure_boot_survives_probe_failures() {
     probe_step "$fake" 4 0 $'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\ncontainer name=example-postgres-1 started_at=1760331015 health=none\n'
     start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
     port="$stub_port"
-    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    # Три одинаковых отказа подряд — не смена состояния; окно стабильности
+    # (12 с) шире серии отказов, иначе на медленном powershell.exe опрос
+    # кончается по стабильности до данных зонда.
+    measure_distro=example-engine measure_stable=0.2 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
     stop_stub
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc — все контейнеры healthy, ожидался 0"; show_log; return; }
+    log_has 'stop=ready через ' || { fail "$name" "итог не называет остановку по готовности"; show_log; return; }
     [ "$(grep -c '; distro_start=' "$work/measure.log")" = 1 ] || { fail "$name" "distro_start не одной строкой"; show_log; return; }
     first_docker="$(log_line '; docker_active=')"
     first_data="$(log_line '; distro_start=')"

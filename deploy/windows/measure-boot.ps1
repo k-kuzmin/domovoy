@@ -52,15 +52,17 @@
     probe_error        отказ зонда с новым текстом — первой строкой stderr;
     итоговая строка    first_response, first_200, foreign (если был чужой
                        ответ 200), distro_start=нет данных (если дистрибутив
-                       так и не увиден), result.
+                       так и не увиден), stop, result.
 
   Опрос кончается, когда /health healthy и каждый контейнер с healthcheck
-  healthy (пустой набор контейнеров этого не выполняет), когда статус
-  /health и состояния контейнеров не менялись -StableMinutes (5) подряд, или
-  по -TimeoutMinutes (30). Итог result=ok и код 0 — только при /health
-  healthy и переходе в healthy каждого контейнера; без ответа 200 формы
-  стека — «нет ответа 200»; без данных о контейнерах — «нет данных о
-  контейнерах», даже при healthy /health.
+  healthy (пустой набор контейнеров этого не выполняет) — stop=ready, когда
+  статус /health и состояния контейнеров не менялись -StableMinutes (5)
+  подряд — stop=stable, или по -TimeoutMinutes (30) — stop=timeout; рядом с
+  причиной — фактическое время опроса в минутах. Итог result=ok и код 0 —
+  только при /health healthy и переходе в healthy каждого контейнера; без
+  ответа 200 формы стека — «нет ответа 200 за <время опроса> мин опроса»;
+  без данных о контейнерах — «нет данных о контейнерах», даже при healthy
+  /health.
 
   Адресов, имён хоста и пользователя в строках нет.
 #>
@@ -287,6 +289,9 @@ $containers = @{}
 $started = Get-Date
 $deadline = $started.AddMinutes($TimeoutMinutes)
 $lastChange = $started
+# Причина конца опроса: ready — /health и контейнеры healthy, stable —
+# состояния не менялись -StableMinutes, timeout — вышел -TimeoutMinutes.
+$stop = 'timeout'
 
 try {
     while ((Get-Date) -lt $deadline) {
@@ -364,8 +369,8 @@ try {
         if ($changed) { $lastChange = $now }
         $allHealthy = $health -eq 'healthy' -and $containers.Count -gt 0 -and
             -not @($containers.Values | Where-Object { -not $_.Healthy }).Count
-        if ($allHealthy) { break }
-        if (((Get-Date) - $lastChange).TotalMinutes -ge $StableMinutes) { break }
+        if ($allHealthy) { $stop = 'ready'; break }
+        if (((Get-Date) - $lastChange).TotalMinutes -ge $StableMinutes) { $stop = 'stable'; break }
         Start-Sleep -Seconds $IntervalSeconds
     }
 }
@@ -390,10 +395,12 @@ if ($foreign) {
     $parts.Add(('foreign={0} чужой слушатель: ответ 200 не формы стека' -f (Format-Moment $foreign)))
 }
 if (-not $distroSeen) { $parts.Add('distro_start=нет данных') }
+$polled = ((Get-Date) - $started).TotalMinutes.ToString('0.##', $invariant)
+$parts.Add(('stop={0} через {1} мин' -f $stop, $polled))
 $notHealthy = @($containers.Keys | Where-Object { -not $containers[$_].Healthy } | Sort-Object)
 $ok = $false
 if (-not $first200) {
-    $parts.Add(('result=нет ответа 200 за {0} мин' -f $TimeoutMinutes.ToString($invariant)))
+    $parts.Add(('result=нет ответа 200 за {0} мин опроса' -f $polled))
 }
 elseif (-not $containers.Count) {
     $parts.Add('result=нет данных о контейнерах')
