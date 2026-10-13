@@ -548,6 +548,22 @@ test_engine_setup_dry_run() {
   has "${shells[0]}" "firewall.localports: $api_default,$ha_default" || { fail "$name" "порты правила не по умолчанию"; show_out; return; }
   ok "$name"
 
+  # Имя проекта compose не той формы — отказ с кодом 2 до регистрации задач:
+  # замер получил бы -Project, который его ValidatePattern не примет, и
+  # падал бы на каждой загрузке.
+  name=engine_setup_refuses_bad_project_name
+  local bad
+  for bad in 'Example-Home' 'example home' '-example'; do
+    fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=%s\r\nBACKUP_DIR="%s"\r\n' "$bad" "$(cygpath -m "$dest")")"
+    dry_run "${shells[0]}"
+    [ "$rc" -eq 2 ] || { fail "$name" "«$bad»: код $rc, ожидался 2"; show_out; return; }
+    grep -qF 'COMPOSE_PROJECT_NAME' "$work/out.${shells[0]}" || { fail "$name" "«$bad»: отказ не называет COMPOSE_PROJECT_NAME"; show_out; return; }
+    if grep -qE '^(measure|keeper)\.task:' "$work/out.${shells[0]}"; then fail "$name" "«$bad»: задачи напечатаны после отказа"; show_out; return; fi
+  done
+  # Следующим сценариям — клон с допустимым .env, как до этого сценария.
+  fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  ok "$name"
+
   name=engine_setup_wslconfig_kept
   printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig"
   cp "$work/wslconfig" "$work/wslconfig.before"
