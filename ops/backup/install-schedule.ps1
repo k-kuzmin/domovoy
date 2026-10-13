@@ -17,9 +17,9 @@
   при каждом запуске, и правка .env не требует переустановки. Секретов в
   аргументах задачи нет. Повторный -Install заменяет задачу.
 
-  -LogonType S4U (по умолчанию, #6) — движок Docker живёт в WSL-дистрибутиве
-  domovoy-engine (deploy/windows/engine-setup.ps1), задача идёт без входа
-  пользователя и без хранимого пароля:
+  Движок Docker живёт в WSL-дистрибутиве domovoy-engine
+  (deploy/windows/engine-setup.ps1, #6), задача идёт без входа пользователя
+  и без хранимого пароля — тип входа S4U:
 
     wsl.exe -d domovoy-engine --cd "<клон>" --exec bash ops/backup/backup.sh
 
@@ -27,23 +27,12 @@
   обёртки и без интерактивной оболочки; клон виден как /mnt/<диск>/…,
   BACKUP_DIR вида D:/… переводит wslpath (ops/backup/dotenv.sh).
 
-  -LogonType Interactive — откат на Docker Desktop, который работает только
-  в сессии вошедшего пользователя: задача запускает bash.exe Git for Windows
-  с одним аргументом — путём к backup.sh — и стартует, только пока
-  пользователь вошёл; Docker Desktop не запущен — backup.sh отказывает с
-  ненулевым кодом и строкой в backup.log.
-
-  В обоих случаях — текущий пользователь, обычные права (RunLevel Limited).
-  Тип входа с хранимым паролем сценарий не собирает. Пропущенный запуск (хост
+  Принципал — текущий пользователь, обычные права (RunLevel Limited). Тип
+  входа с хранимым паролем сценарий не собирает. Пропущенный запуск (хост
   был выключен) выполняется при первой возможности — сразу после загрузки
   dockerd может ещё подниматься, тогда прогон отказывает строкой в
   backup.log, и следующий идёт в срок; прогон дольше 2 ч останавливается;
   второй экземпляр не запускается.
-
-  bash.exe для Interactive — только из Git for Windows: InstallPath из
-  HKLM:\SOFTWARE\GitForWindows, затем HKCU, затем рядом с git.exe из PATH.
-  C:\Windows\System32\bash.exe — это WSL, с ним задача не ставится. Путь
-  можно задать явно: -BashPath.
 
   -DryRun печатает собранную задачу и ничего не регистрирует; прав
   администратора не требует.
@@ -54,9 +43,6 @@ param(
     [switch]$Check,
     [switch]$Uninstall,
     [string]$At = '03:30',
-    [ValidateSet('S4U', 'Interactive')]
-    [string]$LogonType = 'S4U',
-    [string]$BashPath,
     [switch]$DryRun
 )
 
@@ -104,55 +90,6 @@ function Get-DotEnvValue([string]$Path, [string]$Key) {
     return $value
 }
 
-function Test-WslBash([string]$Path) {
-    $full = [IO.Path]::GetFullPath($Path)
-    foreach ($dir in 'System32', 'Sysnative', 'SysWOW64') {
-        if ($full -ieq (Join-Path $env:SystemRoot "$dir\bash.exe")) { return $true }
-    }
-    return $false
-}
-
-function Find-GitBash {
-    $candidates = New-Object System.Collections.Generic.List[string]
-    foreach ($hive in 'HKLM:\SOFTWARE\GitForWindows', 'HKCU:\SOFTWARE\GitForWindows') {
-        $item = Get-ItemProperty -LiteralPath $hive -ErrorAction SilentlyContinue
-        if ($item -and $item.PSObject.Properties['InstallPath'] -and $item.InstallPath) {
-            $candidates.Add((Join-Path $item.InstallPath 'bin\bash.exe'))
-        }
-    }
-    $git = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($git) {
-        # git.exe лежит в cmd\, bin\ или mingw64\bin\ установки.
-        $gitDir = Split-Path -Parent $git.Source
-        $candidates.Add((Join-Path $gitDir '..\bin\bash.exe'))
-        $candidates.Add((Join-Path $gitDir '..\..\bin\bash.exe'))
-    }
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            $full = [IO.Path]::GetFullPath($candidate)
-            if (-not (Test-WslBash $full)) { return $full }
-        }
-    }
-    return $null
-}
-
-function Resolve-Bash {
-    if ($BashPath) {
-        if (Test-WslBash $BashPath) {
-            Stop-WithError "$BashPath — это bash WSL, а не Git for Windows: бэкап в нём не работает с Docker Desktop хоста"
-        }
-        if (-not (Test-Path -LiteralPath $BashPath -PathType Leaf)) { Stop-WithError "bash.exe не найден: $BashPath" }
-        return [IO.Path]::GetFullPath($BashPath)
-    }
-    $found = Find-GitBash
-    if ($found) { return $found }
-    $any = Get-Command bash.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($any -and (Test-WslBash $any.Source)) {
-        Stop-WithError "найден только bash.exe WSL ($($any.Source)) — нужен Git for Windows; путь можно задать -BashPath"
-    }
-    Stop-WithError 'bash.exe Git for Windows не найден (реестр GitForWindows, git.exe в PATH) — путь можно задать -BashPath'
-}
-
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal $identity
@@ -181,21 +118,15 @@ if ($Install) {
     }
     if (-not (Test-Path -LiteralPath $backupScript -PathType Leaf)) { Stop-WithError "нет $backupScript" }
 
-    if ($LogonType -eq 'S4U') {
-        # Внутри дистрибутива переводится только запись Windows (D:/… или
-        # D:\…) и путь /mnt/…; запись Git Bash вида /d/… там не существует.
-        if ($backupDir -notmatch '^[A-Za-z]:[\\/]' -and $backupDir -notmatch '^/mnt/') {
-            Write-Warning "BACKUP_DIR ($backupDir) — не путь Windows вида D:/…: внутри дистрибутива $Distro такой каталог не найдётся, и бэкап будет отказывать"
-        }
-        # Без входа: backup.sh внутри дистрибутива движка, путь сценария —
-        # от корня клона, который wsl.exe делает текущим каталогом.
-        $execute = Join-Path $env:SystemRoot 'System32\wsl.exe'
-        $argument = '-d {0} --cd "{1}" --exec bash ops/backup/backup.sh' -f $Distro, $root
+    # Внутри дистрибутива переводится только запись Windows (D:/… или D:\…)
+    # и путь /mnt/…; запись Git Bash вида /d/… там не существует.
+    if ($backupDir -notmatch '^[A-Za-z]:[\\/]' -and $backupDir -notmatch '^/mnt/') {
+        Write-Warning "BACKUP_DIR ($backupDir) — не путь Windows вида D:/…: внутри дистрибутива $Distro такой каталог не найдётся, и бэкап будет отказывать"
     }
-    else {
-        $execute = Resolve-Bash
-        $argument = '"{0}"' -f $backupScript.Replace('\', '/')
-    }
+    # Без входа: backup.sh внутри дистрибутива движка, путь сценария — от
+    # корня клона, который wsl.exe делает текущим каталогом.
+    $execute = Join-Path $env:SystemRoot 'System32\wsl.exe'
+    $argument = '-d {0} --cd "{1}" --exec bash ops/backup/backup.sh' -f $Distro, $root
     $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
     # Объекты задачи — локальные, прав администратора не требуют. Сухой
@@ -203,7 +134,7 @@ if ($Install) {
     # регистрируется.
     $action = New-ScheduledTaskAction -Execute $execute -Argument $argument -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At $time
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType $LogonType -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
         -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
