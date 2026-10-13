@@ -40,7 +40,9 @@
        что держалка (пользователь, S4U, обычные права): она исполняет файл
        из клона, а клон пользователь может менять — под SYSTEM это было бы
        повышением прав. deploy/windows/measure-boot.ps1 -Port <порт API>
-       -LogPath %LOCALAPPDATA%\domovoy-engine\measure-boot.log;
+       -Distro domovoy-engine -Project <COMPOSE_PROJECT_NAME>
+       -LogPath %LOCALAPPDATA%\domovoy-engine\measure-boot.log — хронология
+       загрузки: дистрибутив, docker, контейнеры проекта, статус /health;
     5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=mirrored — порты
        дистрибутива видны на адресе хоста. Прежний файл сохраняется копией
        .wslconfig.domovoy-backup, отсутствие — отметкой .wslconfig.domovoy-absent.
@@ -593,7 +595,12 @@ if ($Install) {
     # Журнал — в профиле пользователя: путь задаётся при регистрации, задача
     # под S4U не зависит от того, загружено ли окружение профиля.
     $measureLog = Join-Path $env:LOCALAPPDATA 'domovoy-engine\measure-boot.log'
-    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1} -LogPath "{2}"' -f $measureScript, $apiPort, $measureLog
+    # Дистрибутив и проект compose — для зонда хронологии (boot-probe.sh):
+    # замер спрашивает о контейнерах этого проекта.
+    if ($project -cnotmatch '^[a-z0-9][a-z0-9_-]*$') {
+        Stop-WithError "COMPOSE_PROJECT_NAME «$project» — строчные буквы, цифры, - и _ (имя проекта compose; .env клона или значение по умолчанию в docker-compose.yml)" 2
+    }
+    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1} -Distro {3} -Project {4} -LogPath "{2}"' -f $measureScript, $apiPort, $measureLog, $Distro, $project
     $measureAction = New-ScheduledTaskAction -Execute $powershellExe -Argument $measureArgument
     # Не SYSTEM: действие исполняет файл из клона, который пользователь
     # может менять. Журнал System (Kernel-General 12), LastBootUpTime и
@@ -796,8 +803,8 @@ if ($Install) {
             -Settings $keeperSettings -Description 'Домовой: держит WSL-дистрибутив движка Docker после загрузки, без входа' -Force
         Write-Output "задача $KeeperTask зарегистрирована: при запуске системы, S4U"
         $null = Register-ScheduledTask -TaskName $MeasureTask -Trigger $bootTrigger -Action $measureAction -Principal $measurePrincipal `
-            -Settings $measureSettings -Description 'Домовой: замер от старта ОС до первого ответа /health' -Force
-        Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, S4U, журнал $measureLog"
+            -Settings $measureSettings -Description 'Домовой: хронология загрузки — дистрибутив, docker, контейнеры, /health' -Force
+        Write-Output "задача $MeasureTask зарегистрирована: порт $apiPort, проект $project, S4U, журнал $measureLog"
     }
     catch {
         Stop-Install "регистрация задач: $($_.Exception.Message)"
@@ -902,13 +909,21 @@ if (-not $measure) {
     Add-Result 'FAIL' 'задача замера' "нет задачи $MeasureTask"
 }
 else {
-    $m = [regex]::Match([string](@($measure.Actions)[0].Arguments), '-Port\s+(\d+)')
+    $measureArgs = [string](@($measure.Actions)[0].Arguments)
+    $m = [regex]::Match($measureArgs, '-Port\s+(\d+)')
     if ($m.Success) { $measurePort = [int]$m.Groups[1].Value }
+    $m = [regex]::Match($measureArgs, '-Project\s+(\S+)')
+    $measureProject = if ($m.Success) { $m.Groups[1].Value } else { '' }
+    $m = [regex]::Match($measureArgs, '-Distro\s+(\S+)')
+    $measureDistro = if ($m.Success) { $m.Groups[1].Value } else { '' }
     if ($measurePort -ne $apiPort) { Add-Result 'FAIL' 'задача замера' "порт задачи $measurePort, API_HTTP_PORT $apiPort — переустановите: -Install" }
+    elseif ($measureProject -cne $project -or $measureDistro -cne $Distro) {
+        Add-Result 'FAIL' 'задача замера' "проект задачи «$measureProject», COMPOSE_PROJECT_NAME «$project»; дистрибутив «$measureDistro» — хронология контейнеров не та; переустановите: -Install"
+    }
     elseif ([string]$measure.Principal.LogonType -ne 'S4U' -or [string]$measure.Principal.RunLevel -ne 'Limited') {
         Add-Result 'FAIL' 'задача замера' "принципал $($measure.Principal.UserId), $($measure.Principal.LogonType), $($measure.Principal.RunLevel) — нужен пользователь с S4U и Limited: задача исполняет файл из клона"
     }
-    else { Add-Result 'OK' 'задача замера' "порт $measurePort" }
+    else { Add-Result 'OK' 'задача замера' "порт $measurePort, проект $measureProject" }
 }
 
 $wslConfig = Get-WslConfigPlan $WslConfigPath

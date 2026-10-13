@@ -38,8 +38,14 @@ cd "$root" || exit 1
 
 work="$(mktemp -d)"
 stub_pid=''
+measure_pid=''
 cleanup() {
   if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null || true; fi
+  # Замер в фоне — процесс Windows: kill MSYS его не всегда гасит.
+  if [ -n "$measure_pid" ]; then
+    taskkill //F //T //PID "$(cat "/proc/$measure_pid/winpid" 2>/dev/null)" >/dev/null 2>&1 || true
+    kill "$measure_pid" 2>/dev/null || true
+  fi
   rm -rf -- "$work"
 }
 trap cleanup EXIT
@@ -76,7 +82,7 @@ compose_default() {
 
 test_shell_scripts_parse() {
   local name=shell_scripts_parse script
-  for script in provision-engine.sh docker-wsl.sh; do
+  for script in provision-engine.sh docker-wsl.sh boot-probe.sh; do
     run bash -n "$here/$script"
     if [ "$rc" -ne 0 ]; then fail "$name" "bash -n $script"; show_out; return; fi
   done
@@ -85,7 +91,7 @@ test_shell_scripts_parse() {
   name=shell_scripts_shellcheck
   if ! command -v shellcheck >/dev/null 2>&1; then skip "$name" "нет shellcheck"; return; fi
   # Пути от корня клона: shellcheck для Windows не открывает пути MSYS.
-  run shellcheck -S warning deploy/windows/provision-engine.sh deploy/windows/docker-wsl.sh deploy/windows/engine-setup.test.sh
+  run shellcheck -S warning deploy/windows/provision-engine.sh deploy/windows/docker-wsl.sh deploy/windows/boot-probe.sh deploy/windows/engine-setup.test.sh
   if [ "$rc" -ne 0 ]; then fail "$name" "замечания shellcheck"; show_out; return; fi
   ok "$name"
 }
@@ -231,6 +237,80 @@ test_docker_log_driver() {
     grep -qF '"log-driver": "journald"' "$work/out" || { fail "$name" "«$got»: отказ не говорит, что добавить"; show_out; return; }
   done
   sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_docker_log_driver' || { fail "$name" "main не вызывает ensure_docker_log_driver"; return; }
+  ok "$name"
+}
+
+# Зонд хронологии (boot-probe.sh) с подменёнными docker, systemctl, ps и
+# «сейчас» первыми в PATH. Все моменты — секунды Unix: вывод при TZ=UTC,
+# Europe/Moscow и Asia/Yekaterinburg одинаков байт в байт. Подменённые ps и
+# systemctl на запросы местного времени (lstart, ActiveEnterTimestamp без
+# --timestamp=unix) отвечают по TZ сами — zoneinfo в Git Bash может не
+# быть, — так что зонд, взявший местное время, даёт разный вывод.
+test_boot_probe_output() {
+  local name=boot_probe_output bin="$work/probebin" real_date tz out started_api started_pg expected
+  real_date="$(command -v date)"
+  mkdir -p "$bin"
+  # Сдвиг зоны — по самому TZ, без zoneinfo.
+  cat >"$bin/tzoff" <<'EOF'
+case "${TZ:-UTC}" in Europe/Moscow) echo 10800 ;; Asia/Yekaterinburg) echo 18000 ;; *) echo 0 ;; esac
+EOF
+  cat >"$bin/date" <<EOF
+#!/usr/bin/env bash
+if [ "\$#" -eq 1 ] && [ "\$1" = '+%s' ]; then echo 1760331100; exit 0; fi
+exec "$real_date" "\$@"
+EOF
+  cat >"$bin/ps" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  '-o etimes= -p 1') echo '    100' ;;
+  *lstart*) "$real_date" -u -d "@\$((1760331000 + \$(bash "$bin/tzoff")))" '+%a %b %e %H:%M:%S %Y' ;;
+  *) exit 2 ;;
+esac
+EOF
+  cat >"$bin/systemctl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *ActiveEnterTimestamp*--timestamp=unix* | *--timestamp=unix*ActiveEnterTimestamp*)
+    case "\$*" in *--value*) echo '@1760331010' ;; *) echo 'ActiveEnterTimestamp=@1760331010' ;; esac ;;
+  *ActiveEnterTimestamp*)
+    local_time="\$("$real_date" -u -d "@\$((1760331010 + \$(bash "$bin/tzoff")))" '+%a %Y-%m-%d %H:%M:%S')"
+    case "\$*" in *--value*) echo "\$local_time" ;; *) echo "ActiveEnterTimestamp=\$local_time" ;; esac ;;
+  *) exit 2 ;;
+esac
+EOF
+  cat >"$bin/docker" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$work/probe-docker.log"
+[ -z "\${FAKE_DOCKER_FAIL:-}" ] || { echo 'example: docker не отвечает' >&2; exit 1; }
+case "\$1" in
+  ps) [ -n "\${FAKE_DOCKER_EMPTY:-}" ] || printf 'example-api-1\nexample-postgres-1\nexample-new-1\n' ;;
+  inspect) printf '/example-api-1|2025-10-13T04:51:20.123456789Z|healthy\n/example-postgres-1|2025-10-13T04:51:15Z|none\n/example-new-1|0001-01-01T00:00:00Z|none\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$bin/date" "$bin/ps" "$bin/systemctl" "$bin/docker"
+  started_api="$("$real_date" -u -d '2025-10-13T04:51:20Z' +%s)"
+  started_pg="$("$real_date" -u -d '2025-10-13T04:51:15Z' +%s)"
+  expected="$(printf 'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=%s health=healthy\ncontainer name=example-postgres-1 started_at=%s health=none' "$started_api" "$started_pg")"
+  for tz in UTC Europe/Moscow Asia/Yekaterinburg; do
+    rm -f "$work/probe-docker.log"
+    out="$(TZ="$tz" PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" || { fail "$name" "TZ=$tz: код $?"; show_out; return; }
+    if [ "$out" != "$expected" ]; then
+      fail "$name" "TZ=$tz: вывод не тот"; diff <(echo "$expected") <(echo "$out") | sed 's/^/    | /'; return
+    fi
+    grep -qF 'ps -a --filter label=com.docker.compose.project=example ' "$work/probe-docker.log" \
+      || { fail "$name" "фильтр по проекту не передан docker"; sed 's/^/    | /' "$work/probe-docker.log"; return; }
+  done
+  ok "$name"
+
+  name=boot_probe_without_containers
+  out="$(FAKE_DOCKER_EMPTY=1 PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" || { fail "$name" "код $?"; show_out; return; }
+  [ "$out" = $'distro_start=1760331000\ndocker_active=1760331010' ] || { fail "$name" "вывод «$out»"; return; }
+  ok "$name"
+
+  name=boot_probe_docker_failure
+  out="$(FAKE_DOCKER_FAIL=1 PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" && { fail "$name" "отказ docker — код 0"; return; }
+  [ "$(head -n 1 <<<"$out")" = 'distro_start=1760331000' ] || { fail "$name" "до отказа docker не напечатан distro_start"; return; }
   ok "$name"
 }
 
@@ -391,7 +471,7 @@ test_engine_setup_dry_run() {
   ha_default="$(compose_default HA_HTTP_PORT)"
   api_default="$(compose_default API_HTTP_PORT)"
   [ -n "$ha_default" ] && [ -n "$api_default" ] || { fail "$name" "в docker-compose.yml нет значений по умолчанию портов"; return; }
-  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   rm -f "$work/wslconfig"*
 
   for shell in "${shells[@]}"; do
@@ -424,6 +504,10 @@ test_engine_setup_dry_run() {
     if grep -qE '^(keeper|measure|backup\.)(\.)?[Rr]un[Ll]evel: Highest$' "$work/out.$shell"; then fail "$name/$shell" "задача с Highest"; return; fi
     grep -q '^measure.arguments: .* -LogPath "[^"]*measure-boot\.log"$' "$work/out.$shell" || { fail "$name/$shell" "журнал замера не задан при регистрации"; show_out; return; }
     grep -q '^measure.arguments: .*measure-boot\.ps1" -Port 28081 ' "$work/out.$shell" || { fail "$name/$shell" "порт замера не из API_HTTP_PORT"; show_out; return; }
+    # Хронология: замер знает дистрибутив и проект compose, чтобы спросить
+    # зонд о контейнерах проекта.
+    grep -q '^measure.arguments: .* -Distro domovoy-engine -Project example-home ' "$work/out.$shell" \
+      || { fail "$name/$shell" "замеру не переданы -Distro и -Project из COMPOSE_PROJECT_NAME"; show_out; return; }
     grep -q '^provision: wsl.exe -d domovoy-engine -u root --cd .* --exec bash deploy/windows/provision-engine.sh$' "$work/out.$shell" \
       || { fail "$name/$shell" "нет строки провижининга"; show_out; return; }
     # Расписание бэкапа — одно, S4U: выбора типа входа больше нет.
@@ -458,6 +542,9 @@ test_engine_setup_dry_run() {
   fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   dry_run "${shells[0]}"
   grep -q "^measure.arguments: .* -Port $api_default " "$work/out.${shells[0]}" || { fail "$name" "порт не $api_default"; show_out; return; }
+  # Без COMPOSE_PROJECT_NAME в .env — имя проекта по умолчанию из docker-compose.yml.
+  grep -q "^measure.arguments: .* -Project $(sed -nE 's/^name: \$\{COMPOSE_PROJECT_NAME:-([^}]*)\}.*/\1/p' "$root/docker-compose.yml") " "$work/out.${shells[0]}" \
+    || { fail "$name" "проект замера не по умолчанию из docker-compose.yml"; show_out; return; }
   has "${shells[0]}" "firewall.localports: $api_default,$ha_default" || { fail "$name" "порты правила не по умолчанию"; show_out; return; }
   ok "$name"
 
@@ -833,62 +920,158 @@ free_port() {
   return 1
 }
 
-# Заглушка /health: файл health с заданным телом, python http.server на 127.0.0.1.
-start_stub() {
-  local body="$1" port="$2" python
+# Заглушка /health: python на 127.0.0.1, ответы «код тело» по очереди на
+# каждый запрос, последний повторяется. Порт выбирает ОС (bind на 0) и
+# кладёт в stub_port: случайный порт из теста попадал в диапазоны, которые
+# Windows резервирует под Hyper-V, и заглушка не поднималась.
+stub_port=''
+start_stub_seq() {
+  local python i=0 response
+  stub_port=''
   python="$(python_cmd)"
   rm -rf -- "$work/stub" && mkdir -p "$work/stub"
-  printf '%s' "$body" >"$work/stub/health"
-  local dir="$work/stub"
+  for response in "$@"; do printf '%s' "$response" >"$work/stub/resp.$i"; i=$((i + 1)); done
+  cat >"$work/stub/server.py" <<'EOF'
+import http.server, os, sys
+folder = sys.argv[1]
+names = sorted((f for f in os.listdir(folder) if f.startswith('resp.')), key=lambda f: int(f.split('.')[1]))
+responses = [open(os.path.join(folder, f), encoding='utf-8').read() for f in names]
+served = [0]
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code, _, body = responses[min(served[0], len(responses) - 1)].partition(' ')
+        served[0] += 1
+        data = body.encode('utf-8')
+        self.send_response(int(code))
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+    def log_message(self, *args):
+        pass
+server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+with open(os.path.join(folder, 'port.tmp'), 'w') as f:
+    f.write(str(server.server_address[1]))
+os.replace(os.path.join(folder, 'port.tmp'), os.path.join(folder, 'port'))
+server.serve_forever()
+EOF
   # python Windows не понимает путь MSYS, а MSYS_NO_PATHCONV его не переводит.
-  if command -v cygpath >/dev/null 2>&1; then dir="$(cygpath -w "$dir")"; fi
-  "$python" -m http.server "$port" --bind 127.0.0.1 --directory "$dir" >/dev/null 2>&1 &
+  "$python" "$(cygpath -w "$work/stub/server.py")" "$(cygpath -w "$work/stub")" >/dev/null 2>&1 &
   stub_pid=$!
-  for _ in $(seq 1 50); do
-    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then return 0; fi
+  for _ in $(seq 1 100); do
+    if [ -s "$work/stub/port" ]; then
+      stub_port="$(cat "$work/stub/port")"
+      if (exec 3<>"/dev/tcp/127.0.0.1/$stub_port") 2>/dev/null; then return 0; fi
+    fi
     sleep 0.2
   done
   return 1
 }
 
+# Заглушка с одним ответом 200.
+start_stub() { start_stub_seq "200 $1"; }
+
 stop_stub() {
   if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null; wait "$stub_pid" 2>/dev/null; stub_pid=''; fi
 }
 
-measure() {
-  rm -f "$work/measure.log"
-  measure_append "$@"
+# Подменённый wsl.exe в каталоге $1: .cmd над python-сценарием, который
+# пишет сырые байты. Вызовы — в calls.log; --list отдаёт имена из файла
+# running (UTF-16LE, если есть файл utf16: с BOM, если в нём «bom»; иначе
+# UTF-8); вызов зонда
+# с номером n (с нуля) — файлы probe.<n>.out, .err, .code, после последнего
+# повторяется последний.
+make_fake_wsl() {
+  local dir="$1" python
+  python="$(command -v "$(python_cmd)")"
+  rm -rf -- "$dir" && mkdir -p "$dir"
+  : >"$dir/running"
+  cat >"$dir/wsl.py" <<'EOF'
+import os, sys
+folder = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(folder, 'calls.log'), 'a', encoding='utf-8') as f:
+    f.write(' '.join(args) + '\n')
+out = sys.stdout.buffer
+if '--list' in args:
+    text = ''.join(n + '\r\n' for n in open(os.path.join(folder, 'running'), encoding='utf-8').read().split())
+    marker = os.path.join(folder, 'utf16')
+    if os.path.exists(marker):
+        out.write((b'\xff\xfe' if open(marker).read().strip() == 'bom' else b'') + text.encode('utf-16-le'))
+    else:
+        out.write(text.encode('utf-8'))
+    sys.exit(0)
+counter = os.path.join(folder, 'probe.count')
+n = int(open(counter).read()) if os.path.exists(counter) else 0
+open(counter, 'w').write(str(n + 1))
+steps = sorted(int(f.split('.')[1]) for f in os.listdir(folder) if f.startswith('probe.') and f.endswith('.out'))
+if not steps:
+    sys.exit(1)
+base = os.path.join(folder, 'probe.%d' % min(n, steps[-1]))
+out.write(open(base + '.out', 'rb').read())
+out.flush()
+if os.path.exists(base + '.err'):
+    sys.stderr.buffer.write(open(base + '.err', 'rb').read())
+    sys.stderr.flush()
+sys.exit(int(open(base + '.code').read()) if os.path.exists(base + '.code') else 0)
+EOF
+  printf '@"%s" "%s" %%*\r\n' "$(cygpath -w "$python")" "$(cygpath -w "$dir/wsl.py")" >"$dir/wsl.cmd"
 }
 
-# Замер в существующий журнал — без удаления прежнего файла.
-measure_append() {
+# probe_step <каталог> <n> <код> <stdout> [<stderr>]
+probe_step() {
+  printf '%s' "$4" >"$1/probe.$2.out"
+  printf '%s' "$3" >"$1/probe.$2.code"
+  if [ -n "${5:-}" ]; then printf '%s' "$5" >"$1/probe.$2.err"; fi
+}
+
+# Замер в $work/measure.log. Дистрибутив по умолчанию — заведомо не
+# зарегистрированное имя: настоящий движок на машине разработчика тест не
+# трогает; с подменённым wsl.exe имя задаёт measure_distro. Малый
+# -StableMinutes — устоявшееся состояние кончает замер.
+measure_run() {
   local shell="$1" port="$2"
+  shift 2
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
-    -Port "$port" -TimeoutMinutes 0.15 -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")"
+    -Port "$port" -Project example -Distro "${measure_distro:-example-not-registered}" -TimeoutMinutes 0.25 -StableMinutes 0.05 \
+    -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")" "$@"
+}
+
+measure() {
+  rm -f "$work/measure.log"
+  measure_run "$@"
 }
 
 log_has() { grep -qF -- "$1" "$work/measure.log"; }
+show_log() { sed 's/^/    | /' "$work/measure.log"; }
+
+# Номер первой строки журнала с подстрокой; нет — пусто.
+log_line() { grep -nF -- "$1" "$work/measure.log" | head -n 1 | cut -d: -f1; }
 
 test_measure_boot() {
   local name=measure_boot
   if ! is_windows; then skip "$name" "не Windows — замер читает журнал событий и реестр Windows"; return; fi
   if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
   if ! python_cmd >/dev/null; then skip "$name" "нет python для заглушки /health"; return; fi
-  local port shell
+  local port shell line
   port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
 
   for shell in "${shells[@]}"; do
+    # Ответ формы стека засчитан, но без данных о контейнерах итог не
+    # зелёный: дистрибутив не зарегистрирован.
     name="measure_boot_counts_stack_health/$shell"
-    start_stub '{"status":"healthy"}' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
     measure "$shell" "$port"
     stop_stub
-    if [ "$rc" -ne 0 ]; then fail "$name" "код $rc"; show_out; return; fi
-    [ "$(wc -l <"$work/measure.log" | tr -d ' ')" = 1 ] || { fail "$name" "в журнале не одна строка"; return; }
-    for line in 'os_start=' 'last_boot=' 'fw_post_ms=' "port=$port" 'first_response=' 'код 200' 'result=ok'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+    if [ "$rc" -eq 0 ]; then fail "$name" "без данных о контейнерах код 0"; show_log; return; fi
+    for line in 'os_start=' 'last_boot=' 'fw_post_ms=' "port=$port" 'first_response=' 'код 200' 'status=healthy' \
+      'distro_start=нет данных' 'result=нет данных о контейнерах'; do
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
     if log_has 'first_200=нет'; then fail "$name" "ответ формы стека не засчитан"; return; fi
     if log_has 'foreign='; then fail "$name" "ответ формы стека назван чужим"; return; fi
+    if log_has 'result=ok'; then fail "$name" "итог ok без данных о контейнерах"; return; fi
     ok "$name"
 
     # Журнал прежней версии — UTF-8 без BOM: BOM дописывается в начало,
@@ -896,34 +1079,310 @@ test_measure_boot() {
     name="measure_boot_adds_bom_to_old_log/$shell"
     local old_line='os_start=2026-01-01T00:00:00; result=нет ответа 200 за 30 мин'
     printf '%s\r\n' "$old_line" >"$work/measure.log"
-    start_stub '{"status":"healthy"}' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
-    measure_append "$shell" "$port"
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_run "$shell" "$port"
     [ "$(head -c 3 "$work/measure.log" | od -An -tx1 | tr -d ' \n')" = 'efbbbf' ] || { stop_stub; fail "$name" "в начале журнала нет BOM"; return; }
     [ "$(tail -c +4 "$work/measure.log" | head -n 1 | tr -d '\r')" = "$old_line" ] || { stop_stub; fail "$name" "прежняя строка изменилась"; return; }
-    measure_append "$shell" "$port"
+    measure_run "$shell" "$port"
     stop_stub
     [ "$(tail -c +4 "$work/measure.log" | head -c 3 | od -An -tx1 | tr -d ' \n')" != 'efbbbf' ] || { fail "$name" "BOM записан дважды"; return; }
-    [ "$(grep -c 'result=ok' "$work/measure.log")" = 2 ] || { fail "$name" "в журнале не две новые строки"; sed 's/^/    | /' "$work/measure.log"; return; }
+    [ "$(grep -c 'first_response=' "$work/measure.log")" = 2 ] || { fail "$name" "в журнале не две итоговые строки"; show_log; return; }
     ok "$name"
 
     name="measure_boot_marks_foreign_listener/$shell"
-    start_stub 'example foreign page' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    start_stub 'example foreign page' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
     measure "$shell" "$port"
     stop_stub
     if [ "$rc" -eq 0 ]; then fail "$name" "чужой ответ 200 засчитан (код 0)"; return; fi
     for line in 'first_200=нет' 'foreign=' 'чужой слушатель' 'result=нет ответа 200'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
+    if log_has 'status='; then fail "$name" "чужой ответ записан статусом /health"; show_log; return; fi
     ok "$name"
 
     name="measure_boot_writes_line_without_answer/$shell"
     measure "$shell" "$port"
     if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без слушателя"; return; fi
     for line in 'first_response=нет' 'first_200=нет' 'result=нет ответа 200'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
     ok "$name"
   done
+}
+
+# Смены статуса /health — строками по мере наступления, в порядке, с
+# моментом и секундами от старта ОС; 503 {"status":"unhealthy"} — статус.
+test_measure_boot_records_health_transitions() {
+  local name=measure_boot_records_health_transitions
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell a b c
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_records_health_transitions/$shell"
+    start_stub_seq '503 {"status":"unhealthy"}' '200 {"status":"degraded"}' '200 {"status":"healthy"}' \
+      || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure "$shell" "$port"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    a="$(log_line '; status=unhealthy')"; b="$(log_line '; status=degraded')"; c="$(log_line '; status=healthy')"
+    [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ "$a" -lt "$b" ] && [ "$b" -lt "$c" ] \
+      || { fail "$name" "нет смен unhealthy → degraded → healthy по порядку"; show_log; return; }
+    [ "$(grep -c '; status=' "$work/measure.log")" = 3 ] || { fail "$name" "строк смены статуса не три"; show_log; return; }
+    grep '; status=' "$work/measure.log" | grep -qvE '^boot=[^;]*; health=[0-9T:-]+ \(\+[0-9]+ с\); status=[a-z]+; src=windows' \
+      && { fail "$name" "строка смены без метки загрузки, момента, секунд или src"; show_log; return; }
+    log_has 'result=нет данных о контейнерах' || { fail "$name" "итог не «нет данных о контейнерах»"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Статус не меняется — замер кончается по -StableMinutes, до тайм-аута.
+test_measure_boot_stops_on_stable_status() {
+  local name=measure_boot_stops_on_stable_status
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell began elapsed
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_stops_on_stable_status/$shell"
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    began=$SECONDS
+    # -TimeoutMinutes 0.25 (15 с) у measure_run, -StableMinutes 0.05 (3 с).
+    measure "$shell" "$port"
+    elapsed=$((SECONDS - began))
+    stop_stub
+    [ "$rc" -ne 0 ] || { fail "$name" "код 0 без данных о контейнерах"; show_log; return; }
+    [ "$elapsed" -lt 13 ] || { fail "$name" "замер шёл $elapsed с — не кончился по -StableMinutes до тайм-аута"; show_log; return; }
+    [ "$(grep -c '; status=degraded' "$work/measure.log")" = 1 ] || { fail "$name" "строк status=degraded не одна"; show_log; return; }
+    log_has 'first_response=' || { fail "$name" "нет итоговой строки"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Событие пишется сразу, а не после цикла: до конца замера в журнале уже
+# есть os_start и смена статуса. Процесс затем останавливается тестом.
+test_measure_boot_appends_events_before_finish() {
+  local name=measure_boot_appends_events_before_finish
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port pid winpid seen=''
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  start_stub_seq '503 {"status":"unhealthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+  port="$stub_port"
+  rm -f "$work/measure.log"
+  "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
+    -Port "$port" -Project example -Distro example-not-registered -TimeoutMinutes 5 -StableMinutes 5 \
+    -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")" >/dev/null 2>&1 </dev/null &
+  pid=$!
+  measure_pid="$pid"
+  for _ in $(seq 1 60); do
+    if [ -f "$work/measure.log" ] && log_has 'os_start=' && log_has '; status=unhealthy'; then seen=1; break; fi
+    sleep 0.5
+  done
+  local alive=''
+  kill -0 "$pid" 2>/dev/null && alive=1
+  winpid="$(cat "/proc/$pid/winpid" 2>/dev/null || true)"
+  if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; fi
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null
+  measure_pid=''
+  stop_stub
+  [ -n "$seen" ] || { fail "$name" "за 30 с в журнале нет os_start и status=unhealthy"; [ -f "$work/measure.log" ] && show_log; return; }
+  [ -n "$alive" ] || { fail "$name" "замер кончился до проверки — событие не доказано записанным до конца"; show_log; return; }
+  if log_has 'first_response='; then fail "$name" "итоговая строка есть — замер уже кончился"; show_log; return; fi
+  ok "$name"
+}
+
+# Дистрибутив не работает — wsl.exe -d не вызывается: замер не поднимает
+# дистрибутив сам; хронология /health идёт дальше.
+test_measure_boot_skips_engine_when_distro_not_running() {
+  local name=measure_boot_skips_engine_when_distro_not_running
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_skips_engine_when_distro_not_running/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-other\n' >"$fake/running"
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    grep -q -- '--list --running --quiet' "$fake/calls.log" 2>/dev/null || { fail "$name" "список работающих не запрошен"; return; }
+    if grep -q -- '^-d ' "$fake/calls.log"; then fail "$name" "wsl.exe -d вызван при неработающем дистрибутиве"; sed 's/^/    | /' "$fake/calls.log"; return; fi
+    log_has 'distro_start=нет данных' || { fail "$name" "нет distro_start=нет данных"; show_log; return; }
+    log_has '; status=degraded' || { fail "$name" "хронология /health не записана"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# wsl.exe не учёл WSL_UTF8 и отдал список UTF-16LE — с BOM и без него: в
+# обоих вариантах между буквами имени остаются NUL, с BOM в начале ещё и
+# U+FFFD. Имя всё равно сопоставляется, зонд вызывается; кириллица из
+# stderr зонда в журнале цела. Нагрузку на разбор даёт сравнение ordinal в
+# measure-boot.ps1: культурное -contains пропускает NUL.
+test_measure_boot_reads_utf16_wsl_list() {
+  local name=measure_boot_reads_utf16_wsl_list
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell bom fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+   for bom in bom nobom; do
+    name="measure_boot_reads_utf16_wsl_list/$shell/$bom"
+    make_fake_wsl "$fake"
+    printf 'example-other\nexample-engine\n' >"$fake/running"
+    printf '%s' "$bom" >"$fake/utf16"
+    probe_step "$fake" 0 1 $'distro_start=1760331000\n' $'boot-probe: docker.service ещё не active\n'
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    grep -q -- '^-d example-engine -u root --cd .* --exec bash deploy/windows/boot-probe.sh example$' "$fake/calls.log" \
+      || { fail "$name" "зонд не вызван — имя в UTF-16 не сопоставлено"; sed 's/^/    | /' "$fake/calls.log"; show_log; return; }
+    grep -qE '; distro_start=[0-9T:-]+ .*; src=engine$' <(tr -d '\r' <"$work/measure.log") || { fail "$name" "нет события distro_start"; show_log; return; }
+    log_has 'text=boot-probe: docker.service ещё не active' || { fail "$name" "кириллица stderr зонда в журнале искажена или не записана"; show_log; return; }
+    ok "$name"
+   done
+  done
+}
+
+# Зонд отказывает, затем отдаёт только distro_start, затем всё: замер не
+# падает, события появляются по мере данных, distro_start — один раз.
+test_measure_boot_survives_probe_failures() {
+  local name=measure_boot_survives_probe_failures
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl" first_docker first_data
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_survives_probe_failures/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 1 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 2 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 3 1 $'distro_start=1760331000\n' $'boot-probe: docker.service ещё не active\n'
+    probe_step "$fake" 4 0 $'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\ncontainer name=example-postgres-1 started_at=1760331015 health=none\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc — все контейнеры healthy, ожидался 0"; show_log; return; }
+    [ "$(grep -c '; distro_start=' "$work/measure.log")" = 1 ] || { fail "$name" "distro_start не одной строкой"; show_log; return; }
+    first_docker="$(log_line '; docker_active=')"
+    first_data="$(log_line '; distro_start=')"
+    [ -n "$first_docker" ] && [ "$first_data" -lt "$first_docker" ] || { fail "$name" "docker_active не после distro_start"; show_log; return; }
+    [ "$(cat "$fake/probe.count")" -ge 5 ] || { fail "$name" "зонд вызван меньше пяти раз — отказы прервали опрос"; return; }
+    for line in '; container_start=' 'name=example-api-1' '; container_healthy=' 'healthcheck=нет' 'result=ok'; do
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
+    done
+    [ "$(grep -c 'probe_error=' "$work/measure.log")" = 2 ] || { fail "$name" "строк probe_error не две (по смене текста)"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Зонд отказывает всегда, /health healthy: пустой набор контейнеров «все
+# healthy» не выполняет — замер не кончается на healthy /health и итог не ok.
+test_measure_boot_probe_always_fails_not_ok() {
+  local name=measure_boot_probe_always_fails_not_ok
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_probe_always_fails_not_ok/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    [ "$(cat "$fake/probe.count")" -ge 3 ] || { fail "$name" "замер кончился на healthy /health, не дождавшись контейнеров"; show_log; return; }
+    if grep -qE '; (docker_active|container_start|container_healthy)=' "$work/measure.log"; then fail "$name" "события движка без данных зонда"; show_log; return; fi
+    log_has 'result=нет данных о контейнерах' || { fail "$name" "итог не «нет данных о контейнерах»"; show_log; return; }
+    if log_has 'result=ok'; then fail "$name" "итог ok без данных о контейнерах"; return; fi
+    ok "$name"
+  done
+}
+
+# Перезапуск контейнера в окне замера: новый started_at — вторая строка
+# container_start с пометкой restart, healthy ждётся заново; без смены
+# started_at повтора нет.
+test_measure_boot_records_container_restart() {
+  local name=measure_boot_records_container_restart
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl" starts healthies restart second_healthy
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_records_container_restart/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    local probe_head=$'distro_start=1760331000\ndocker_active=1760331010\n'
+    probe_step "$fake" 0 0 "${probe_head}container name=example-api-1 started_at=1760331020 health=healthy"$'\n'
+    probe_step "$fake" 1 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=starting"$'\n'
+    probe_step "$fake" 2 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=starting"$'\n'
+    probe_step "$fake" 3 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=healthy"$'\n'
+    start_stub_seq '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"healthy"}' \
+      || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    starts="$(grep -c '; container_start=.*name=example-api-1' "$work/measure.log")"
+    healthies="$(grep -c '; container_healthy=.*name=example-api-1' "$work/measure.log")"
+    [ "$starts" = 2 ] || { fail "$name" "строк container_start $starts, ожидалось 2"; show_log; return; }
+    [ "$healthies" = 2 ] || { fail "$name" "строк container_healthy $healthies, ожидалось 2"; show_log; return; }
+    restart="$(grep -n '; container_start=.*; restart; ' "$work/measure.log" | head -n 1 | cut -d: -f1)"
+    second_healthy="$(grep -n '; container_healthy=.*name=example-api-1' "$work/measure.log" | sed -n 2p | cut -d: -f1)"
+    [ -n "$restart" ] && [ -n "$second_healthy" ] && [ "$restart" -lt "$second_healthy" ] \
+      || { fail "$name" "второй старт без пометки restart или healthy не после него"; show_log; return; }
+    log_has 'result=ok' || { fail "$name" "итог не ok"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Разбор вывода зонда и статуса /health — функциями measure-boot.ps1 из
+# AST: секунды Unix → тот же местный момент, что FromUnixTimeSeconds(…)
+# .ToLocalTime(); местное время вместо секунд — нет данных, а не сдвиг.
+test_boot_probe_parse() {
+  local name=boot_probe_parse shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/measure-boot.ps1" '
+      $d = ConvertFrom-BootProbe @("distro_start=1760331000", "docker_active=1760331010", "container name=example-api-1 started_at=1760331020 health=healthy", "container name=example-postgres-1 started_at=1760331015 health=none", "noise")
+      $want = [DateTimeOffset]::FromUnixTimeSeconds(1760331000).ToLocalTime().DateTime
+      if ($d.DistroStart -ne $want) { "distro_start $($d.DistroStart), ожидалось $want"; exit 1 }
+      if ($d.DockerActive -ne [DateTimeOffset]::FromUnixTimeSeconds(1760331010).ToLocalTime().DateTime) { "docker_active не тот"; exit 1 }
+      if (@($d.Containers).Count -ne 2) { "контейнеров $(@($d.Containers).Count)"; exit 1 }
+      $api = @($d.Containers)[0]
+      if ($api.Name -ne "example-api-1" -or $api.Health -ne "healthy" -or $api.StartedAt -ne [DateTimeOffset]::FromUnixTimeSeconds(1760331020).ToLocalTime().DateTime) { "контейнер api разобран не так"; exit 1 }
+      if (@($d.Containers)[1].Health -ne "none") { "health=none потерян"; exit 1 }
+      $local = ConvertFrom-BootProbe @("distro_start=Mon Oct 13 08:50:00 2025", "docker_active=2025-10-13T08:50:10+03:00", "container name=example-api-1 started_at=2025-10-13T05:50:20Z health=healthy")
+      if ($null -ne $local.DistroStart -or $null -ne $local.DockerActive -or @($local.Containers).Count) { "местное время принято за момент"; exit 1 }
+      $partial = ConvertFrom-BootProbe @("distro_start=1760331000")
+      if ($null -eq $partial.DistroStart -or $null -ne $partial.DockerActive) { "частичный вывод не засчитан построчно"; exit 1 }
+      foreach ($case in @(@(200, "{`"status`":`"healthy`"}", "healthy", $false), @(200, "{`"status`":`"degraded`"}", "degraded", $false), @(503, "{`"status`":`"unhealthy`"}", "unhealthy", $false),
+                          @(200, "example foreign page", "", $true), @(200, "{`"status`":`"unhealthy`"}", "", $true), @(503, "example error", "", $false), @(503, "{`"status`":`"healthy`"}", "", $false))) {
+        $h = Get-HealthStatus $case[0] $case[1]
+        if ($h.Status -ne $case[2] -or $h.Foreign -ne $case[3]) { "Get-HealthStatus $($case[0]) $($case[1]): $($h.Status)/$($h.Foreign)"; exit 1 }
+      }
+      $names = ConvertFrom-WslList @(([char]0xFFFD + [char]0xFFFD + "e`0x`0a`0m`0p`0l`0e`0-`0e`0n`0g`0i`0n`0e`0`r`0"), "`0")
+      if ($names -notcontains "example-engine") { "имя из UTF-16 не разобрано: $($names -join "|")"; exit 1 }' \
+      ConvertFrom-BootProbe ConvertFrom-UnixSeconds Get-HealthStatus ConvertFrom-WslList
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# README говорит, где читать логи и хронологию, и держит опоры пути нового
+# ПК. Полноту и выполнимость шагов проверяет чтение, не этот поиск.
+test_readme_points_to_logs() {
+  local name=readme_points_to_logs pattern
+  for pattern in 'journalctl CONTAINER_NAME=' 'measure-boot.log' 'engine-setup.ps1 -Install' 'restore.sh --project <COMPOSE_PROJECT_NAME> --from '; do
+    grep -qF -- "$pattern" "$root/README.md" || { fail "$name" "в README нет «$pattern»"; return; }
+  done
+  ok "$name"
 }
 
 test_shell_scripts_parse
@@ -932,6 +1391,7 @@ test_wsl_conf_is_merged
 test_mss_clamp_unit
 test_journald_dropin
 test_docker_log_driver
+test_boot_probe_output
 test_apt_waits_for_lock
 test_no_localhost_url
 test_docker_wsl_passes_arguments
@@ -944,7 +1404,17 @@ test_vm_firewall_problems
 test_journald_config_problems
 test_container_log_problems
 test_native_output_encoding
+test_boot_probe_parse
 test_measure_boot
+test_measure_boot_records_health_transitions
+test_measure_boot_stops_on_stable_status
+test_measure_boot_appends_events_before_finish
+test_measure_boot_skips_engine_when_distro_not_running
+test_measure_boot_reads_utf16_wsl_list
+test_measure_boot_survives_probe_failures
+test_measure_boot_probe_always_fails_not_ok
+test_measure_boot_records_container_restart
+test_readme_points_to_logs
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]
