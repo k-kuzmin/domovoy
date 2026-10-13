@@ -404,7 +404,7 @@ journald».
 ```bash
 docker logs --tail 100 <контейнер>     # Git Bash, через функцию docker(); dockerd читает журнал сам
 wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контейнер> --since "<ГГГГ-ММ-ДД ЧЧ:ММ:СС>"
-wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контейнер> -b -1   # прошлый запуск дистрибутива — до выключения хоста
+wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контейнер> -b -1   # предыдущая загрузка ВМ: после выключения хоста это запуск до него; текущая — -b 0 или --since
 ```
 
 **Разово на хосте, где движок ставился до журнала.** Повторный `-Install`
@@ -455,8 +455,10 @@ healthy (`stop=ready`), когда статусы 5 минут не меняли
 стека (`{"status":"healthy"}`, `{"status":"degraded"}`, 503
 `{"status":"unhealthy"}`); иной ответ 200 помечается как чужой слушатель.
 
-Хронология одной загрузки — строки с её меткой; логи контейнеров за тот же
-запуск — `journalctl … -b -1` выше:
+Хронология одной загрузки — строки с её меткой. Логи контейнеров — по
+загрузке ВМ WSL, а не по запуску дистрибутива: за текущую —
+`journalctl … -b 0` (или `--since`), за предыдущую, до выключения хоста,
+— `-b -1` выше:
 
 ```powershell
 Select-String -Path "$env:LOCALAPPDATA\domovoy-engine\measure-boot.log" -Pattern '^boot=<старт ОС>;' -Encoding UTF8
