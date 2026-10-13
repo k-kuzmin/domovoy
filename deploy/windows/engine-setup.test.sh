@@ -278,13 +278,15 @@ case "\$*" in
   *) exit 2 ;;
 esac
 EOF
+  # example-old-1 остановлен: StartedAt и healthy прошлого запуска в вывод
+  # зонда не попадают.
   cat >"$bin/docker" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$work/probe-docker.log"
 [ -z "\${FAKE_DOCKER_FAIL:-}" ] || { echo 'example: docker не отвечает' >&2; exit 1; }
 case "\$1" in
-  ps) [ -n "\${FAKE_DOCKER_EMPTY:-}" ] || printf 'example-api-1\nexample-postgres-1\nexample-new-1\n' ;;
-  inspect) printf '/example-api-1|2025-10-13T04:51:20.123456789Z|healthy\n/example-postgres-1|2025-10-13T04:51:15Z|none\n/example-new-1|0001-01-01T00:00:00Z|none\n' ;;
+  ps) [ -n "\${FAKE_DOCKER_EMPTY:-}" ] || printf 'example-api-1\nexample-postgres-1\nexample-new-1\nexample-old-1\n' ;;
+  inspect) printf '/example-api-1|2025-10-13T04:51:20.123456789Z|healthy|true\n/example-postgres-1|2025-10-13T04:51:15Z|none|true\n/example-new-1|0001-01-01T00:00:00Z|none|false\n/example-old-1|2025-10-12T20:00:00Z|healthy|false\n' ;;
   *) exit 2 ;;
 esac
 EOF

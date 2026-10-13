@@ -18,8 +18,10 @@
 #   container name=<имя> started_at=<секунды> health=<состояние>
 #                            по строке на контейнер проекта: последний
 #                            старт ({{.State.StartedAt}}, UTC) и состояние
-#                            healthcheck, без него — none. Контейнер, ни разу
-#                            не стартовавший, не печатается.
+#                            healthcheck, без него — none. Не печатается
+#                            контейнер, ни разу не стартовавший, и
+#                            неработающий (.State.Running false): у него
+#                            StartedAt и Health.Status прошлого запуска.
 #
 # Код не 0 — данных на этом опросе нет или они неполные: docker.service ещё
 # не active или docker не ответил. Напечатанное до отказа замер засчитывает
@@ -47,9 +49,10 @@ echo "docker_active=$active"
 names="$(docker ps -a --filter "label=com.docker.compose.project=$project" --format '{{.Names}}')"
 [ -n "$names" ] || exit 0
 # shellcheck disable=SC2086 # имена контейнеров compose без пробелов
-inspected="$(docker inspect -f '{{.Name}}|{{.State.StartedAt}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' $names)"
-while IFS='|' read -r name started health; do
+inspected="$(docker inspect -f '{{.Name}}|{{.State.StartedAt}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.Running}}' $names)"
+while IFS='|' read -r name started health running; do
   [ -n "$name" ] || continue
+  [ "$running" = true ] || continue
   # Ни разу не стартовавший контейнер: StartedAt 0001-01-01T00:00:00Z.
   case "$started" in 0001-*) continue ;; esac
   seconds="$(date -u -d "$started" +%s)"
