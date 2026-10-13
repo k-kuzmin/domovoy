@@ -1,0 +1,391 @@
+{
+  "issue": 147,
+  "current_state": [
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 153,
+      "observation": "Режимы -Install, -Check, -Uninstall, -Migrate; параметры -DockerSettingsDir и -StartupRegistryRoot существуют только ради настроек и реестра Docker Desktop (подмена в тесте). Проверка сочетаний режимов (строки 203–209) допускает пару -Install -Migrate."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 478,
+      "observation": "Строки 478–590 — функции Docker Desktop: Get-JsonBool, Set-JsonBool, Get-DesktopSettings, ConvertTo-SettingsBase64, Get-DesktopRestoreText, Get-DesktopSettingsBackup, Get-DesktopStartup, Get-DisabledStartupBytes, Set-DesktopApproved. Вызываются только из -Migrate, -Uninstall (шаг 7) и звена -Check «автозапуск Docker Desktop при входе выключен»."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 597,
+      "observation": "Строки 597–927 — блок -Migrate: пределы ожидания, Wait-EngineDocker, Wait-DesktopGone, Get-BackupNames, Get-RestoreArgs, Get-MigrateSetup (с Find-GitBash/Test-WslBash, строки 443–476), список $migrateSteps, Write-MigratePlan (932). По грепу Start-Keeper (636) вызывается ещё из Resume-Keeper в -Install (1327) и остаётся; Invoke-Passthru, Wait-EngineDocker, Find-GitBash, Test-WslBash, Get-BackupNames, Get-RestoreArgs нужны только -Migrate."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 970,
+      "observation": "-Uninstall ставит расписание бэкапа под Docker Desktop: install-schedule.ps1 -Install -LogonType Interactive; при отказе снимает задачу domovoy-backup, «чтобы ночью не будить движок WSL» (1061–1071). Шаг 7 (1105–1135) возвращает автозапуск Desktop из копий; финальный текст (1137–1146) ведёт в «Откат на Docker Desktop»."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 1172,
+      "observation": "Задача domovoy-measure-boot регистрируется с аргументами -Port <API_HTTP_PORT> -LogPath <%LOCALAPPDATA%\\domovoy-engine\\measure-boot.log>; ни имени дистрибутива, ни проекта compose задача не получает."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 1212,
+      "observation": "Расписание бэкапа в -Install: install-schedule.ps1 -Install -LogonType S4U. Финальный текст -Install без -Migrate (1430–1437) советует «переезд с Docker Desktop одной командой … -Migrate»."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 1664,
+      "observation": "-Check: звенья «Docker Desktop не запущен» (1664–1666) и «автозапуск Docker Desktop при входе выключен» (1668–1680). Звенья внутри дистрибутива (1682–1727) — юниты, restart: unless-stopped через docker inspect {{.HostConfig.RestartPolicy.Name}}, порт замера; ни драйвера логов, ни настроек journald -Check не смотрит. Звено «задача замера» (1598–1611) сверяет только -Port."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "line": 115,
+      "observation": "main: ensure_wsl_conf, install_docker, systemctl enable docker/containerd, ensure_mss_clamp, safe.directory. /etc/docker/daemon.json и /etc/systemd/journald.conf.d не трогаются — драйвер логов по умолчанию json-file. Образец идемпотентной правки с путём аргументом — ensure_wsl_conf (33) и ensure_mss_clamp (92)."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "line": 107,
+      "observation": "Цикл опроса /health выходит на первом ответе 200 формы стека (break, 122); $stackBody (58) принимает только healthy|degraded, ответ 503 {\"status\":\"unhealthy\"} учитывается лишь как first_response с кодом. Строка журнала одна на загрузку и пишется после цикла (138–182) — до записи результата выключение хоста теряет всё. Дистрибутив, docker и контейнеры не опрашиваются."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 116,
+      "observation": "У homeassistant нет healthcheck (116–132); healthcheck есть у postgres (38) и api (107). Перехода homeassistant в healthy у движка не бывает. Драйвер логов в compose не задан."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "line": 57,
+      "observation": "ValidateSet('S4U', 'Interactive') у -LogonType; ветка Interactive (195–198) запускает backup.sh через bash.exe Git for Windows: Resolve-Bash, Find-GitBash, Test-WslBash (107–154) и параметр -BashPath нужны только ей. Шапка (30–46) описывает откат на Docker Desktop."
+    },
+    {
+      "path": "ops/backup/backup.test.sh",
+      "line": 621,
+      "observation": "test_install_schedule_dry_run: сценарии install_schedule_dry_run_s4u, install_schedule_dry_run_interactive, install_schedule_refuses_other_logon_types (Interactive как допустимое), install_schedule_refuses_wsl_bash (-BashPath) и общие. В CI идёт ci-heavy.yml:244; сценарии PowerShell — только на Windows."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 680,
+      "observation": "test_engine_setup_migrate_dry_run (680) и Desktop-часть test_engine_setup_uninstall_dry_run (572; reg_helper, settings_bytes_are, ветка реестра HKCU\\Software\\domovoy-test) проверяют удаляемое поведение. ps_functions (819) извлекает функции из AST — готовый способ проверить чистые разборщики. Заглушка /health (start_stub, 926) — python http.server, отдаёт только 200 одним телом. В CI сценарий не входит, запускается локально на Windows."
+    },
+    {
+      "path": "README.md",
+      "line": 314,
+      "observation": "Раздел «Автозапуск после перезагрузки»: «Окно переезда с Docker Desktop» (314–383), «Откат на Docker Desktop» (441–466), строка таблицы команд «откат на Docker Desktop» (523), Interactive в разделе бэкапа (236–238), Desktop как способ запуска (229, 260, 312). Пути «новый ПК» нет; замер описан одной строкой (412–425)."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "line": 105,
+      "observation": "Решение держит Docker Desktop путём отката до приёмки (105–110); «Следствия» (161–170) записывают потерю хвоста логов json-file при выключении хоста и что причина unhealthy после холодной загрузки не установлена."
+    },
+    {
+      "path": "ops/backup/restore.sh",
+      "line": 15,
+      "observation": "--project требует --from (15–18); файлы клона (.env, config/*) в бэкап не входят (38–39). Путь нового ПК обязан включать их и явный каталог бэкапа."
+    }
+  ],
+  "approach": {
+    "summary": "Три логических изменения, три коммита в этом порядке. (1) Снять путь через Docker Desktop. engine-setup.ps1: убрать режим -Migrate целиком (блок 597–949, Find-GitBash, Test-WslBash, Invoke-Passthru, Wait-EngineDocker, Wait-DesktopGone, Get-BackupNames, Get-RestoreArgs), все Desktop-функции (478–590) и параметры -DockerSettingsDir, -StartupRegistryRoot; Start-Keeper остаётся. -Uninstall: стек stop (если дистрибутив работает) → снять задачи domovoy-engine и domovoy-measure-boot → снять расписание бэкапа install-schedule.ps1 -Uninstall (без движка задача ночью будила бы WSL — та же причина, что в нынешнем отказе 1068–1070) → wsl --terminate → правило firewall → .wslconfig из копии или по отметке; никакого отката, дистрибутив с томами не удаляется, текст в конце — только про wsl --unregister руками владельца и wsl --shutdown для применения .wslconfig. -Check: звенья «Docker Desktop не запущен» и «автозапуск Docker Desktop при входе» удаляются. Шапка и финальный текст -Install переписываются без Desktop: mirrored применяется после wsl --shutdown, который -Install по-прежнему не делает (гасит все дистрибутивы пользователя), — его выполняет владелец по README. install-schedule.ps1: параметры -LogonType и -BashPath, Resolve-Bash, Find-GitBash, Test-WslBash и ветка Interactive удаляются, задача всегда S4U (вывод сухого прогона «LogonType: S4U» остаётся — это свойство принципала); engine-setup.ps1 перестаёт передавать -LogonType. (2) Логи через journald. provision-engine.sh получает ensure_journald (drop-in /etc/systemd/journald.conf.d/domovoy-journal.conf — имя через дефис: форма domovoy.<суффикс> ловится правилом gitleaks domovoy-real-hostname: [Journal] Storage=persistent, SyncIntervalSec=10s; путь аргументом, пишется только при отличии) и ensure_docker_log_driver (/etc/docker/daemon.json: нет файла — пишется {\"log-driver\": \"journald\"}; уже journald — не трогается; иной log-driver или иное содержимое — отказ с кодом 1, чужая настройка не переписывается, как .wslconfig). Применяет их перезапуск дистрибутива, который -Install и так делает после провижининга. Драйвер действует на новые контейнеры: на нынешнем хосте контейнеры стека пересоздаются один раз командой README (docker compose --profile ha up -d --force-recreate через обёртку), на новом ПК их создаёт restore.sh уже под journald. -Check внутри работающего дистрибутива получает три звена: «docker: драйвер логов journald» (docker info {{.LoggingDriver}}), «журнал systemd на диске, сброс ≤ 10 с» (systemd-analyze cat-config systemd/journald.conf, действует последнее присваивание Storage= и SyncIntervalSec=, единицы us/ms/s/min) и «логи контейнеров проекта в journald» (docker inspect {{.HostConfig.LogConfig.Type}}; FAIL с подсказкой --force-recreate). Разбор — чистыми функциями Get-JournaldProblems и Get-ContainerLogProblems. docker logs с драйвером journald читает сам dockerd. (3) Хронология загрузки. Новый deploy/windows/boot-probe.sh (внутри дистрибутива под root, аргумент — имя проекта) печатает строки key=value: distro_start (время старта PID 1, ps -o lstart), docker_active (systemctl show docker.service -p ActiveEnterTimestamp), по каждому контейнеру проекта name, started_at ({{.State.StartedAt}}, UTC) и health ({{.State.Health.Status}} или none). measure-boot.ps1 получает -Distro (по умолчанию domovoy-engine), -Project и -WslExe (по умолчанию System32\\wsl.exe; тест подменяет его, чтобы видеть вызовы); -Install регистрирует их в аргументах задачи, -Check сверяет -Project с COMPOSE_PROJECT_NAME. Каждый опрос (-IntervalSeconds): /health (200 формы стека или 503 с телом {\"status\":\"unhealthy\"} — статус; иной 200 — чужой слушатель, как сейчас); wsl.exe --list --running --quiet — и только если дистрибутив уже работает, wsl.exe -d <Distro> -u root --cd <клон> --exec bash deploy/windows/boot-probe.sh <Project>: замер сам дистрибутив не поднимает. Журнал пишется событиями по мере наступления, строка на событие с меткой загрузки boot=<os_start>: os_start (с last_boot, fw_post_ms, port), distro_start, docker_active, container_start name=…, container_healthy name=… (момент — опрос, на котором впервые увиден healthy, точность -IntervalSeconds; у контейнера без healthcheck — строка container_healthy name=… healthcheck=нет с моментом running), health status=… при каждой смене статуса /health, затем итоговая строка в нынешней форме (first_response, first_200, result). Моменты изнутри ВМ (UTC) переводятся в местное время Windows, у каждой строки src=windows|engine и секунды от os_start. Опрос кончается, когда /health healthy и все контейнеры с healthcheck healthy, или когда статус /health и состояния контейнеров не менялись -StableMinutes (5) подряд, или по -TimeoutMinutes (30). Разбор вывода зонда и смена статусов — чистые функции (ConvertFrom-BootProbe, Get-HealthStatus) для проверки через AST. README: один путь для нового ПК (предусловия → клон, .env и config/* из своего хранилища, носитель BACKUP_DIR → -Install -DryRun, -Install → wsl --shutdown и Start-ScheduledTask domovoy-engine → restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<последний domovoy-backup-*> внутри дистрибутива → -Check → функция docker() в ~/.bashrc), где читать логи (docker logs через обёртку; journalctl CONTAINER_NAME=<имя> внутри дистрибутива, в том числе за прошлый запуск) и хронологию (формат событий measure-boot.log), разовое пересоздание контейнеров на нынешнем хосте, -Uninstall без отката. 0028 дополняется датированной записью: путь через Desktop снят (владелец удаляет Desktop, переезд выполнен), логи — journald с диском и сбросом 10 с, хронология загрузки — measure-boot.",
+    "rejected": [
+      {
+        "option": "Драйвер журнала в docker-compose.yml (logging: driver: journald) у каждого сервиса",
+        "reason": "Тот же compose работает на машинах разработки и в CI, где journald нет или он не нужен; настройка движка хоста принадлежит движку, а не составу стека."
+      },
+      {
+        "option": "Аккуратная остановка стека при выключении Windows",
+        "reason": "Отвергнута владельцем в задаче: на Windows Home надёжного сценария нет, от жёсткого отключения не спасает."
+      },
+      {
+        "option": "Моменты healthy из docker events --since <старт docker> одним чтением в конце замера",
+        "reason": "События держатся в памяти демона ограниченным буфером, а exec каждого healthcheck порождает свои события; через полчаса нужные могли быть вытеснены. Опрос не зависит от буфера, цена — точность в -IntervalSeconds. Размер буфера не проверялся."
+      },
+      {
+        "option": "Одна строка замера на загрузку, как сейчас, но с новыми полями",
+        "reason": "Строка пишется после цикла до 30 минут; жёсткое выключение в этом окне — ровно разбираемый случай — теряет всю хронологию. События пишутся по мере наступления."
+      },
+      {
+        "option": "-Install сам пересоздаёт контейнеры стека после смены драйвера",
+        "reason": "Нужен один раз и только на нынешнем хосте (на новом ПК контейнеры создаёт restore.sh); шаг с ожиданием docker и compose в клоне добавил бы -Install новых отказов. -Check называет недоделанное звено и команду."
+      },
+      {
+        "option": "Оставить в install-schedule.ps1 -LogonType с ValidateSet('S4U')",
+        "reason": "Параметр с единственным значением ничего не выбирает; критерий требует отсутствия Interactive, а не перекрашенного переключателя."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да по всем трём пунктам решения владельца, кроме одного места: у homeassistant нет healthcheck (docker-compose.yml:116), и «переход каждого контейнера в healthy» для него буквально невыполним — план пишет для него строку healthcheck=нет с моментом running. Это и есть развилка ниже.",
+    "alternative": "Развилка: добавить homeassistant healthcheck в docker-compose.yml (например, curl к :8123 внутри контейнера). Владелец увидел бы в журнале настоящий момент healthy HA и выполненный буквально пункт критерия; цена — правка состава стека вне заявленных путей (группа product, medium), меняется поведение docker compose up --wait и restore.sh (ждёт HA), нужна проверка, что в образе есть curl, и прогон backup.test.sh с docker. Рекомендация плана — без healthcheck: готовность HA и так видна в хронологии через смену статуса /health (компонент Home Assistant входит в агрегат health). Прочее — не развилки: пересоздание контейнеров руками один раз вместо шага -Install (конечное состояние то же, -Check называет недоделанное); снятие расписания бэкапа в -Uninstall (следует из критерия «никуда не откатывает» и нынешней причины 1068–1070).",
+    "ripple": "Греп по символам: -LogonType передаёт только engine-setup.ps1 (1212, 970) и сценарии backup.test.sh (674, 695, 723); -DockerSettingsDir и -StartupRegistryRoot — только engine-setup.ps1 и engine-setup.test.sh; -Migrate упомянут ещё в README и шапках сценариев. Аргументы задачи замера меняются: регистрация в -Install (1172), сухой прогон (measure.arguments) и звено -Check «задача замера» (1598–1611) — сверка -Project. Драйвер журнала — глобальный переключатель движка: действует на все контейнеры дистрибутива, а не только на стек (греп: в compose и сценариях logging/log-driver не задан нигде). Удаляемые сценарии тестов: test_engine_setup_migrate_dry_run, install_schedule_dry_run_interactive, install_schedule_refuses_other_logon_types, install_schedule_refuses_wsl_bash, Desktop-часть uninstall dry run. Упоминания Desktop вне критерия: ops/backup/backup.sh:186, config/entities.example.yaml:48, docker-compose.override.example.yml:28, 0027 — не трогаются (out_of_scope).",
+    "workaround": "Нет. Логи пишутся на диск штатным драйвером и штатной настройкой journald, замер опрашивает штатные источники; // HACK: не требуется.",
+    "council_signs": [
+      "новая функциональность — хронология загрузки и звенья -Check",
+      "глобальный переключатель — драйвер журнала движка для всех контейнеров дистрибутива (греп: logging/log-driver в compose и сценариях не задан)",
+      "правка обвязки — docs/decisions/0028-docker-engine-in-wsl.md (группа harness_quality)"
+    ],
+    "executor": "Субагент: порог превышен многократно (9 файлов, сотни строк удаления и добавления). Параллелить по файлам нельзя — все три части правят engine-setup.ps1 и engine-setup.test.sh; порядок последовательный: удаление Desktop, затем journald, затем хронология, по коммиту на каждую.",
+    "fork": true
+  },
+  "files": [
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "action": "modify",
+      "why": "Снять -Migrate, Desktop-функции и параметры, шаг Interactive и возврат Desktop в -Uninstall (вместо них — install-schedule.ps1 -Uninstall), Desktop-звенья -Check; добавить звенья journald, драйвера логов и логов контейнеров; аргументы -Distro/-Project у задачи замера и их сверка в -Check; шапка и тексты без Desktop."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "action": "modify",
+      "why": "ensure_journald (drop-in Storage=persistent, SyncIntervalSec=10s) и ensure_docker_log_driver (daemon.json log-driver journald, чужая настройка — отказ)."
+    },
+    {
+      "path": "deploy/windows/boot-probe.sh",
+      "action": "create",
+      "why": "Зонд внутри дистрибутива: старт дистрибутива, docker.service active, старт и health каждого контейнера проекта — строки key=value для measure-boot.ps1."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "action": "modify",
+      "why": "Хронология событиями по мере наступления: дистрибутив, docker, контейнеры, смены статуса /health до устоявшегося состояния или тайм-аута; дистрибутив не поднимается замером."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "action": "modify",
+      "why": "Удалить сценарии удаляемого поведения, переписать uninstall dry run под снос без отката; новые сценарии journald, драйвера, зонда, разборщиков -Check и замера; поиск путей Desktop."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "action": "modify",
+      "why": "Убрать -LogonType, -BashPath, ветку Interactive и поиск Git Bash; шапка без отката на Desktop."
+    },
+    {
+      "path": "ops/backup/backup.test.sh",
+      "action": "modify",
+      "why": "Удалить сценарии Interactive и -BashPath; сценарий S4U остаётся."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Убрать переезд и откат на Docker Desktop и Desktop как способ запуска; путь нового ПК; где читать логи и хронологию; разовое пересоздание контейнеров; -Uninstall без отката."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "action": "modify",
+      "why": "Дополнение с датой и причиной: путь через Desktop снят; логи — journald на диске со сбросом 10 с; хронология — measure-boot. Группа harness_quality, заявлено здесь."
+    }
+  ],
+  "boundaries": [
+    "deploy/windows/**",
+    "ops/backup/install-schedule.ps1",
+    "ops/backup/backup.test.sh",
+    "README.md",
+    "docs/decisions/0028-docker-engine-in-wsl.md",
+    "docs/tasks/147.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "test_journald_dropin",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["journald-check", "logs-survive"],
+      "behavior": "ensure_journald на временном каталоге пишет [Journal] Storage=persistent и SyncIntervalSec=10s; повторный вызов файл не меняет и systemctl (подменён) не зовёт; чужой файл в том же каталоге не трогается. Для logs-survive это автоматическая часть — настройка, от которой зависит сохранность хвоста; само переживание отключения проверяет живой прогон."
+    },
+    {
+      "name": "test_docker_log_driver",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["journald-check"],
+      "behavior": "ensure_docker_log_driver: нет daemon.json — появляется {\"log-driver\": \"journald\"}; уже journald — байты те же; иной log-driver или иное содержимое — код 1, файл байт в байт прежний."
+    },
+    {
+      "name": "test_journald_config_problems",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["journald-check"],
+      "behavior": "Get-JournaldProblems из AST engine-setup.ps1: вывод cat-config с drop-in Storage=persistent и SyncIntervalSec=10s — замечаний нет; без SyncIntervalSec (по умолчанию 5 мин), SyncIntervalSec=30s или 1min, Storage=volatile/auto — замечание; последнее присваивание перекрывает раннее; закомментированные строки не учитываются."
+    },
+    {
+      "name": "test_container_log_problems",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["journald-check", "docker-logs", "check-green"],
+      "behavior": "Get-ContainerLogProblems из AST: все контейнеры journald — замечаний нет; один json-file — замечание с его именем и подсказкой --force-recreate; ответов меньше, чем контейнеров, — замечание, а не OK."
+    },
+    {
+      "name": "test_boot_probe_output",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "boot-probe.sh с подменёнными docker, systemctl и ps первыми в PATH печатает distro_start, docker_active и по строке на контейнер проекта (name, started_at, health; без healthcheck — health=none); фильтр по проекту передаётся docker; без контейнеров — только первые две строки и код 0; отказ docker — ненулевой код."
+    },
+    {
+      "name": "test_boot_probe_parse",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "ConvertFrom-BootProbe из AST measure-boot.ps1 переводит строки зонда (UTC) в местные моменты и состояния контейнеров; Get-HealthStatus: 200 {\"status\":\"healthy|degraded\"} и 503 {\"status\":\"unhealthy\"} — статус, 200 с иным телом — чужой слушатель, 503 с иным телом — не статус стека."
+    },
+    {
+      "name": "measure_boot_records_health_transitions",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "Заглушка отдаёт последовательно 503 unhealthy, 200 degraded, 200 healthy; -Distro — заведомо незарегистрированное имя. В журнале строки health status=unhealthy, degraded, healthy в этом порядке с моментами и секундами от os_start, итоговая строка result=ok, код 0."
+    },
+    {
+      "name": "measure_boot_stops_on_stable_status",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "Заглушка всё время отдаёт 200 degraded, -StableMinutes малое: замер кончается до -TimeoutMinutes, в журнале одна строка health status=degraded и итоговая строка."
+    },
+    {
+      "name": "measure_boot_appends_events_before_finish",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "Замер с долгим тайм-аутом против заглушки unhealthy: до завершения процесса в журнале уже есть строки os_start и health status=unhealthy — событие не ждёт конца цикла; процесс затем останавливается тестом."
+    },
+    {
+      "name": "measure_boot_skips_engine_when_distro_not_running",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["chronology"],
+      "behavior": "С незарегистрированным -Distro замер не вызывает wsl.exe -d (подмена -WslExe фиксирует вызовы), пишет distro_start=нет данных и продолжает хронологию /health."
+    },
+    {
+      "name": "uninstall_dry_run_without_rollback",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["uninstall"],
+      "behavior": "-Uninstall -DryRun печатает снятие задач domovoy-engine и domovoy-measure-boot, install-schedule.ps1 -Uninstall, wsl --terminate, удаление правила, .wslconfig restore/remove/keep по копии и отметке, строку о сохранённом дистрибутиве; ни строки с Desktop, Interactive или -Install у расписания; .wslconfig, копия и отметка не тронуты."
+    },
+    {
+      "name": "test_no_docker_desktop_paths",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["no-desktop"],
+      "behavior": "grep -nw по 'Docker Desktop', Migrate, Interactive в engine-setup.ps1, install-schedule.ps1 и README.md — пусто; engine-setup.ps1 -Migrate отказывает как неизвестный параметр."
+    },
+    {
+      "name": "test_readme_matches_scripts",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["docs", "new-pc"],
+      "behavior": "Каждый ключ вида engine-setup.ps1 -<Имя> и install-schedule.ps1 -<Имя> в README.md объявлен в param() соответствующего сценария (из AST); вызов restore.sh в разделе нового ПК несёт --project и --from; в README есть команда journalctl CONTAINER_NAME= и путь measure-boot.log. Ловит README, ссылающийся на снятый или переименованный параметр; полноту и порядок шагов проверяет чтение."
+    },
+    {
+      "name": "test_engine_setup_dry_run",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["chronology", "no-desktop", "check-green"],
+      "behavior": "Существующий сценарий дополняется: measure.arguments содержит -Distro domovoy-engine и -Project <проект>, строка backup не несёт -LogonType."
+    },
+    {
+      "name": "test_install_schedule_dry_run",
+      "file": "ops/backup/backup.test.sh",
+      "new": false,
+      "covers": ["no-desktop"],
+      "behavior": "Остаются сценарии S4U и общие; сценарии Interactive, -BashPath и допустимости Interactive удаляются вместе с поведением; -LogonType Interactive теперь отказ неизвестного параметра."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "journald-check",
+      "criterion": "Контейнеры стека в движке пишут логи через journald, журнал systemd хранится на диске со сбросом не реже ~10 с; engine-setup.ps1 -Check проверяет оба условия.",
+      "method": "bash deploy/windows/engine-setup.test.sh — сценарии test_journald_dropin, test_docker_log_driver, test_journald_config_problems, test_container_log_problems ok; на живом хосте после -Install и пересоздания контейнеров — engine-setup.ps1 -Check.",
+      "evidence": "Строки ok четырёх сценариев; в выводе -Check владельца OK у звеньев «docker: драйвер логов journald», «журнал systemd на диске, сброс ≤ 10 с», «логи контейнеров проекта в journald» (без адресов)."
+    },
+    {
+      "id": "logs-survive",
+      "criterion": "После жёсткого отключения хоста логи api за запуск до выключения читаются, кроме последних секунд до сброса. Проверено на живом хосте.",
+      "method": "Живой прогон владельца: записать время, снять питание, после загрузки внутри дистрибутива journalctl CONTAINER_NAME=<имя контейнера api> --since <время старта прошлого запуска> --until <время отключения>; journalctl -u systemd-journald | grep -i suppressed — пусто.",
+      "evidence": "Последняя строка api прошлого запуска не раньше чем ~10 с до отключения (две метки времени в журнале задачи, без содержимого строк); пустой вывод grep suppressed."
+    },
+    {
+      "id": "docker-logs",
+      "criterion": "docker logs для контейнеров стека продолжает работать.",
+      "method": "Живой прогон владельца после пересоздания контейнеров и после жёсткого отключения: docker logs --tail 5 <контейнер> через обёртку для каждого контейнера стека, код 0; плюс test_container_log_problems.",
+      "evidence": "Код 0 и непустой вывод для каждого контейнера (в журнал — коды, не содержимое)."
+    },
+    {
+      "id": "chronology",
+      "criterion": "Журнал measure-boot для каждой загрузки содержит моменты старта дистрибутива, docker, каждого контейнера и перехода каждого в healthy, а также смены статуса /health с отметками времени. Проверено перезагрузкой на живом хосте.",
+      "method": "Сценарии test_boot_probe_output, test_boot_probe_parse, measure_boot_* ok; живой прогон владельца: перезагрузка и жёсткое отключение, затем строки measure-boot.log с меткой boot= этой загрузки.",
+      "evidence": "В журнале одной загрузки: distro_start, docker_active, container_start и container_healthy на каждый контейнер стека (у homeassistant — healthcheck=нет, пока развилка не решена иначе), health status=… на каждую смену и итоговая строка — с моментами и секундами от os_start."
+    },
+    {
+      "id": "docs",
+      "criterion": "README и запись 0028 обновлены: где читать логи и хронологию загрузки.",
+      "method": "Чтение диффа README.md и 0028; grep -n 'journalctl' README.md и grep -n 'measure-boot.log' README.md docs/decisions/0028-docker-engine-in-wsl.md — непусто.",
+      "evidence": "Цитаты файл:строка разделов о логах и хронологии; датированное дополнение 0028."
+    },
+    {
+      "id": "no-desktop",
+      "criterion": "В engine-setup.ps1, install-schedule.ps1 и README нет путей переезда с Docker Desktop и отката на него; поиск по Docker Desktop, Migrate и Interactive — упоминания только в 0028 и журналах задач.",
+      "method": "grep -nw -e 'Docker Desktop' -e Migrate -e Interactive deploy/windows/engine-setup.ps1 ops/backup/install-schedule.ps1 README.md — пустой вывод, код 1 (ключ -w: -NonInteractive словом Interactive не считается); тот же поиск по дереву без -w — совпадения только в docs/decisions/0028-*, docs/tasks/* и путях из out_of_scope; сценарий test_no_docker_desktop_paths ok.",
+      "evidence": "Пустой вывод первой команды; список файлов второй."
+    },
+    {
+      "id": "new-pc",
+      "criterion": "README описывает один путь для нового ПК: engine-setup.ps1 -Install, затем restore.sh из последнего бэкапа. Шаги выполнимы по тексту README.",
+      "method": "Чтение (ответ владельца на триаже): каждый шаг раздела сверяется построчно с параметрами сценариев — engine-setup.ps1 param (-Install, -DryRun), restore.sh usage (--project, --from обязателен), Start-ScheduledTask domovoy-engine, wsl --shutdown; предусловия .env, config/*, BACKUP_DIR из шапки restore.sh.",
+      "evidence": "Таблица шаг README → файл:строка параметра в журнале задачи. Чистой ВМ нет — живого прогона пути нет (решение владельца 2026-10-13)."
+    },
+    {
+      "id": "uninstall",
+      "criterion": "-Uninstall снимает движок (задачи, правило firewall, .wslconfig) и никуда не откатывает. Тома дистрибутива без явного решения владельца не удаляются.",
+      "method": "Сценарий uninstall_dry_run_without_rollback ok; чтение блока -Uninstall: нет wsl --unregister, нет Desktop и Interactive (ответ владельца: тесты + чтение, живого сноса нет).",
+      "evidence": "Строка ok сценария; цитата файл:строка шагов -Uninstall и строки о сохранённом дистрибутиве."
+    },
+    {
+      "id": "check-green",
+      "criterion": "engine-setup.ps1 -Check на живом хосте завершается с кодом 0, тесты зелёные.",
+      "method": "Владелец: -Check в терминале администратора после -Install и пересоздания контейнеров, echo $LASTEXITCODE → 0. Агент: bash deploy/windows/engine-setup.test.sh и bash ops/backup/backup.test.sh локально на Windows — «упало 0»; bash -n и shellcheck новых .sh в составе первого.",
+      "evidence": "Строка «итог: все звенья, проверяемые с хоста, OK» и код 0 от владельца; строки «итог: пройдено N, упало 0, пропущено M» обоих сценариев с названными пропусками. engine-setup.test.sh в CI не идёт — это локальный прогон."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Существующие контейнеры остаются на json-file: daemon.json действует только на вновь созданные, и после -Install на нынешнем хосте критерий не выполнен.",
+      "mitigation": "Звено -Check «логи контейнеров проекта в journald» с FAIL по каждому контейнеру и подсказкой; шаг пересоздания в README; приёмка journald-check только после него."
+    },
+    {
+      "risk": "Ограничение скорости journald для docker.service (все контейнеры пишут от имени dockerd) съедает строки api во всплеске загрузки.",
+      "mitigation": "Живая проверка journalctl -u systemd-journald | grep -i suppressed в приёмке logs-survive; при совпадении — RateLimit в том же drop-in отдельным решением в журнале."
+    },
+    {
+      "risk": "Замер своим wsl.exe -d поднимает дистрибутив раньше держалки и искажает хронологию.",
+      "mitigation": "Вход внутрь только после wsl.exe --list --running --quiet с именем дистрибутива; сценарий measure_boot_skips_engine_when_distro_not_running."
+    },
+    {
+      "risk": "Часы ВМ WSL и Windows расходятся, моменты изнутри и снаружи несопоставимы.",
+      "mitigation": "Каждая строка несёт src=windows|engine; моменты ВМ приводятся из UTC в местное время; живая сверка: docker_active не раньше distro_start, distro_start не раньше os_start — расхождение записывается в журнал задачи."
+    },
+    {
+      "risk": "Удаление тестов вместе с поведением выглядит для guard-lite и ревью как ослабление тестов.",
+      "mitigation": "Удаляются только сценарии -Migrate, Desktop, Interactive и -BashPath, перечисленные в задаче как «тесты удаляемого поведения»; в теле PR — список удалённых сценариев с причиной."
+    },
+    {
+      "risk": "Правка задевает строки с проверкой целостности образа (engine-setup.ps1:23–26 и 1306–1320) — слово-префикс таблицы риска поднимает уровень по диффу до high при плане ниже, это триггер «позвать человека».",
+      "mitigation": "Эти строки не трогать; перед ревью — bash scripts/risk.sh diff origin/main HEAD и сверка причины уровня."
+    },
+    {
+      "risk": "Отказ ensure_docker_log_driver на хосте с уже существующим daemon.json ломает -Install.",
+      "mitigation": "Отказ с текстом, что именно задано и что нужно; -Install уже обрабатывает ненулевой код провижининга через Stop-Install с возвратом держалки; сценарий test_docker_log_driver."
+    },
+    {
+      "risk": "Журнал замера растёт: событий на загрузку десяток вместо одной строки.",
+      "mitigation": "Строка события короткая, без адресов и имён хоста; рост — десятки строк на загрузку, ротация не нужна и в план не входит."
+    }
+  ],
+  "out_of_scope": [
+    "healthcheck для homeassistant в docker-compose.yml — только если владелец выберет этот вариант развилки.",
+    "Упоминания Docker Desktop вне критерия: ops/backup/backup.sh:186 (подсказка «Docker Desktop не запущен?»), config/entities.example.yaml:48, docker-compose.override.example.yml:28, docs/decisions/0027 — в раздел «Попутно» тела PR.",
+    "Удаление дистрибутива и томов (wsl --unregister) — только руками владельца.",
+    "wsl --shutdown внутри -Install — по-прежнему не делается: гасит все дистрибутивы пользователя.",
+    "Живой прогон -Uninstall и проверка README на чистой ВМ — решение владельца 2026-10-13.",
+    "Ротация measure-boot.log и лимиты размера журнала systemd сверх значений по умолчанию."
+  ]
+}
