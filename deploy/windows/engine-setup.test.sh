@@ -1304,9 +1304,10 @@ test_measure_boot_survives_probe_failures() {
     start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
     port="$stub_port"
     # Три одинаковых отказа подряд — не смена состояния; окно стабильности
-    # (12 с) шире серии отказов, иначе на медленном powershell.exe опрос
-    # кончается по стабильности до данных зонда.
-    measure_distro=example-engine measure_stable=0.2 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    # (12 с) и тайм-аут (60 с) шире серии отказов, иначе на медленном
+    # powershell.exe опрос кончается до данных зонда. Зелёный случай
+    # кончается по готовности, а не по пределам.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
     stop_stub
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc — все контейнеры healthy, ожидался 0"; show_log; return; }
     log_has 'stop=ready через ' || { fail "$name" "итог не называет остановку по готовности"; show_log; return; }
@@ -1337,7 +1338,9 @@ test_measure_boot_probe_always_fails_not_ok() {
     probe_step "$fake" 0 1 '' $'boot-probe: возраст PID 1 не разобран\n'
     start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
     port="$stub_port"
-    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    # Окно стабильности (12 с) вмещает не меньше трёх вызовов зонда и на
+    # медленном шелле: при 3 с опрос кончался по стабильности после двух.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
     stop_stub
     [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
     [ "$(cat "$fake/probe.count")" -ge 3 ] || { fail "$name" "замер кончился на healthy /health, не дождавшись контейнеров"; show_log; return; }
@@ -1368,7 +1371,10 @@ test_measure_boot_records_container_restart() {
     start_stub_seq '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"healthy"}' \
       || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
     port="$stub_port"
-    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    # Между перезапуском и healthy два опроса без смены: окно стабильности
+    # (12 с) их вмещает и на медленном шелле; зелёный случай кончается по
+    # готовности.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
     stop_stub
     starts="$(grep -c '; container_start=.*name=example-api-1' "$work/measure.log")"
     healthies="$(grep -c '; container_healthy=.*name=example-api-1' "$work/measure.log")"
