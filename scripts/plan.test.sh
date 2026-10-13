@@ -834,6 +834,14 @@ expect_no_output 'docs/tasks/4242.md'
 run_validate "$(mutate '.fork_card.slices[1].files += ["scripts/risk.sh"]')"
 expect_status 1
 expect_output 'нарушение: срезы: срез «правила» называет файл, которого нет в files плана: scripts/risk.sh'
+
+# Обратная сторона того же исключения: журнал и план задачи ни одному срезу не
+# принадлежат, и срез, назвавший их, отвергается — даже когда путь есть в files
+# плана. Отказ один: ветка «нет в files плана» на него не срабатывает.
+run_validate "$(mutate '.fork_card.slices[0].files += ["docs/tasks/4242.md"]')"
+expect_status 1
+expect_output 'нарушение: срезы: срез «валидатор» называет журнал или план задачи — их правит оркестратор: docs/tasks/4242.md'
+expect_no_output 'нет в files плана: docs/tasks/4242.md'
 end_case
 
 # ------------------------------------------------------------------
