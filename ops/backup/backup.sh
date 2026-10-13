@@ -183,7 +183,7 @@ dc() { docker compose --profile ha "$@"; }
 
 log "старт: $name"
 
-docker info >/dev/null 2>&1 || fail "docker недоступен — Docker Desktop не запущен?"
+docker info >/dev/null 2>&1 || fail "docker недоступен — демон docker не запущен?"
 running="$(dc ps --status running --services </dev/null)" || fail "docker compose ps не выполнился"
 for service in postgres homeassistant; do
   grep -qx "$service" <<<"$running" || fail "сервис $service не запущен"

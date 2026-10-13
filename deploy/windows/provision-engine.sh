@@ -19,7 +19,16 @@
 #      пакеты TLS теряются, nuget при сборке api не отвечает. Сеть хоста
 #      (--network host) этим не страдает;
 #   6. git safe.directory (--system) для клона: клон лежит на диске Windows
-#      (/mnt/<диск>/…) и принадлежит не root, а ops/backup/*.sh вызывают git.
+#      (/mnt/<диск>/…) и принадлежит не root, а ops/backup/*.sh вызывают git;
+#   7. журнал systemd на диске со сбросом раз в 10 с — drop-in
+#      /etc/systemd/journald.conf.d/domovoy-journal.conf (Storage=persistent,
+#      SyncIntervalSec=10s), и драйвер логов движка journald —
+#      /etc/docker/daemon.json {"log-driver": "journald"}. Перезапуск или
+#      выключение Windows гасит ВМ без остановки контейнеров (запись 0028):
+#      json-file терял последние минуты логов, журнал — не больше 10 с.
+#      Чужой daemon.json не переписывается — отказ с кодом 1. Драйвер
+#      действует на контейнеры, созданные после перезапуска docker:
+#      существующие пересоздаются (README, «Логи и хронология загрузки»).
 #
 # systemd начинает работать только после перезапуска дистрибутива. Если он
 # ещё не PID 1, сценарий записывает wsl.conf и выходит с кодом 3:
@@ -112,6 +121,50 @@ WantedBy=multi-user.target"
   systemctl start domovoy-mss-clamp.service
 }
 
+# ensure_journald [<каталог drop-in>] — журнал systemd на диске
+# (Storage=persistent) со сбросом раз в 10 с (SyncIntervalSec, по умолчанию
+# 5 мин). Файл пишется, только если отличается; прочие файлы каталога не
+# трогаются. Каталог — аргументом, для теста.
+ensure_journald() {
+  local dir="${1:-/etc/systemd/journald.conf.d}"
+  local file="$dir/domovoy-journal.conf"
+  local content='[Journal]
+Storage=persistent
+SyncIntervalSec=10s'
+  if [ "$(cat "$file" 2>/dev/null || true)" != "$content" ]; then
+    mkdir -p "$dir"
+    printf '%s\n' "$content" >"$file"
+    systemctl restart systemd-journald.service
+  fi
+}
+
+# ensure_docker_log_driver [<daemon.json>] — драйвер логов движка journald.
+# Файла нет — пишется; log-driver уже journald — не трогается; иной
+# log-driver или чужие ключи без него — отказ с кодом 1: настройка, которую
+# сценарий не писал, не переписывается и не объединяется (как .wslconfig в
+# engine-setup.ps1). Действует после перезапуска docker. Путь — аргументом,
+# для теста.
+ensure_docker_log_driver() {
+  local file="${1:-/etc/docker/daemon.json}"
+  local want='"log-driver": "journald"'
+  if [ ! -e "$file" ]; then
+    mkdir -p "$(dirname "$file")"
+    printf '{%s}\n' "$want" >"$file"
+    return 0
+  fi
+  if grep -Eq '"log-driver"[[:space:]]*:[[:space:]]*"journald"' "$file"; then
+    return 0
+  fi
+  local current
+  current="$(grep -Eo '"log-driver"[[:space:]]*:[[:space:]]*"[^"]*"' "$file" | head -n 1 || true)"
+  if [ -n "$current" ]; then
+    echo "provision-engine: $file задаёт $current — чужая настройка не переписывается; движку нужен $want (запись 0028): поправьте файл руками и повторите" >&2
+  else
+    echo "provision-engine: $file уже есть и не задаёт log-driver — чужие настройки не объединяются; добавьте в объект JSON ключ $want руками и повторите" >&2
+  fi
+  return 1
+}
+
 main() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "provision-engine: нужен root — wsl.exe -d domovoy-engine -u root …" >&2
@@ -131,10 +184,12 @@ main() {
   install_docker
   systemctl enable docker.service containerd.service
   ensure_mss_clamp
+  ensure_journald
+  ensure_docker_log_driver
   if ! git config --system --get-all safe.directory 2>/dev/null | grep -qxF "$clone"; then
     git config --system --add safe.directory "$clone"
   fi
-  echo "provision-engine: готово — systemd включён в /etc/wsl.conf, docker, containerd и MSS clamp в автозапуске, safe.directory: $clone"
+  echo "provision-engine: готово — systemd включён в /etc/wsl.conf, docker, containerd и MSS clamp в автозапуске, журнал systemd на диске (сброс 10 с), драйвер логов docker journald (после перезапуска дистрибутива), safe.directory: $clone"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

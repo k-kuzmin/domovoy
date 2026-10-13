@@ -616,8 +616,7 @@ install_schedule_parses() {
 
 # Сухой прогон печатает собранную задачу и ничего не регистрирует; прав
 # администратора не требует. Только на Windows: объекты задачи собирает
-# модуль ScheduledTasks, а -LogonType Interactive ищет bash.exe Git for
-# Windows в реестре и PATH.
+# модуль ScheduledTasks.
 test_install_schedule_dry_run() {
   install_schedule_parses
   local name=install_schedule_dry_run_s4u
@@ -632,9 +631,8 @@ test_install_schedule_dry_run() {
 
   rm -rf -- "$work/sched-dest" && mkdir "$work/sched-dest"
   fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
-  local ps1 script_arg engine_arg
+  local ps1 engine_arg
   ps1="$(cygpath -w "$work/clone/ops/backup/install-schedule.ps1")"
-  script_arg="\"$(cygpath -m "$work/clone/ops/backup/backup.sh")\""
   # По умолчанию (#6) — запуск без входа пользователя: backup.sh идёт внутри
   # дистрибутива движка, где docker — сам движок; каталог клона — его
   # текущий каталог, сценарий — путь от корня клона.
@@ -666,37 +664,6 @@ test_install_schedule_dry_run() {
   done
   ok "$name"
 
-  # Откат на Docker Desktop: движок живёт в сессии пользователя, задача —
-  # только при входе, backup.sh — в bash.exe Git for Windows.
-  name=install_schedule_dry_run_interactive
-  first=''
-  for shell in "${shells[@]}"; do
-    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType Interactive
-    if [ "$rc" -ne 0 ]; then fail "$name/$shell" "код $rc"; show_out; return; fi
-    tr -d '\r' <"$work/out" >"$work/out.$shell"
-    grep -qx 'LogonType: Interactive' "$work/out.$shell" || { fail "$name/$shell" "не Interactive"; show_out; return; }
-    grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
-    grep -qix 'Execute: .*\\bin\\bash\.exe' "$work/out.$shell" || { fail "$name/$shell" "не bash.exe Git for Windows"; show_out; return; }
-    if grep -qi '^Execute: .*\\system32\\' "$work/out.$shell"; then fail "$name/$shell" "выбран bash.exe из System32 (WSL)"; return; fi
-    # Аргумент — только путь к backup.sh этого клона: каталог и лимит
-    # читаются из .env при каждом запуске.
-    grep -qxF "Arguments: $script_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$script_arg»"; show_out; return; }
-    if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
-      fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
-    fi
-  done
-  ok "$name"
-
-  # Тип входа с хранимым паролем (Password) сценарий не собирает: пароль
-  # учётной записи в Планировщике — то, от чего отказались в #6.
-  name=install_schedule_refuses_other_logon_types
-  local logon
-  for logon in Password InteractiveOrPassword; do
-    run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType "$logon"
-    if [ "$rc" -eq 0 ]; then fail "$name" "-LogonType $logon принят"; show_out; return; fi
-  done
-  ok "$name"
-
   # BACKUP_DIR из .env разбирается так же, как dotenv.sh.
   name=install_schedule_dotenv_like_compose
   local i
@@ -717,12 +684,6 @@ test_install_schedule_dry_run() {
   tr -d '\r' <"$work/out" | grep -qx 'Daily: 04:15' || { fail "$name" "-At не применён"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 25:00
   if [ "$rc" -eq 0 ]; then fail "$name" "-At 25:00 принят"; return; fi
-  ok "$name"
-
-  name=install_schedule_refuses_wsl_bash
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType Interactive -BashPath 'C:\Windows\System32\bash.exe'
-  if [ "$rc" -eq 0 ]; then fail "$name" "bash.exe из System32 принят"; show_out; return; fi
-  grep -q 'WSL' "$work/out" || { fail "$name" "отказ не назван"; show_out; return; }
   ok "$name"
 
   # BACKUP_DIR проверяется по .env: задача в 03:30 не видит окружения
