@@ -170,6 +170,11 @@ docker compose --profile ha up -d --build --wait
 docker compose --profile ha down
 ```
 
+`--wait` ждёт и healthy Home Assistant: его healthcheck — ответ HTTP-сервера
+HA на любой код, от первичной настройки он не зависит
+([0029](docs/decisions/0029-home-assistant-healthcheck.md)). HA стартует
+дольше Backend: на первом запуске ожидание занимает до нескольких минут.
+
 Чтобы HA поднимался всегда, без ключа, — раскомментировать в `.env` строку
 `COMPOSE_PROFILES=ha`. Порт веб-интерфейса на хосте — `HA_HTTP_PORT`
 (по умолчанию 8123).
@@ -514,7 +519,7 @@ dotnet user-secrets list
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
 | Стек целиком | `docker compose up -d --build --wait` |
-| Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
+| Стек с Home Assistant (`--wait` ждёт и healthy HA) | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
 | Движок в WSL: проверка автозапуска | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check` |
 | Движок в WSL: снос (без отката) | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall` (администратор) |
