@@ -170,6 +170,11 @@ docker compose --profile ha up -d --build --wait
 docker compose --profile ha down
 ```
 
+`--wait` ждёт и healthy Home Assistant: его healthcheck — ответ HTTP-сервера
+HA на любой код, от первичной настройки он не зависит
+([0029](docs/decisions/0029-home-assistant-healthcheck.md)). HA стартует
+дольше Backend: на первом запуске ожидание занимает до нескольких минут.
+
 Чтобы HA поднимался всегда, без ключа, — раскомментировать в `.env` строку
 `COMPOSE_PROFILES=ha`. Порт веб-интерфейса на хосте — `HA_HTTP_PORT`
 (по умолчанию 8123).
@@ -225,17 +230,13 @@ wsl.exe -d domovoy-engine --cd <клон> --exec bash ops/backup/backup.sh
 `backup.log`, и следующий пойдёт в срок.
 
 Бэкап вне расписания на хосте с движком в WSL — из каталога клона:
-`wsl.exe -d domovoy-engine --exec bash ops/backup/backup.sh`. Там, где
-движок — Docker Desktop или Linux, — `bash ops/backup/backup.sh`.
+`wsl.exe -d domovoy-engine --exec bash ops/backup/backup.sh`. На Linux с
+docker в оболочке — `bash ops/backup/backup.sh`.
 Состояние задачи (тип входа, последний результат) и хвост `backup.log`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check
 ```
-
-Откат на Docker Desktop, который живёт только в сессии вошедшего
-пользователя, — `install-schedule.ps1 -LogonType Interactive`: задача
-запускает `backup.sh` в Git Bash и стартует, только пока пользователь вошёл.
 
 **Бэкап — секрет.** В нём токены Home Assistant, разметка дома, диалоги и
 аудит: носитель хранится как ключ от дома и без шифрования в облако не
@@ -257,9 +258,8 @@ wsl.exe -d domovoy-engine --exec bash ops/backup/restore.sh --check
 
 ## Автозапуск после перезагрузки (Windows, WSL2)
 
-Docker Desktop без входа пользователя не стартует, поэтому на хосте с
-Windows 11 стек живёт в Docker Engine внутри своего WSL2-дистрибутива
-`domovoy-engine`. Дистрибутив поднимает задача Планировщика при запуске
+На хосте с Windows 11 стек живёт в Docker Engine внутри своего
+WSL2-дистрибутива `domovoy-engine`. Дистрибутив поднимает задача Планировщика при запуске
 системы — без входа и без хранимого пароля. Почему так и что отвергнуто —
 [0028](docs/decisions/0028-docker-engine-in-wsl.md). Сценарии — в
 [`deploy/windows/`](deploy/windows/), подробности — в их шапках.
@@ -308,69 +308,64 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 5. добавляет правило firewall;
 6. ставит расписание бэкапа.
 
-`wsl --shutdown` установка не выполняет: он гасит все дистрибутивы, в том
-числе Docker Desktop. Его выполняет переезд (`-Migrate`, ниже).
+`wsl --shutdown` установка не выполняет: он гасит все дистрибутивы
+пользователя. `networkingMode=mirrored` применяется после него — его
+выполняет владелец (путь нового ПК ниже, шаг 4) — и на уже работающем
+хосте после первой установки.
 
-**Окно переезда с Docker Desktop.** Одна команда в терминале PowerShell от
-администратора, в каталоге клона: установка, затем переезд. На уже
-установленном движке — один `-Migrate`; без установленного движка он
-отказывает и подсказывает `-Install -Migrate`.
+**Новый ПК.** Путь один: установка движка, затем восстановление из
+последнего бэкапа. Команды шагов 4–6 — в терминале PowerShell от
+администратора, в каталоге клона.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -Migrate -DryRun  # что будет сделано
-powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -Migrate
-```
+1. Предусловия выше выполнены; установлен Git for Windows (Git Bash).
+2. Клон и файлы, которых нет в бэкапе: `git clone`, затем `.env` и
+   `config/*` (`entities.yaml`, `home-profile.md`, `proactive-rules.yaml`,
+   `response-templates.yaml`) — из своего хранилища: бэкап их не содержит
+   (шапка [`ops/backup/restore.sh`](ops/backup/restore.sh)). В `.env` —
+   `COMPOSE_PROJECT_NAME` прежнего хоста и `BACKUP_DIR` путём Windows вида
+   `D:/domovoy-backups`.
+3. Подключить носитель с бэкапами: каталог `BACKUP_DIR` виден в
+   Проводнике.
+4. Установка движка:
 
-Данные переносят сценарии бэкапа и восстановления; тома Docker Desktop не
-трогаются — это путь отката. История рекордера HA за минуты окна теряется.
-До любых действий `-Migrate` проверяет предусловия и при отказе ничего не
-меняет; с `-Install` Git Bash, `BACKUP_DIR` и имя проекта проверяются ещё до
-установки:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -DryRun  # что будет сделано
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install
+   wsl --shutdown                               # применяет mirrored, гасит все дистрибутивы
+   Start-ScheduledTask -TaskName domovoy-engine # держалка: дистрибутив и docker поднимаются
+   ```
 
-- Docker Desktop работает, у него есть контейнеры проекта
-  (`COMPOSE_PROJECT_NAME`), postgres и homeassistant запущены;
-- у `docker.exe` есть команда `docker desktop` (проба `docker desktop
-  version`) — ею переезд останавливает Desktop;
-- в движке ещё нет ни контейнеров, ни томов проекта — повторный перенос
-  данные не затирает;
-- в движке не работает Home Assistant другого проекта compose — та же
-  проверка, что в `restore.sh`: два HA управляли бы одними устройствами;
-- есть Git Bash (`bash.exe` Git for Windows);
-- `BACKUP_DIR` в `.env` задан путём Windows (`<диск>:/…`), каталог есть.
+   `restore.sh` не ждёт docker и на только что поднятом дистрибутиве
+   отказывает «docker недоступен». Перед шагом 5 дождаться `active`:
 
-Что делает `-Migrate` — тот же порядок, что раньше выполнялся руками:
+   ```powershell
+   while ((wsl.exe -d domovoy-engine -u root --exec systemctl is-active docker) -ne 'active') { Start-Sleep -Seconds 5 }
+   ```
 
-1. На Docker Desktop: `docker compose stop api` — Backend больше не пишет в
-   базу.
-2. `ops/backup/backup.sh` из Git Bash в `BACKUP_DIR`.
-3. `docker compose --profile ha stop` — именно `stop`, а не `down -v`.
-4. `docker desktop stop` и ожидание, пока его процессы завершатся.
-5. Выключает автозапуск Docker Desktop при входе — иначе после входа он
-   займёт порты стека:
-   - `AutoStart` в `%APPDATA%\Docker\settings-store.json`, копия —
-     `.domovoy-backup`; нет файла — предупреждение;
-   - запускает Desktop при входе значение `Docker Desktop` в ветке реестра
-     `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Если оно есть,
-     его выключает значение того же имени в
-     `…\Explorer\StartupApproved\Run` — так же, как «Автозагрузка» Диспетчера
-     задач. Прежнее значение сохраняется рядом с настройками Desktop
-     (`StartupApproved-Run.domovoy-backup` или отметка `.domovoy-absent`).
-     `-Check` отдаёт FAIL, если запись включена.
-6. Держалка, если работает, останавливается (`Stop-ScheduledTask`), затем
-   `wsl --shutdown` — применяет mirrored и гасит **все** дистрибутивы WSL.
-7. `Start-ScheduledTask domovoy-engine`, ожидание, пока задача перейдёт в
-   состояние Running (иначе отказ: без держалки дистрибутив гаснет по
-   простою), затем ожидание docker в дистрибутиве.
-8. Внутри дистрибутива: `ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME>
-   --from <бэкап шага 2>` — он же поднимает стек и ждёт `/health`.
-9. `engine-setup.ps1 -Check` — его код выхода и есть код `-Migrate`.
+   Цикл не кончается за пару минут — `-Check` из шага 6 назовёт звено,
+   которое не поднялось.
 
-Отказ после шага 1 сам ничего не откатывает: вывод говорит, что тома Docker
-Desktop целы, и печатает команды отката. Пока процессы Desktop не ушли
-(шаг 4 включительно) — `docker desktop start` и `docker compose --profile ha
-start`; после — раздел «Откат на Docker Desktop».
+5. Восстановление внутри дистрибутива из последнего бэкапа — каталог
+   `domovoy-backup-<UTC-метка>` в `BACKUP_DIR` с самой поздней меткой
+   (`.partial` — незаконченный, не годится). `restore.sh` сам поднимает
+   стек и ждёт `/health`:
 
-После переезда — руками:
+   ```powershell
+   wsl.exe -d domovoy-engine -u root --exec bash ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<domovoy-backup-последний>
+   ```
+
+   Путь `--from` — в записи Windows, как `BACKUP_DIR` (`D:/domovoy-backups/…`):
+   внутри дистрибутива его переводит `wslpath`.
+6. Проверка всех звеньев — `-Check`, код 0:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
+   ```
+
+7. Функция `docker()` в `~/.bashrc` Git Bash (раздел «docker из Git Bash»
+   ниже) — чтобы команды `docker` из этого README шли в движок.
+
+Затем руками:
 
 - проверить, что остальные дистрибутивы и сервисы в WSL работают как
   прежде (mirrored действует на все);
@@ -380,12 +375,6 @@ start`; после — раздел «Откат на Docker Desktop».
 - восстановление после ранней недоступности базы: `docker compose stop
   postgres` (через функцию ниже) — `/health` отдаёт 503; `docker compose
   start postgres` — не позже чем через 60 с снова 200, без перезапуска api.
-
-`-Check` отдельно — проверка всех звеньев, код 0:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
-```
 
 `-Check` только читает: дистрибутив не запускает и не останавливает. Звенья
 внутри остановленного дистрибутива помечаются «не проверено», и код тогда
@@ -407,22 +396,84 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 - функция есть только в интерактивной оболочке, поэтому сценарии
   `ops/backup/*.sh` запускаются внутри дистрибутива
   (`wsl.exe -d domovoy-engine --cd <клон> --exec bash ops/backup/…`, так их
-  зовут `-Migrate` и задача бэкапа), а не через неё.
+  зовут задача бэкапа и путь нового ПК), а не через неё.
 
-**Проверочные перезагрузки и замер.** Задача `domovoy-measure-boot` после
-каждой загрузки дописывает строку в
+**Логи и хронология загрузки.** Перезагрузка или выключение Windows гасит
+ВМ WSL без остановки контейнеров
+([0028](docs/decisions/0028-docker-engine-in-wsl.md), «Следствия»). Поэтому
+логи контейнеров идут в журнал systemd дистрибутива (драйвер логов docker
+`journald`), а журнал хранится на диске и сбрасывается раз в 10 с: после
+жёсткого отключения теряются только последние секунды. Настраивает это
+провижининг `-Install`, проверяет `-Check` — звенья «журнал systemd на диске,
+сброс ≤ 10 с», «docker: драйвер логов journald» и «логи контейнеров проекта в
+journald».
+
+Где читать логи. Имя контейнера — из `docker ps` (через функцию `docker()`),
+вида `<COMPOSE_PROJECT_NAME>-api-1`:
+
+```bash
+docker logs --tail 100 <контейнер>     # Git Bash, через функцию docker(); dockerd читает журнал сам
+wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контейнер> --since "<ГГГГ-ММ-ДД ЧЧ:ММ:СС>"
+wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контейнер> -b -1   # предыдущая загрузка ВМ: после выключения хоста это запуск до него; текущая — -b 0 или --since
+```
+
+**Разово на хосте, где движок ставился до журнала.** Повторный `-Install`
+(раздел «Установка» выше) пишет настройки журнала и драйвера и перезапускает
+дистрибутив. Драйвер логов задаётся контейнеру при создании, поэтому
+существующие контейнеры стека остаются на прежнем драйвере, пока их не
+пересоздать — один раз, тома не трогаются:
+
+```bash
+docker compose --profile ha up -d --force-recreate   # Git Bash, в каталоге клона, через функцию docker()
+```
+
+До этого `-Check` отдаёт FAIL у звена «логи контейнеров проекта в journald»
+и называет контейнеры. На новом ПК пересоздавать нечего: контейнеры создаёт
+`restore.sh` уже с журналом.
+
+**Проверочные перезагрузки и замер — хронология загрузки.** Задача
+`domovoy-measure-boot` после каждой загрузки пишет хронологию в
 `%LOCALAPPDATA%\domovoy-engine\measure-boot.log` пользователя, от
 которого идёт держалка (S4U, обычные права — не SYSTEM: сценарий лежит в
-клоне):
+клоне). Журнал на стороне Windows: выключение ВМ его не задевает, а строка
+пишется в момент события — жёсткое отключение хоста теряет только то, что
+ещё не наступило. Каждые 5 с замер опрашивает `/health` и, если дистрибутив
+уже работает, зонд внутри него (`deploy/windows/boot-probe.sh`); сам
+дистрибутив он не поднимает.
 
-- старт ОС (событие Kernel-General 12) и `LastBootUpTime`;
-- время POST (`FwPOSTTime`);
-- первый ответ `/health` и первый ответ 200 формы стека — с секундами от
-  старта ОС.
+Строка на событие, у каждой — метка загрузки `boot=<старт ОС>`, момент в
+местном времени с секундами от старта ОС и источник момента: `src=windows`
+(часы Windows) или `src=engine` (изнутри ВМ):
 
-Засчитывается только ответ `{"status":"healthy"}` или `{"status":"degraded"}`;
-иной ответ 200 помечается как чужой слушатель. Без ответа 200 за 30 минут
-строка говорит «нет ответа 200».
+| Событие | Что это |
+|---|---|
+| `os_start` | старт ОС (Kernel-General 12), рядом `last_boot`, `fw_post_ms` (`FwPOSTTime`), `port` |
+| `distro_start` | старт дистрибутива `domovoy-engine` |
+| `docker_active` | `docker.service` active |
+| `container_start` | старт контейнера проекта, `name=…`; повторный старт в окне замера — с пометкой `restart` |
+| `container_healthy` | первый опрос, на котором контейнер healthy (точность 5 с); без healthcheck — `healthcheck=нет` и момент старта |
+| `health` | смена статуса `/health`, `status=unhealthy`, `degraded` или `healthy` |
+| `probe_error` | зонд не ответил полностью (дистрибутив уже есть, docker ещё нет) — текст ошибки |
+| итоговая строка | `first_response`, `first_200`, `foreign`, `stop` (причина конца опроса и его время), `result` |
+
+Опрос кончается, когда `/health` healthy, каждый контейнер проекта работает
+и все контейнеры с healthcheck healthy (`stop=ready`), когда статусы 5 минут
+не менялись (`stop=stable`), или через 30 минут (`stop=timeout`); рядом —
+фактическое время опроса. Итог `result=ok` — только при healthy `/health` и
+переходе в healthy каждого контейнера; неработающие контейнеры проекта
+названы в итоге — «не работает: <имена>»; без ответа 200 формы стека — «нет
+ответа 200», без данных о контейнерах — «нет данных о контейнерах». Засчитывается только ответ формы
+стека (`{"status":"healthy"}`, `{"status":"degraded"}`, 503
+`{"status":"unhealthy"}`); иной ответ 200 помечается как чужой слушатель.
+
+Хронология одной загрузки — строки с её меткой. Логи контейнеров — по
+загрузке ВМ WSL, а не по запуску дистрибутива: за текущую —
+`journalctl … -b 0` (или `--since`), за предыдущую, до выключения хоста,
+— `-b -1` выше:
+
+```powershell
+Select-String -Path "$env:LOCALAPPDATA\domovoy-engine\measure-boot.log" -Pattern '^boot=<старт ОС>;' -Encoding UTF8
+```
 
 Проверка — две перезагрузки подряд, между ними в систему не входить и
 ничего не запускать:
@@ -438,32 +489,22 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 телефона в домашней сети, затем вход и `engine-setup.ps1 -Check`. Адрес
 хоста в issue не переносится.
 
-**Откат на Docker Desktop:**
+**Снос движка** — терминал PowerShell от администратора, в каталоге клона:
 
-1. Терминал PowerShell от администратора, в каталоге клона:
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall -DryRun  # что будет сделано
+powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall
+```
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall -DryRun  # что будет сделано
-   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall
-   ```
-
-   `-Uninstall` останавливает стек внутри движка (`stop`, тома целы), снимает
-   задачи `domovoy-engine` и `domovoy-measure-boot` — иначе после
-   перезагрузки рядом с Docker Desktop поднялся бы второй стек, — ставит
-   расписание бэкапа под Docker Desktop (`-LogonType Interactive`), гасит
-   дистрибутив, удаляет правило firewall, возвращает `.wslconfig` из копии
-   или удаляет его по отметке и возвращает автозапуску Docker Desktop
-   прежнее значение — и в настройках, и в реестре, — если его выключал
-   `-Migrate`. Дистрибутив с томами остаётся:
-   `wsl --unregister domovoy-engine` уничтожает их — только решением
-   владельца.
-2. Убрать функцию `docker()` из `~/.bashrc` и открыть новую оболочку —
-   иначе `docker` уйдёт в движок WSL.
-3. `wsl --shutdown`, `docker desktop start`,
-   `docker compose --profile ha start`.
-
-Удаление Docker Desktop и его томов — после приёмки и только решением
-владельца.
+`-Uninstall` останавливает стек внутри движка (`stop`, тома целы), снимает
+задачи `domovoy-engine` и `domovoy-measure-boot` и расписание бэкапа
+`domovoy-backup` (без движка оно ночью будило бы WSL), гасит дистрибутив,
+удаляет правило firewall и возвращает `.wslconfig` из копии или удаляет его
+по отметке. Никакого другого движка он не поднимает и никуда не
+откатывает. Дистрибутив с томами остаётся: `wsl --unregister
+domovoy-engine` уничтожает их — только решением владельца. Возврат
+`.wslconfig` применится после `wsl --shutdown`; функцию `docker()` из
+`~/.bashrc` убрать руками.
 
 ## Локальная разработка
 
@@ -517,10 +558,10 @@ dotnet user-secrets list
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
 | Стек целиком | `docker compose up -d --build --wait` |
-| Стек с Home Assistant | `docker compose --profile ha up -d --build --wait` |
+| Стек с Home Assistant (`--wait` ждёт и healthy HA) | `docker compose --profile ha up -d --build --wait` |
 | Остановить стек с Home Assistant | `docker compose --profile ha down` |
 | Движок в WSL: проверка автозапуска | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check` |
-| Движок в WSL: откат на Docker Desktop | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall` (администратор) |
+| Движок в WSL: снос (без отката) | `powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall` (администратор) |
 | Тесты сценариев движка | `bash deploy/windows/engine-setup.test.sh` |
 | Состояние расписания бэкапа | `powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check` |
 | Бэкап вне расписания | `bash ops/backup/backup.sh`; движок в WSL — `wsl.exe -d domovoy-engine --exec bash ops/backup/backup.sh` |

@@ -45,7 +45,7 @@ entities:
     actions: [turn_on, turn_off, toggle, set_brightness]
 
   # Включение (Wake-on-LAN) в набор не входит: на временной конфигурации
-  # (Docker Desktop, контейнер за NAT) широковещательный пакет до
+  # (контейнер за NAT, без сети хоста) широковещательный пакет до
   # локальной сети может не доходить; на сети хоста ограничение снимается (#51).
   - entity_id: media_player.example_living_room_tv
     name: Телевизор

@@ -44,5 +44,6 @@
 | [0024](0024-line-comments-via-named-scenario.md) | Построчные замечания ревью достаёт поимённый сценарий, а не `gh api` | частично заменено [0026](0026-human-led-pipeline.md) |
 | [0025](0025-anonymous-device-pairing-endpoint.md) | Обмен кода привязки на токен устройства — анонимный эндпоинт | принято |
 | [0026](0026-human-led-pipeline.md) | Бота нет: конвейер ведёт человек с агентом в Claude CLI | принято |
-| [0027](0027-home-assistant-compose-profile.md) | Home Assistant в общем compose под профилем `ha` | принято |
+| [0027](0027-home-assistant-compose-profile.md) | Home Assistant в общем compose под профилем `ha` | частично заменено [0029](0029-home-assistant-healthcheck.md) |
 | [0028](0028-docker-engine-in-wsl.md) | Docker Engine в своём WSL2-дистрибутиве, запуск без входа пользователя | принято |
+| [0029](0029-home-assistant-healthcheck.md) | Healthcheck контейнера Home Assistant — ответ HTTP-сервера, без зависимости `api` от HA | принято |

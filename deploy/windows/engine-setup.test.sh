@@ -20,17 +20,13 @@
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
 #     pwsh 7; engine-setup.ps1 -Install -DryRun печатает собранные задачи,
 #     правило и .wslconfig и ничего не создаёт; -Uninstall -DryRun печатает
-#     план отката (с возвратом AutoStart Docker Desktop) и не трогает
-#     .wslconfig, копию и отметку; -Migrate -DryRun печатает шаги переезда
-#     в порядке контракта, без down, отказывает без установленного движка и
-#     не трогает настройки Docker Desktop; запись автозапуска Desktop в
-#     реестре — во временной ветке HKCU\Software\domovoy-test\…, которая
-#     убирается при выходе, настоящие Run и StartupApproved не читаются;
-#     measure-boot.ps1 против
-#     локальной заглушки /health на python (порт на 127.0.0.1, журнал во
-#     временном каталоге).
+#     план сноса движка без отката и не трогает .wslconfig, копию и
+#     отметку; measure-boot.ps1 против локальной заглушки /health на python
+#     (порт на 127.0.0.1, журнал во временном каталоге);
+#   - пути через прежний движок рабочего стола сняты: поиск по сценариям и
+#     README пуст, режима переезда нет.
 #
-# engine-setup.ps1 -Install, -Migrate и -Check тест не запускает: они меняют и читают
+# engine-setup.ps1 -Install и -Check тест не запускает: они меняют и читают
 # хост — это живой прогон владельца (README, «Автозапуск после перезагрузки»).
 
 set -uo pipefail
@@ -42,14 +38,14 @@ cd "$root" || exit 1
 
 work="$(mktemp -d)"
 stub_pid=''
-# Ветка реестра для записи автозапуска Docker Desktop — своя, под
-# HKCU\Software\domovoy-test: настоящие Run и StartupApproved тест не
-# читает и не трогает. Создаётся по требованию, убирается при выходе.
-reg_root="HKCU:\\Software\\domovoy-test\\engine-setup-$$-$RANDOM"
-reg_used=''
+measure_pid=''
 cleanup() {
   if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null || true; fi
-  if [ -n "$reg_used" ]; then reg_helper remove >/dev/null 2>&1 || true; fi
+  # Замер в фоне — процесс Windows: kill MSYS его не всегда гасит.
+  if [ -n "$measure_pid" ]; then
+    taskkill //F //T //PID "$(cat "/proc/$measure_pid/winpid" 2>/dev/null)" >/dev/null 2>&1 || true
+    kill "$measure_pid" 2>/dev/null || true
+  fi
   rm -rf -- "$work"
 }
 trap cleanup EXIT
@@ -86,7 +82,7 @@ compose_default() {
 
 test_shell_scripts_parse() {
   local name=shell_scripts_parse script
-  for script in provision-engine.sh docker-wsl.sh; do
+  for script in provision-engine.sh docker-wsl.sh boot-probe.sh; do
     run bash -n "$here/$script"
     if [ "$rc" -ne 0 ]; then fail "$name" "bash -n $script"; show_out; return; fi
   done
@@ -95,7 +91,7 @@ test_shell_scripts_parse() {
   name=shell_scripts_shellcheck
   if ! command -v shellcheck >/dev/null 2>&1; then skip "$name" "нет shellcheck"; return; fi
   # Пути от корня клона: shellcheck для Windows не открывает пути MSYS.
-  run shellcheck -S warning deploy/windows/provision-engine.sh deploy/windows/docker-wsl.sh deploy/windows/engine-setup.test.sh
+  run shellcheck -S warning deploy/windows/provision-engine.sh deploy/windows/docker-wsl.sh deploy/windows/boot-probe.sh deploy/windows/engine-setup.test.sh
   if [ "$rc" -ne 0 ]; then fail "$name" "замечания shellcheck"; show_out; return; fi
   ok "$name"
 }
@@ -171,6 +167,155 @@ test_mss_clamp_unit() {
   if grep -qx 'daemon-reload' "$log"; then fail "$name" "повтор с тем же юнитом делает daemon-reload"; return; fi
   grep -qx 'enable domovoy-mss-clamp.service' "$log" || { fail "$name" "повтор не включает юнит"; return; }
   sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_mss_clamp' || { fail "$name" "main не вызывает ensure_mss_clamp"; return; }
+  ok "$name"
+}
+
+# Журнал systemd на диске со сбросом раз в 10 с: drop-in во временном
+# каталоге, systemctl подменён. Повтор с тем же текстом файл не трогает и
+# systemctl не зовёт; чужой файл каталога остаётся. Имя через дефис: форма
+# domovoy.<суффикс> похожа на имя хоста для правила gitleaks. main вызывает
+# функцию.
+test_journald_dropin() {
+  local name=journald_dropin dir="$work/journald.conf.d" log="$work/systemctl-journald.log" file before
+  dropin() {
+    (
+      # shellcheck source=/dev/null
+      . "$here/provision-engine.sh"
+      systemctl() { printf '%s\n' "$*" >>"$log"; }
+      ensure_journald "$dir"
+    )
+  }
+  rm -rf -- "$dir" "$log"
+  mkdir -p "$dir"
+  printf '[Journal]\nSystemMaxUse=example\n' >"$dir/00-foreign.conf"
+  cp "$dir/00-foreign.conf" "$work/foreign.before"
+  dropin || { fail "$name" "код $?"; return; }
+  file="$dir/domovoy-journal.conf"
+  [ -f "$file" ] || { fail "$name" "нет $file"; ls -la "$dir" | sed 's/^/    | /'; return; }
+  [ "$(cat "$file")" = $'[Journal]\nStorage=persistent\nSyncIntervalSec=10s' ] || { fail "$name" "текст drop-in не тот"; sed 's/^/    | /' "$file"; return; }
+  [ "$(tail -c 1 "$file" | od -An -tx1 | tr -d ' \n')" = 0a ] || { fail "$name" "drop-in не кончается переводом строки"; return; }
+  [ "$(tr '\n' '|' <"$log")" = 'restart systemd-journald.service|' ] || { fail "$name" "вызовы systemctl не те"; sed 's/^/    | /' "$log"; return; }
+  before="$(od -An -tx1 "$file")"
+  rm -f "$log"
+  dropin || { fail "$name" "повтор: код $?"; return; }
+  [ "$(od -An -tx1 "$file")" = "$before" ] || { fail "$name" "повтор изменил drop-in"; return; }
+  [ ! -s "$log" ] || { fail "$name" "повтор зовёт systemctl"; sed 's/^/    | /' "$log"; return; }
+  cmp -s "$dir/00-foreign.conf" "$work/foreign.before" || { fail "$name" "чужой файл каталога изменён"; return; }
+  # Каталога нет — создаётся.
+  rm -rf -- "$dir" "$log"
+  dropin || { fail "$name" "без каталога: код $?"; return; }
+  [ -f "$file" ] || { fail "$name" "без каталога drop-in не записан"; return; }
+  sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_journald' || { fail "$name" "main не вызывает ensure_journald"; return; }
+  ok "$name"
+}
+
+# Драйвер логов движка — journald в /etc/docker/daemon.json (временный
+# файл). Нет файла — пишется; уже journald — байты те же; другой драйвер и
+# чужие ключи без log-driver — отказ с кодом 1, файл байт в байт прежний.
+test_docker_log_driver() {
+  local name=docker_log_driver dir="$work/docker-etc" file got code
+  file="$dir/daemon.json"
+  driver() { (. "$here/provision-engine.sh" && ensure_docker_log_driver "$file") >"$work/out" 2>&1; }
+  rm -rf -- "$dir"
+  driver || { fail "$name" "нет файла: код $?"; show_out; return; }
+  got="$(cat "$file")"
+  [ "$got" = '{"log-driver": "journald"}' ] || { fail "$name" "нет файла → «$got»"; return; }
+  cp "$file" "$work/daemon.before"
+  driver || { fail "$name" "уже journald: код $?"; show_out; return; }
+  cmp -s "$file" "$work/daemon.before" || { fail "$name" "уже journald, а файл переписан"; return; }
+  printf '{\n  "log-driver" : "journald",\n  "mtu": 1400\n}\n' >"$file"
+  cp "$file" "$work/daemon.before"
+  driver || { fail "$name" "journald с другими ключами: код $?"; show_out; return; }
+  cmp -s "$file" "$work/daemon.before" || { fail "$name" "journald с другими ключами — файл переписан"; return; }
+  for got in '{"log-driver": "json-file"}' '{"mtu":1400}'; do
+    printf '%s\n' "$got" >"$file"
+    cp "$file" "$work/daemon.before"
+    driver
+    code=$?
+    [ "$code" -eq 1 ] || { fail "$name" "«$got»: код $code, ожидался 1"; show_out; return; }
+    cmp -s "$file" "$work/daemon.before" || { fail "$name" "«$got»: чужая настройка переписана"; return; }
+    grep -qF '"log-driver": "journald"' "$work/out" || { fail "$name" "«$got»: отказ не говорит, что добавить"; show_out; return; }
+  done
+  sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_docker_log_driver' || { fail "$name" "main не вызывает ensure_docker_log_driver"; return; }
+  ok "$name"
+}
+
+# Зонд хронологии (boot-probe.sh) с подменёнными docker, systemctl, ps и
+# «сейчас» первыми в PATH. Все моменты — секунды Unix: вывод при TZ=UTC,
+# Europe/Moscow и Asia/Yekaterinburg одинаков байт в байт. Подменённые ps и
+# systemctl на запросы местного времени (lstart, ActiveEnterTimestamp без
+# --timestamp=unix) отвечают по TZ сами — zoneinfo в Git Bash может не
+# быть, — так что зонд, взявший местное время, даёт разный вывод.
+test_boot_probe_output() {
+  local name=boot_probe_output bin="$work/probebin" real_date tz out started_api started_pg expected
+  real_date="$(command -v date)"
+  mkdir -p "$bin"
+  # Сдвиг зоны — по самому TZ, без zoneinfo.
+  cat >"$bin/tzoff" <<'EOF'
+case "${TZ:-UTC}" in Europe/Moscow) echo 10800 ;; Asia/Yekaterinburg) echo 18000 ;; *) echo 0 ;; esac
+EOF
+  cat >"$bin/date" <<EOF
+#!/usr/bin/env bash
+if [ "\$#" -eq 1 ] && [ "\$1" = '+%s' ]; then echo 1760331100; exit 0; fi
+exec "$real_date" "\$@"
+EOF
+  cat >"$bin/ps" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  '-o etimes= -p 1') echo '    100' ;;
+  *lstart*) "$real_date" -u -d "@\$((1760331000 + \$(bash "$bin/tzoff")))" '+%a %b %e %H:%M:%S %Y' ;;
+  *) exit 2 ;;
+esac
+EOF
+  cat >"$bin/systemctl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *ActiveEnterTimestamp*--timestamp=unix* | *--timestamp=unix*ActiveEnterTimestamp*)
+    case "\$*" in *--value*) echo '@1760331010' ;; *) echo 'ActiveEnterTimestamp=@1760331010' ;; esac ;;
+  *ActiveEnterTimestamp*)
+    local_time="\$("$real_date" -u -d "@\$((1760331010 + \$(bash "$bin/tzoff")))" '+%a %Y-%m-%d %H:%M:%S')"
+    case "\$*" in *--value*) echo "\$local_time" ;; *) echo "ActiveEnterTimestamp=\$local_time" ;; esac ;;
+  *) exit 2 ;;
+esac
+EOF
+  # example-old-1 остановлен, example-new-1 ни разу не стартовал: оба
+  # названы state=stopped, а StartedAt и healthy прошлого запуска в вывод
+  # зонда не попадают.
+  cat >"$bin/docker" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$work/probe-docker.log"
+[ -z "\${FAKE_DOCKER_FAIL:-}" ] || { echo 'example: docker не отвечает' >&2; exit 1; }
+case "\$1" in
+  ps) [ -n "\${FAKE_DOCKER_EMPTY:-}" ] || printf 'example-api-1\nexample-postgres-1\nexample-new-1\nexample-old-1\n' ;;
+  inspect) printf '/example-api-1|2025-10-13T04:51:20.123456789Z|healthy|true\n/example-postgres-1|2025-10-13T04:51:15Z|none|true\n/example-new-1|0001-01-01T00:00:00Z|none|false\n/example-old-1|2025-10-12T20:00:00Z|healthy|false\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$bin/date" "$bin/ps" "$bin/systemctl" "$bin/docker"
+  started_api="$("$real_date" -u -d '2025-10-13T04:51:20Z' +%s)"
+  started_pg="$("$real_date" -u -d '2025-10-13T04:51:15Z' +%s)"
+  expected="$(printf 'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=%s health=healthy\ncontainer name=example-postgres-1 started_at=%s health=none
+container name=example-new-1 state=stopped
+container name=example-old-1 state=stopped' "$started_api" "$started_pg")"
+  for tz in UTC Europe/Moscow Asia/Yekaterinburg; do
+    rm -f "$work/probe-docker.log"
+    out="$(TZ="$tz" PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" || { fail "$name" "TZ=$tz: код $?"; show_out; return; }
+    if [ "$out" != "$expected" ]; then
+      fail "$name" "TZ=$tz: вывод не тот"; diff <(echo "$expected") <(echo "$out") | sed 's/^/    | /'; return
+    fi
+    grep -qF 'ps -a --filter label=com.docker.compose.project=example ' "$work/probe-docker.log" \
+      || { fail "$name" "фильтр по проекту не передан docker"; sed 's/^/    | /' "$work/probe-docker.log"; return; }
+  done
+  ok "$name"
+
+  name=boot_probe_without_containers
+  out="$(FAKE_DOCKER_EMPTY=1 PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" || { fail "$name" "код $?"; show_out; return; }
+  [ "$out" = $'distro_start=1760331000\ndocker_active=1760331010' ] || { fail "$name" "вывод «$out»"; return; }
+  ok "$name"
+
+  name=boot_probe_docker_failure
+  out="$(FAKE_DOCKER_FAIL=1 PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" && { fail "$name" "отказ docker — код 0"; return; }
+  [ "$(head -n 1 <<<"$out")" = 'distro_start=1760331000' ] || { fail "$name" "до отказа docker не напечатан distro_start"; return; }
   ok "$name"
 }
 
@@ -293,17 +438,12 @@ fake_clone() {
   printf '%s' "$1" >"$work/clone/.env"
 }
 
-# Настройки Docker Desktop — во временном каталоге: сухие прогоны не читают
-# файл владельца из %APPDATA%.
-mkdir -p "$work/docker"
-
-# engine-setup.ps1 копии клона с временными .wslconfig и настройками Desktop.
+# engine-setup.ps1 копии клона с временным .wslconfig.
 engine_setup() {
   local shell="$1"
   shift
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" \
-    "$@" -WslConfigPath "$(cygpath -w "$work/wslconfig")" -DockerSettingsDir "$(cygpath -w "$work/docker")" \
-    -StartupRegistryRoot "$reg_root"
+    "$@" -WslConfigPath "$(cygpath -w "$work/wslconfig")"
   tr -d '\r' <"$work/out" >"$work/out.$shell"
 }
 
@@ -314,44 +454,6 @@ dry_run() {
 }
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
-
-# Ветка $reg_root: set <запись Run 0|1> <hex StartupApproved или ''>,
-# dump — состояние одной строкой, remove — убрать ветку теста.
-reg_helper() {
-  if [ ! -f "$work/reg.ps1" ]; then
-    cat >"$work/reg.ps1" <<'EOF'
-param([string]$Root, [string]$Action, [string]$Run = '0', [string]$Approved = '')
-$ErrorActionPreference = 'Stop'
-$name = 'Docker Desktop'
-$runKey = Join-Path $Root 'Run'
-$approvedKey = Join-Path $Root 'Explorer\StartupApproved\Run'
-if ($Root -notlike 'HKCU:\Software\domovoy-test\*') { throw "not a test key: $Root" }
-switch ($Action) {
-  'set' {
-    if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
-    $null = New-Item -Path $runKey -Force
-    $null = New-Item -Path $approvedKey -Force
-    if ($Run -eq '1') { $null = New-ItemProperty -LiteralPath $runKey -Name $name -Value 'C:\example\Docker Desktop.exe -Autostart' -PropertyType String }
-    if ($Approved) { $null = New-ItemProperty -LiteralPath $approvedKey -Name $name -PropertyType Binary -Value ([byte[]]@($Approved -split '-' | ForEach-Object { [Convert]::ToByte($_, 16) })) }
-  }
-  'dump' {
-    $r = Get-ItemProperty -LiteralPath $runKey -Name $name -ErrorAction SilentlyContinue
-    $a = Get-ItemProperty -LiteralPath $approvedKey -Name $name -ErrorAction SilentlyContinue
-    'run=' + [bool]$r + ' approved=' + $(if ($a) { [BitConverter]::ToString([byte[]]@($a.$name)) } else { '' })
-  }
-  'remove' {
-    if (Test-Path -LiteralPath $Root) { Remove-Item -LiteralPath $Root -Recurse -Force }
-    $parent = Split-Path -Parent $Root
-    if ((Test-Path -LiteralPath $parent) -and -not @(Get-ChildItem -LiteralPath $parent).Count) { Remove-Item -LiteralPath $parent -Force }
-  }
-}
-EOF
-  fi
-  reg_used=1
-  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/reg.ps1")" -Root "$reg_root" -Action "$@"
-}
-
-reg_set() { reg_helper set -Run "$1" -Approved "$2" >/dev/null; }
 
 # Содержимое .wslconfig из сухого прогона байт в байт против ожидаемого.
 wslconfig_bytes_are() {
@@ -365,19 +467,6 @@ wslconfig_bytes_are() {
   return 1
 }
 
-# Файл настроек Docker Desktop, который запишет сценарий, из строки
-# <ключ>.base64 сухого прогона — байт в байт против ожидаемого.
-settings_bytes_are() {
-  local name="$1" shell="$2" key="$3" expected="$4"
-  sed -n "s/^$key\.base64: \([^ ]*\).*/\1/p" "$work/out.$shell" | base64 -d >"$work/settings.got" 2>/dev/null
-  printf '%s' "$expected" >"$work/settings.expected"
-  cmp -s "$work/settings.got" "$work/settings.expected" && return 0
-  fail "$name" "$key: текст настроек Desktop не тот (od -c: получено / ожидалось)"
-  od -c "$work/settings.got" | sed 's/^/    | /'
-  od -c "$work/settings.expected" | sed 's/^/    | /'
-  return 1
-}
-
 test_engine_setup_dry_run() {
   local name=engine_setup_dry_run
   if ! is_windows; then skip "$name" "не Windows — задачи собирает модуль ScheduledTasks"; return; fi
@@ -387,7 +476,7 @@ test_engine_setup_dry_run() {
   ha_default="$(compose_default HA_HTTP_PORT)"
   api_default="$(compose_default API_HTTP_PORT)"
   [ -n "$ha_default" ] && [ -n "$api_default" ] || { fail "$name" "в docker-compose.yml нет значений по умолчанию портов"; return; }
-  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   rm -f "$work/wslconfig"*
 
   for shell in "${shells[@]}"; do
@@ -420,8 +509,15 @@ test_engine_setup_dry_run() {
     if grep -qE '^(keeper|measure|backup\.)(\.)?[Rr]un[Ll]evel: Highest$' "$work/out.$shell"; then fail "$name/$shell" "задача с Highest"; return; fi
     grep -q '^measure.arguments: .* -LogPath "[^"]*measure-boot\.log"$' "$work/out.$shell" || { fail "$name/$shell" "журнал замера не задан при регистрации"; show_out; return; }
     grep -q '^measure.arguments: .*measure-boot\.ps1" -Port 28081 ' "$work/out.$shell" || { fail "$name/$shell" "порт замера не из API_HTTP_PORT"; show_out; return; }
+    # Хронология: замер знает дистрибутив и проект compose, чтобы спросить
+    # зонд о контейнерах проекта.
+    grep -q '^measure.arguments: .* -Distro domovoy-engine -Project example-home ' "$work/out.$shell" \
+      || { fail "$name/$shell" "замеру не переданы -Distro и -Project из COMPOSE_PROJECT_NAME"; show_out; return; }
     grep -q '^provision: wsl.exe -d domovoy-engine -u root --cd .* --exec bash deploy/windows/provision-engine.sh$' "$work/out.$shell" \
       || { fail "$name/$shell" "нет строки провижининга"; show_out; return; }
+    # Расписание бэкапа — одно, S4U: выбора типа входа больше нет.
+    has "$shell" 'backup: install-schedule.ps1 -Install -DryRun' || { fail "$name/$shell" "нет строки вызова расписания бэкапа"; show_out; return; }
+    if grep -q -- '-LogonType' "$work/out.$shell"; then fail "$name/$shell" "расписанию бэкапа передаётся -LogonType"; show_out; return; fi
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значения .env"; return; fi
     [ ! -e "$work/wslconfig" ] || { fail "$name/$shell" "сухой прогон записал .wslconfig"; return; }
     if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
@@ -451,7 +547,26 @@ test_engine_setup_dry_run() {
   fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   dry_run "${shells[0]}"
   grep -q "^measure.arguments: .* -Port $api_default " "$work/out.${shells[0]}" || { fail "$name" "порт не $api_default"; show_out; return; }
+  # Без COMPOSE_PROJECT_NAME в .env — имя проекта по умолчанию из docker-compose.yml.
+  grep -q "^measure.arguments: .* -Project $(sed -nE 's/^name: \$\{COMPOSE_PROJECT_NAME:-([^}]*)\}.*/\1/p' "$root/docker-compose.yml") " "$work/out.${shells[0]}" \
+    || { fail "$name" "проект замера не по умолчанию из docker-compose.yml"; show_out; return; }
   has "${shells[0]}" "firewall.localports: $api_default,$ha_default" || { fail "$name" "порты правила не по умолчанию"; show_out; return; }
+  ok "$name"
+
+  # Имя проекта compose не той формы — отказ с кодом 2 до регистрации задач:
+  # замер получил бы -Project, который его ValidatePattern не примет, и
+  # падал бы на каждой загрузке.
+  name=engine_setup_refuses_bad_project_name
+  local bad
+  for bad in 'Example-Home' 'example home' '-example'; do
+    fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=%s\r\nBACKUP_DIR="%s"\r\n' "$bad" "$(cygpath -m "$dest")")"
+    dry_run "${shells[0]}"
+    [ "$rc" -eq 2 ] || { fail "$name" "«$bad»: код $rc, ожидался 2"; show_out; return; }
+    grep -qF 'COMPOSE_PROJECT_NAME' "$work/out.${shells[0]}" || { fail "$name" "«$bad»: отказ не называет COMPOSE_PROJECT_NAME"; show_out; return; }
+    if grep -qE '^(measure|keeper)\.task:' "$work/out.${shells[0]}"; then fail "$name" "«$bad»: задачи напечатаны после отказа"; show_out; return; fi
+  done
+  # Следующим сценариям — клон с допустимым .env, как до этого сценария.
+  fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   ok "$name"
 
   name=engine_setup_wslconfig_kept
@@ -510,11 +625,6 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 2 ] || { fail "$name" "-Check -DryRun код $rc, ожидался 2"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Install -Uninstall -DryRun
   [ "$rc" -eq 2 ] || { fail "$name" "-Install -Uninstall код $rc, ожидался 2"; show_out; return; }
-  # -Migrate — один или с -Install; с -Check и -Uninstall — отказ разбора.
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Migrate -Check
-  [ "$rc" -eq 2 ] || { fail "$name" "-Migrate -Check код $rc, ожидался 2"; show_out; return; }
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Migrate -Uninstall -DryRun
-  [ "$rc" -eq 2 ] || { fail "$name" "-Migrate -Uninstall код $rc, ожидался 2"; show_out; return; }
   # Подменённое состояние — только для сухого прогона. Проба через -Check:
   # при сломанной защите он лишь читает хост, а -Install без -DryRun тест
   # не запускает.
@@ -565,69 +675,30 @@ snapshot_wslconfig() {
   return 0
 }
 
-# Откат (-Uninstall): стек останавливается до снятия задач, задачи
-# автозапуска снимаются, бэкап — под Docker Desktop (Interactive),
-# .wslconfig возвращается из копии или удаляется по отметке, дистрибутив
-# с томами остаётся. Проверяется сухим прогоном: он ничего не меняет.
-test_engine_setup_uninstall_dry_run() {
-  local name=engine_setup_uninstall_dry_run
+# Снос движка (-Uninstall): стек останавливается до снятия задач, задачи
+# автозапуска и расписание бэкапа снимаются, .wslconfig возвращается из
+# копии или удаляется по отметке, дистрибутив с томами остаётся; отката
+# на другой движок нет. Проверяется сухим прогоном: он ничего не меняет.
+test_uninstall_dry_run_without_rollback() {
+  local name=uninstall_dry_run_without_rollback
   if ! is_windows; then skip "$name" "не Windows — задачи собирает модуль ScheduledTasks"; return; fi
   if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
-  local dest="$work/backups" shell line why
+  local dest="$work/backups" shell line why first=''
   mkdir -p "$dest"
   fake_clone "$(printf 'API_HTTP_PORT=28081\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
 
   for shell in "${shells[@]}"; do
-    name="engine_setup_uninstall_dry_run/$shell"
+    name="uninstall_dry_run_without_rollback/$shell"
     # Движок работает, есть копия прежнего .wslconfig.
     rm -f "$work/wslconfig"*
     printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
     printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig.domovoy-backup"
     snapshot_wslconfig
-    # -Migrate выключил автозапуск Docker Desktop и оставил копию настроек:
-    # откат возвращает прежнее значение ключа.
-    rm -rf -- "$work/docker" "$work/docker.before" && mkdir -p "$work/docker"
-    printf '{\n  "AutoStart": false,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
-    printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json.domovoy-backup"
-    cp -R "$work/docker" "$work/docker.before"
     uninstall_dry_run "$shell" -AssumeEngineState Running
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
-    has "$shell" 'uninstall.desktop_autostart: restore AutoStart=true from settings-store.json.domovoy-backup' \
-      || { fail "$name" "возврат AutoStart Docker Desktop не в плане отката"; show_out; return; }
-    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "AutoStart": true,\n  "Example": 1\n}\n' || return
-    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
-    # В копии ключа не было — он убирается: первым, последним, единственным.
-    printf '{\n  "Example": 1\n}\n' >"$work/docker/settings-store.json.domovoy-backup"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "Example": 1\n}\n' || return
-    printf '{\n  "Example": 1,\n  "AutoStart": false\n}\n' >"$work/docker/settings-store.json"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  "Example": 1\n}\n' || return
-    printf '{\n  "AutoStart": false\n}\n' >"$work/docker/settings-store.json"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    settings_bytes_are "$name" "$shell" uninstall.desktop_autostart $'{\n  \n}\n' || return
-    rm -rf -- "$work/docker" && cp -R "$work/docker.before" "$work/docker"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    has "$shell" 'uninstall.desktop_logon_entry: keep (no StartupApproved-Run.domovoy-backup copy and no StartupApproved-Run.domovoy-absent marker)' \
-      || { fail "$name" "без копии и отметки откат трогает запись автозапуска"; show_out; return; }
-    # Копия прежнего значения StartupApproved — откат возвращает его; отметка — убирает.
-    printf '02-00-00-00-00-00-00-00-00-00-00-00' >"$work/docker/StartupApproved-Run.domovoy-backup"
-    cp -R "$work/docker/." "$work/docker.before/"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    has "$shell" "uninstall.desktop_logon_entry: restore StartupApproved\\Run 'Docker Desktop' = 02-00-00-00-00-00-00-00-00-00-00-00 from StartupApproved-Run.domovoy-backup" \
-      || { fail "$name" "возврат записи автозапуска не в плане отката"; show_out; return; }
-    rm -f "$work/docker/StartupApproved-Run.domovoy-backup" "$work/docker.before/StartupApproved-Run.domovoy-backup"
-    : >"$work/docker/StartupApproved-Run.domovoy-absent"
-    cp -R "$work/docker/." "$work/docker.before/"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    has "$shell" "uninstall.desktop_logon_entry: remove StartupApproved\\Run 'Docker Desktop' (marker StartupApproved-Run.domovoy-absent)" \
-      || { fail "$name" "отметка «не было» не учтена"; show_out; return; }
-    rm -f "$work/docker/StartupApproved-Run.domovoy-absent" "$work/docker.before/StartupApproved-Run.domovoy-absent"
-    uninstall_dry_run "$shell" -AssumeEngineState Running
-    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
     for line in 'uninstall.engine.running: True' \
       'uninstall.task.unregister: domovoy-engine' 'uninstall.task.unregister: domovoy-measure-boot' \
-      'backup.LogonType: Interactive' 'backup.exitcode: 0' \
+      'uninstall.backup: install-schedule.ps1 -Uninstall' \
       'uninstall.terminate: wsl.exe --terminate domovoy-engine' 'uninstall.firewall.remove: domovoy-engine-ports' \
       'uninstall.wslconfig: restore from wslconfig.domovoy-backup' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name" "нет «$line»"; show_out; return; }
@@ -636,9 +707,16 @@ test_engine_setup_uninstall_dry_run() {
       || { fail "$name" "стек не останавливается командой stop внутри движка"; show_out; return; }
     # stop, а не down: тома стека остаются.
     if grep -q '^uninstall\.stack\.stop: .* down' "$work/out.$shell"; then fail "$name" "стек сносится down"; show_out; return; fi
-    grep -qi '^backup\.Execute: .*\\bash\.exe$' "$work/out.$shell" || { fail "$name" "бэкап не через bash Git for Windows"; show_out; return; }
     grep -q '^uninstall\.distro\.kept: .*wsl --unregister domovoy-engine' "$work/out.$shell" \
       || { fail "$name" "не сказано, что дистрибутив с томами остаётся и как его удалить"; show_out; return; }
+    # Отката нет: ни другого движка, ни входа пользователя у расписания,
+    # ни повторной установки расписания.
+    if grep -qiE 'desktop|interactive|install-schedule\.ps1 .*-Install' "$work/out.$shell"; then
+      fail "$name" "в плане сноса есть откат"; grep -niE 'desktop|interactive|install-schedule\.ps1 .*-Install' "$work/out.$shell" | sed 's/^/    | /'; return
+    fi
+    # Сухой прогон расписание бэкапа не снимает и не вызывает: у
+    # install-schedule.ps1 -Uninstall сухого прогона нет.
+    if grep -q '^backup\.' "$work/out.$shell"; then fail "$name" "сухой прогон вызвал install-schedule.ps1"; show_out; return; fi
     why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
 
     # Движок не работает, до -Install .wslconfig не было — отметка.
@@ -651,10 +729,6 @@ test_engine_setup_uninstall_dry_run() {
     has "$shell" 'uninstall.engine.running: False' || { fail "$name" "состояние Stopped не учтено"; show_out; return; }
     grep -q '^uninstall\.stack\.stop: none ' "$work/out.$shell" || { fail "$name" "стек останавливается в неработающем дистрибутиве"; show_out; return; }
     has "$shell" 'uninstall.wslconfig: remove (marker wslconfig.domovoy-absent)' || { fail "$name" "отметка не учтена"; show_out; return; }
-    rm -f "$work/docker/settings-store.json.domovoy-backup"
-    uninstall_dry_run "$shell" -AssumeEngineState Stopped
-    has "$shell" 'uninstall.desktop_autostart: keep (no settings-store.json.domovoy-backup or settings.json.domovoy-backup copy)' \
-      || { fail "$name" "без копии настроек Desktop откат их трогает"; show_out; return; }
     why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
 
     # Ни копии, ни отметки — .wslconfig не трогается.
@@ -664,152 +738,40 @@ test_engine_setup_uninstall_dry_run() {
     uninstall_dry_run "$shell" -AssumeEngineState Stopped
     has "$shell" 'uninstall.wslconfig: keep (no .domovoy-backup copy and no .domovoy-absent marker)' || { fail "$name" "решение о .wslconfig не то"; show_out; return; }
     why="$(wslconfig_files_untouched)" || { fail "$name" "сухой прогон: $why"; return; }
-    ok "$name"
-  done
-}
-
-# Переезд одной командой (-Migrate): сухой прогон печатает шаги в порядке
-# контракта и ничего не трогает — ни docker.exe, ни WSL, ни настроек Desktop.
-# План и настоящий прогон идут по одному списку $migrateSteps, поэтому
-# порядок строк плана — это порядок действий.
-# Состояние движка подменяется: на машине владельца он может быть и
-# установлен, и нет.
-migrate_order=(migrate.stop_api migrate.backup migrate.stop_stack migrate.desktop_stop migrate.desktop_autostart
-  migrate.desktop_logon_entry migrate.keeper_stop migrate.wsl_shutdown migrate.keeper_start migrate.engine_wait migrate.restore migrate.check)
-
-test_engine_setup_migrate_dry_run() {
-  local name=engine_setup_migrate_dry_run
-  if ! is_windows; then skip "$name" "не Windows — сценарий на PowerShell"; return; fi
-  if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
-  local dest="$work/backups" shell key line previous first=''
-  mkdir -p "$dest"
-  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
-  rm -f "$work/wslconfig"*
-  rm -rf -- "$work/docker" "$work/docker.before" && mkdir -p "$work/docker"
-  printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
-  cp -R "$work/docker" "$work/docker.before"
-
-  for shell in "${shells[@]}"; do
-    name="engine_setup_migrate_dry_run/$shell"
-    engine_setup "$shell" -Migrate -DryRun -AssumeEngineState Running
-    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
-    # Шаги — в порядке контракта: бэкап при работающем стеке и до его
-    # остановки, Desktop гасится до wsl --shutdown, восстановление — в
-    # запущенном движке, последним — -Check.
-    previous=0
-    for key in "${migrate_order[@]}"; do
-      line="$(grep -n -m1 "^$key: " "$work/out.$shell" | cut -d: -f1)"
-      [ -n "$line" ] || { fail "$name" "нет шага $key"; show_out; return; }
-      [ "$line" -gt "$previous" ] || { fail "$name" "шаг $key не на своём месте"; show_out; return; }
-      previous="$line"
-    done
-    grep -q '^migrate\.stop_api: docker\.exe compose stop api$' "$work/out.$shell" || { fail "$name" "api не останавливается первым"; show_out; return; }
-    grep -qi '^migrate\.backup: .*\\bash\.exe ops/backup/backup\.sh <BACKUP_DIR>$' "$work/out.$shell" || { fail "$name" "бэкап не через bash Git for Windows"; show_out; return; }
-    if grep -qi '^migrate\.backup: .*\\system32\\bash\.exe' "$work/out.$shell"; then fail "$name" "бэкап через bash WSL"; show_out; return; fi
-    grep -q '^migrate\.stop_stack: docker\.exe compose --profile ha stop ' "$work/out.$shell" || { fail "$name" "стек Desktop не останавливается stop"; show_out; return; }
-    # Тома Desktop — путь отката: ни down, ни -v нигде в плане.
-    if grep -E '^migrate\.' "$work/out.$shell" | grep -qE '(^|[^a-z])down([^a-z]|$)| -v( |$)'; then fail "$name" "в плане переезда есть down или -v"; show_out; return; fi
-    grep -q '^migrate\.desktop_autostart: settings-store\.json AutoStart true -> false ' "$work/out.$shell" || { fail "$name" "автозапуск Desktop не выключается"; show_out; return; }
-    grep -q '^migrate\.wsl_shutdown: wsl\.exe --shutdown - stops ALL WSL distributions' "$work/out.$shell" || { fail "$name" "не сказано, что wsl --shutdown гасит все дистрибутивы"; show_out; return; }
-    # wsl --shutdown убивает держалку; задача с IgnoreNew молча пропустила
-    # бы запуск при «зависшем» Running — поэтому сначала остановка, а после
-    # запуска ожидание State Running.
-    grep -q '^migrate\.keeper_stop: Stop-ScheduledTask domovoy-engine if its State is Running' "$work/out.$shell" || { fail "$name" "держалка не останавливается до wsl --shutdown"; show_out; return; }
-    grep -q '^migrate\.keeper_start: Start-ScheduledTask domovoy-engine; wait up to [0-9]* s for task State Running' "$work/out.$shell" || { fail "$name" "запуск держалки без ожидания Running"; show_out; return; }
-    grep -q '^migrate\.restore: wsl\.exe -d domovoy-engine -u root --cd .* --exec bash ops/backup/restore\.sh --project example-home --from ' "$work/out.$shell" \
-      || { fail "$name" "восстановление не restore.sh --project внутри движка"; show_out; return; }
-    grep -q '^migrate\.check: .*-Check' "$work/out.$shell" || { fail "$name" "итог не -Check"; show_out; return; }
-    grep -q '^migrate\.rollback: .*-Uninstall' "$work/out.$shell" || { fail "$name" "нет команд отката"; show_out; return; }
-    # docker desktop stop проверяется до шага 1; его отказ — откат стадии
-    # Desktop (docker desktop start), а не -Uninstall.
-    grep -q '^migrate\.precheck: .*docker\.exe desktop version answers' "$work/out.$shell" || { fail "$name" "нет пробы docker desktop до шага 1"; show_out; return; }
-    # HA другого проекта в движке — до шага 1, как running_ha в restore.sh;
-    # формат без кавычек: 5.1 их внешней программе не передаёт.
-    has "$shell" 'migrate.precheck: no running homeassistant of another compose project in domovoy-engine, as restore.sh checks (docker ps --filter label=com.docker.compose.service=homeassistant --format {{.Labels}})' \
-      || { fail "$name" "нет пробы Home Assistant другого проекта в движке"; show_out; return; }
-    grep -q '^migrate\.rollback: .*up to and including migrate\.desktop_stop: docker desktop start' "$work/out.$shell" || { fail "$name" "откат при отказе docker desktop stop не тот"; show_out; return; }
-    has "$shell" 'DryRun: nothing changed' || { fail "$name" "нет строки сухого прогона"; show_out; return; }
-    if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name" "в выводе значения .env"; return; fi
-    diff -r "$work/docker.before" "$work/docker" >/dev/null || { fail "$name" "сухой прогон изменил настройки Docker Desktop"; return; }
     if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
       fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
     fi
     ok "$name"
   done
+}
 
-  # AutoStart в файле настроек Desktop — байт в байт: замена значения,
-  # вставка ключа в непустой и в пустой объект.
-  name=engine_setup_migrate_desktop_settings_bytes
-  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
-  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart $'{\n  "AutoStart": false,\n  "Example": 1\n}\n' || return
-  printf '{\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
-  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
-  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart $'{"AutoStart": false,\n  "Example": 1\n}\n' || return
-  printf '{}' >"$work/docker/settings-store.json"
-  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
-  settings_bytes_are "$name" "${shells[0]}" migrate.desktop_autostart '{"AutoStart": false}' || return
-  printf '{\n  "AutoStart": true,\n  "Example": 1\n}\n' >"$work/docker/settings-store.json"
-  ok "$name"
-
-  # Запись автозапуска Desktop в реестре (ветка теста): включённая —
-  # выключается через StartupApproved с копией прежнего значения или
-  # отметкой «не было»; выключенная и отсутствующая — не трогаются. Сухой
-  # прогон ветку не меняет.
-  name=engine_setup_migrate_logon_entry
-  local reg_case reg_before
-  for reg_case in \
-    "1||StartupApproved\\Run 'Docker Desktop' -> 03-00-00-00 + FILETIME (disabled; previous value absent, marker StartupApproved-Run.domovoy-absent; -Uninstall restores it)" \
-    "1|02-00-00-00-00-00-00-00-00-00-00-00|StartupApproved\\Run 'Docker Desktop' -> 03-00-00-00 + FILETIME (disabled; previous value 02-00-00-00-00-00-00-00-00-00-00-00, copy StartupApproved-Run.domovoy-backup; -Uninstall restores it)" \
-    "1|03-00-00-00-00-00-00-00-00-00-00-00|StartupApproved\\Run 'Docker Desktop' 03-00-00-00-00-00-00-00-00-00-00-00 already disabled - unchanged" \
-    "0|02-00-00-00-00-00-00-00-00-00-00-00|no value 'Docker Desktop' in $reg_root\\Run - unchanged"; do
-    reg_set "${reg_case%%|*}" "$(echo "$reg_case" | cut -d'|' -f2)" || { fail "$name" "ветка теста в реестре не создана"; return; }
-    reg_before="$(reg_helper dump)"
-    engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Running
-    [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
-    has "${shells[0]}" "migrate.desktop_logon_entry: ${reg_case#*|*|}" || { fail "$name" "нет «migrate.desktop_logon_entry: ${reg_case#*|*|}»"; show_out; return; }
-    [ "$(reg_helper dump)" = "$reg_before" ] || { fail "$name" "сухой прогон изменил ветку реестра"; return; }
+# Путей через прежний настольный движок нет: поиск слов из $desktop_words
+# по сценариям движка, расписанию бэкапа и README пуст (ключ -w с учётом
+# регистра: слово типа входа внутри -NonInteractive словом не считается), а
+# прежний режим переезда отвергается как неизвестный параметр. Слова
+# собираются из частей, чтобы сам этот файл не попадал в поиск по дереву;
+# ищутся по одному: GNU grep 3.0 из Git for Windows с -w и несколькими -e
+# находит слово внутри -NonInteractive.
+desktop_words=('Docker'' Desktop' 'Mi''grate' 'Inter''active')
+test_no_docker_desktop_paths() {
+  local name=no_docker_desktop_paths word
+  : >"$work/out"
+  for word in "${desktop_words[@]}"; do
+    grep -nw -e "$word" "$root/deploy/windows/engine-setup.ps1" "$root/ops/backup/install-schedule.ps1" "$root/README.md" >>"$work/out"
   done
-  [ ! -e "$work/docker/StartupApproved-Run.domovoy-backup" ] && [ ! -e "$work/docker/StartupApproved-Run.domovoy-absent" ] \
-    || { fail "$name" "сухой прогон записал копию или отметку"; return; }
+  if [ -s "$work/out" ]; then fail "$name" "остались упоминания"; show_out; return; fi
   ok "$name"
 
-  # Один -Migrate без установленного движка — отказ с подсказкой, плана нет.
-  name=engine_setup_migrate_requires_engine
-  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Absent
-  [ "$rc" -ne 0 ] || { fail "$name" "без движка код 0"; show_out; return; }
-  grep -q -- '-Install -Migrate' "$work/out.${shells[0]}" || { fail "$name" "нет подсказки -Install -Migrate"; show_out; return; }
-  if grep -q '^migrate\.stop_api:' "$work/out.${shells[0]}"; then fail "$name" "план напечатан при отказе"; show_out; return; fi
-  ok "$name"
-
-  # С -Install движок ставится первым: план установки, затем план переезда.
-  name=engine_setup_install_then_migrate
-  engine_setup "${shells[0]}" -Install -Migrate -DryRun -AssumeEngineState Absent
-  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
-  local install_line migrate_line
-  install_line="$(grep -n -m1 '^keeper\.task: ' "$work/out.${shells[0]}" | cut -d: -f1)"
-  migrate_line="$(grep -n -m1 '^migrate\.stop_api: ' "$work/out.${shells[0]}" | cut -d: -f1)"
-  [ -n "$install_line" ] && [ -n "$migrate_line" ] && [ "$install_line" -lt "$migrate_line" ] \
-    || { fail "$name" "план установки не перед планом переезда"; show_out; return; }
-  [ "$(grep -c '^DryRun: nothing changed$' "$work/out.${shells[0]}")" = 1 ] || { fail "$name" "строка сухого прогона не одна в конце"; show_out; return; }
-  ok "$name"
-
-  # С -Install предусловия переезда без движка — до установки: негодное
-  # имя проекта отказывает раньше, чем печатается план установки.
-  name=engine_setup_install_migrate_precheck_first
-  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=Example-Home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
-  engine_setup "${shells[0]}" -Install -Migrate -DryRun -AssumeEngineState Absent
-  [ "$rc" -ne 0 ] || { fail "$name" "негодное имя проекта принято"; show_out; return; }
-  grep -q 'COMPOSE_PROJECT_NAME' "$work/out.${shells[0]}" || { fail "$name" "отказ не называет COMPOSE_PROJECT_NAME"; show_out; return; }
-  if grep -q '^keeper\.task: ' "$work/out.${shells[0]}"; then fail "$name" "план установки напечатан до отказа переезда"; show_out; return; fi
-  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
-  ok "$name"
-
-  # Нет файла настроек Desktop — предупреждение, не отказ.
-  name=engine_setup_migrate_without_desktop_settings
-  rm -rf -- "$work/docker" && mkdir -p "$work/docker"
-  engine_setup "${shells[0]}" -Migrate -DryRun -AssumeEngineState Stopped
-  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
-  grep -q '^migrate\.desktop_autostart: WARN ' "$work/out.${shells[0]}" || { fail "$name" "нет предупреждения"; show_out; return; }
+  name=engine_setup_refuses_migrate
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  local shell mode="${desktop_words[1]}"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\n')"
+  for shell in "${shells[@]}"; do
+    engine_setup "$shell" "-$mode" -DryRun
+    [ "$rc" -ne 0 ] || { fail "$name/$shell" "-$mode принят, код 0"; show_out; return; }
+    grep -q "$mode" "$work/out.$shell" || { fail "$name/$shell" "отказ не называет параметр"; show_out; return; }
+    if grep -q '^migrate\.' "$work/out.$shell"; then fail "$name/$shell" "напечатан план переезда"; show_out; return; fi
+  done
   ok "$name"
 }
 
@@ -848,8 +810,8 @@ test_rule_profile_private_only() {
   ok "$name"
 }
 
-# Вывод внешних программ в UTF-8: Invoke-Native и Invoke-Passthru ставят
-# кодировку до вызова и возвращают в finally; каждый прямой вызов
+# Вывод внешних программ в UTF-8: Invoke-Native ставит
+# кодировку до вызова и возвращает в finally; каждый прямой вызов
 # & $wslExe — тоже, внутри try с Restore в finally. Для собственного
 # PowerShell кодировка не переключается: Set-NativeOutputEncoding отдаёт $null.
 test_native_output_encoding() {
@@ -859,7 +821,7 @@ test_native_output_encoding() {
     # shellcheck disable=SC2016
     ps_functions "$shell" "$here/engine-setup.ps1" '
       $script = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
-      foreach ($fn in "Invoke-Native", "Invoke-Passthru") {
+      foreach ($fn in "Invoke-Native") {
         $def = $script.Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq $fn }, $true)
         $try = $def.Body.Find({ param($a) $a -is [System.Management.Automation.Language.TryStatementAst] }, $true)
         if (-not $try) { "$fn без try"; exit 1 }
@@ -903,6 +865,66 @@ test_vm_firewall_problems() {
   ok "$name"
 }
 
+# Звено -Check «журнал systemd на диске, сброс ≤ 10 с»: вывод
+# systemd-analyze cat-config systemd/journald.conf, действует последнее
+# присваивание; без SyncIntervalSec — 5 мин по умолчанию.
+test_journald_config_problems() {
+  local name=journald_config_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $base = "# /etc/systemd/journald.conf`n[Journal]`n#Storage=auto`n#SyncIntervalSec=5m`n`n"
+      $good = $base + "# /etc/systemd/journald.conf.d/domovoy-journal.conf`n[Journal]`nStorage=persistent`nSyncIntervalSec=10s`n"
+      if (@(Get-JournaldProblems $good).Count) { "drop-in не принят: $(Get-JournaldProblems $good)"; exit 1 }
+      foreach ($v in "10", "10s", "10sec", "9500ms", "1s 500ms", "5000000us") {
+        $t = $base + "[Journal]`nStorage=persistent`nSyncIntervalSec=$v`n"
+        if (@(Get-JournaldProblems $t).Count) { "отвергнут SyncIntervalSec=$v"; exit 1 }
+      }
+      $bad = @(
+        ($base + "[Journal]`nStorage=persistent`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=30s`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=1min`n"),
+        ($base + "[Journal]`nStorage=persistent`nSyncIntervalSec=`n"),
+        ($base + "[Journal]`nStorage=volatile`nSyncIntervalSec=10s`n"),
+        ($base + "[Journal]`nStorage=auto`nSyncIntervalSec=10s`n"),
+        ($base + "[Journal]`nSyncIntervalSec=10s`n"),
+        ($good + "# /etc/systemd/journald.conf.d/zz.conf`n[Journal]`nSyncIntervalSec=5min`n"),
+        ($good + "[Journal]`nStorage=volatile`n"),
+        ($base + "[Journal]`n#Storage=persistent`n;SyncIntervalSec=10s`n")
+      )
+      foreach ($t in $bad) { if (-not @(Get-JournaldProblems $t).Count) { "принято: $($t -replace "`n", "|")"; exit 1 } }
+      $late = $base + "[Journal]`nStorage=volatile`nSyncIntervalSec=5min`n[Journal]`nStorage=persistent`nSyncIntervalSec=10s`n"
+      if (@(Get-JournaldProblems $late).Count) { "последнее присваивание не перекрыло раннее"; exit 1 }' \
+      Get-JournaldProblems ConvertFrom-SystemdTimeSpan
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Звено -Check «логи контейнеров проекта в journald»: строки docker inspect
+# «/имя драйвер» против списка контейнеров; неполный ответ — не OK.
+test_container_log_problems() {
+  local name=container_log_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $names = @("example-api-1", "example-postgres-1")
+      if (@(Get-ContainerLogProblems $names @("/example-api-1 journald", "/example-postgres-1 journald")).Count) { "все journald — не OK"; exit 1 }
+      $p = @(Get-ContainerLogProblems $names @("/example-api-1 journald", "/example-postgres-1 json-file"))
+      if (-not $p.Count) { "json-file принят"; exit 1 }
+      if (($p -join " ") -notmatch "example-postgres-1") { "замечание без имени контейнера: $p"; exit 1 }
+      if (($p -join " ") -notmatch "--force-recreate") { "замечание без подсказки --force-recreate: $p"; exit 1 }
+      if (($p -join " ") -match "example-api-1") { "назван контейнер с journald: $p"; exit 1 }
+      if (-not @(Get-ContainerLogProblems $names @("/example-api-1 journald")).Count) { "неполный ответ принят"; exit 1 }
+      if (-not @(Get-ContainerLogProblems $names @()).Count) { "пустой ответ принят"; exit 1 }' \
+      Get-ContainerLogProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 python_cmd() {
   local candidate
   for candidate in python3 python; do
@@ -922,62 +944,159 @@ free_port() {
   return 1
 }
 
-# Заглушка /health: файл health с заданным телом, python http.server на 127.0.0.1.
-start_stub() {
-  local body="$1" port="$2" python
+# Заглушка /health: python на 127.0.0.1, ответы «код тело» по очереди на
+# каждый запрос, последний повторяется. Порт выбирает ОС (bind на 0) и
+# кладёт в stub_port: случайный порт из теста попадал в диапазоны, которые
+# Windows резервирует под Hyper-V, и заглушка не поднималась.
+stub_port=''
+start_stub_seq() {
+  local python i=0 response
+  stub_port=''
   python="$(python_cmd)"
   rm -rf -- "$work/stub" && mkdir -p "$work/stub"
-  printf '%s' "$body" >"$work/stub/health"
-  local dir="$work/stub"
+  for response in "$@"; do printf '%s' "$response" >"$work/stub/resp.$i"; i=$((i + 1)); done
+  cat >"$work/stub/server.py" <<'EOF'
+import http.server, os, sys
+folder = sys.argv[1]
+names = sorted((f for f in os.listdir(folder) if f.startswith('resp.')), key=lambda f: int(f.split('.')[1]))
+responses = [open(os.path.join(folder, f), encoding='utf-8').read() for f in names]
+served = [0]
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code, _, body = responses[min(served[0], len(responses) - 1)].partition(' ')
+        served[0] += 1
+        data = body.encode('utf-8')
+        self.send_response(int(code))
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+    def log_message(self, *args):
+        pass
+server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+with open(os.path.join(folder, 'port.tmp'), 'w') as f:
+    f.write(str(server.server_address[1]))
+os.replace(os.path.join(folder, 'port.tmp'), os.path.join(folder, 'port'))
+server.serve_forever()
+EOF
   # python Windows не понимает путь MSYS, а MSYS_NO_PATHCONV его не переводит.
-  if command -v cygpath >/dev/null 2>&1; then dir="$(cygpath -w "$dir")"; fi
-  "$python" -m http.server "$port" --bind 127.0.0.1 --directory "$dir" >/dev/null 2>&1 &
+  "$python" "$(cygpath -w "$work/stub/server.py")" "$(cygpath -w "$work/stub")" >/dev/null 2>&1 &
   stub_pid=$!
-  for _ in $(seq 1 50); do
-    if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then return 0; fi
+  for _ in $(seq 1 100); do
+    if [ -s "$work/stub/port" ]; then
+      stub_port="$(cat "$work/stub/port")"
+      if (exec 3<>"/dev/tcp/127.0.0.1/$stub_port") 2>/dev/null; then return 0; fi
+    fi
     sleep 0.2
   done
   return 1
 }
 
+# Заглушка с одним ответом 200.
+start_stub() { start_stub_seq "200 $1"; }
+
 stop_stub() {
   if [ -n "$stub_pid" ]; then kill "$stub_pid" 2>/dev/null; wait "$stub_pid" 2>/dev/null; stub_pid=''; fi
 }
 
-measure() {
-  rm -f "$work/measure.log"
-  measure_append "$@"
+# Подменённый wsl.exe в каталоге $1: .cmd над python-сценарием, который
+# пишет сырые байты. Вызовы — в calls.log; --list отдаёт имена из файла
+# running (UTF-16LE, если есть файл utf16: с BOM, если в нём «bom»; иначе
+# UTF-8); вызов зонда
+# с номером n (с нуля) — файлы probe.<n>.out, .err, .code, после последнего
+# повторяется последний.
+make_fake_wsl() {
+  local dir="$1" python
+  python="$(command -v "$(python_cmd)")"
+  rm -rf -- "$dir" && mkdir -p "$dir"
+  : >"$dir/running"
+  cat >"$dir/wsl.py" <<'EOF'
+import os, sys
+folder = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(folder, 'calls.log'), 'a', encoding='utf-8') as f:
+    f.write(' '.join(args) + '\n')
+out = sys.stdout.buffer
+if '--list' in args:
+    text = ''.join(n + '\r\n' for n in open(os.path.join(folder, 'running'), encoding='utf-8').read().split())
+    marker = os.path.join(folder, 'utf16')
+    if os.path.exists(marker):
+        out.write((b'\xff\xfe' if open(marker).read().strip() == 'bom' else b'') + text.encode('utf-16-le'))
+    else:
+        out.write(text.encode('utf-8'))
+    sys.exit(0)
+counter = os.path.join(folder, 'probe.count')
+n = int(open(counter).read()) if os.path.exists(counter) else 0
+open(counter, 'w').write(str(n + 1))
+steps = sorted(int(f.split('.')[1]) for f in os.listdir(folder) if f.startswith('probe.') and f.endswith('.out'))
+if not steps:
+    sys.exit(1)
+base = os.path.join(folder, 'probe.%d' % min(n, steps[-1]))
+out.write(open(base + '.out', 'rb').read())
+out.flush()
+if os.path.exists(base + '.err'):
+    sys.stderr.buffer.write(open(base + '.err', 'rb').read())
+    sys.stderr.flush()
+sys.exit(int(open(base + '.code').read()) if os.path.exists(base + '.code') else 0)
+EOF
+  printf '@"%s" "%s" %%*\r\n' "$(cygpath -w "$python")" "$(cygpath -w "$dir/wsl.py")" >"$dir/wsl.cmd"
 }
 
-# Замер в существующий журнал — без удаления прежнего файла.
-measure_append() {
+# probe_step <каталог> <n> <код> <stdout> [<stderr>]
+probe_step() {
+  printf '%s' "$4" >"$1/probe.$2.out"
+  printf '%s' "$3" >"$1/probe.$2.code"
+  if [ -n "${5:-}" ]; then printf '%s' "$5" >"$1/probe.$2.err"; fi
+}
+
+# Замер в $work/measure.log. Дистрибутив по умолчанию — заведомо не
+# зарегистрированное имя: настоящий движок на машине разработчика тест не
+# трогает; с подменённым wsl.exe имя задаёт measure_distro. Малый
+# -StableMinutes — устоявшееся состояние кончает замер; пределы меняют
+# measure_timeout и measure_stable (повтор параметра PowerShell не примет).
+measure_run() {
   local shell="$1" port="$2"
+  shift 2
   run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
-    -Port "$port" -TimeoutMinutes 0.15 -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")"
+    -Port "$port" -Project example -Distro "${measure_distro:-example-not-registered}" -TimeoutMinutes "${measure_timeout:-0.25}" -StableMinutes "${measure_stable:-0.05}" \
+    -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")" "$@"
+}
+
+measure() {
+  rm -f "$work/measure.log"
+  measure_run "$@"
 }
 
 log_has() { grep -qF -- "$1" "$work/measure.log"; }
+show_log() { sed 's/^/    | /' "$work/measure.log"; }
+
+# Номер первой строки журнала с подстрокой; нет — пусто.
+log_line() { grep -nF -- "$1" "$work/measure.log" | head -n 1 | cut -d: -f1; }
 
 test_measure_boot() {
   local name=measure_boot
   if ! is_windows; then skip "$name" "не Windows — замер читает журнал событий и реестр Windows"; return; fi
   if [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
   if ! python_cmd >/dev/null; then skip "$name" "нет python для заглушки /health"; return; fi
-  local port shell
+  local port shell line
   port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
 
   for shell in "${shells[@]}"; do
+    # Ответ формы стека засчитан, но без данных о контейнерах итог не
+    # зелёный: дистрибутив не зарегистрирован.
     name="measure_boot_counts_stack_health/$shell"
-    start_stub '{"status":"healthy"}' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
     measure "$shell" "$port"
     stop_stub
-    if [ "$rc" -ne 0 ]; then fail "$name" "код $rc"; show_out; return; fi
-    [ "$(wc -l <"$work/measure.log" | tr -d ' ')" = 1 ] || { fail "$name" "в журнале не одна строка"; return; }
-    for line in 'os_start=' 'last_boot=' 'fw_post_ms=' "port=$port" 'first_response=' 'код 200' 'result=ok'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+    if [ "$rc" -eq 0 ]; then fail "$name" "без данных о контейнерах код 0"; show_log; return; fi
+    for line in 'os_start=' 'last_boot=' 'fw_post_ms=' "port=$port" 'first_response=' 'код 200' 'status=healthy' \
+      'distro_start=нет данных' 'result=нет данных о контейнерах'; do
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
     if log_has 'first_200=нет'; then fail "$name" "ответ формы стека не засчитан"; return; fi
     if log_has 'foreign='; then fail "$name" "ответ формы стека назван чужим"; return; fi
+    if log_has 'result=ok'; then fail "$name" "итог ok без данных о контейнерах"; return; fi
     ok "$name"
 
     # Журнал прежней версии — UTF-8 без BOM: BOM дописывается в начало,
@@ -985,51 +1104,427 @@ test_measure_boot() {
     name="measure_boot_adds_bom_to_old_log/$shell"
     local old_line='os_start=2026-01-01T00:00:00; result=нет ответа 200 за 30 мин'
     printf '%s\r\n' "$old_line" >"$work/measure.log"
-    start_stub '{"status":"healthy"}' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
-    measure_append "$shell" "$port"
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_run "$shell" "$port"
     [ "$(head -c 3 "$work/measure.log" | od -An -tx1 | tr -d ' \n')" = 'efbbbf' ] || { stop_stub; fail "$name" "в начале журнала нет BOM"; return; }
     [ "$(tail -c +4 "$work/measure.log" | head -n 1 | tr -d '\r')" = "$old_line" ] || { stop_stub; fail "$name" "прежняя строка изменилась"; return; }
-    measure_append "$shell" "$port"
+    measure_run "$shell" "$port"
     stop_stub
     [ "$(tail -c +4 "$work/measure.log" | head -c 3 | od -An -tx1 | tr -d ' \n')" != 'efbbbf' ] || { fail "$name" "BOM записан дважды"; return; }
-    [ "$(grep -c 'result=ok' "$work/measure.log")" = 2 ] || { fail "$name" "в журнале не две новые строки"; sed 's/^/    | /' "$work/measure.log"; return; }
+    [ "$(grep -c 'first_response=' "$work/measure.log")" = 2 ] || { fail "$name" "в журнале не две итоговые строки"; show_log; return; }
     ok "$name"
 
     name="measure_boot_marks_foreign_listener/$shell"
-    start_stub 'example foreign page' "$port" || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    start_stub 'example foreign page' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
     measure "$shell" "$port"
     stop_stub
     if [ "$rc" -eq 0 ]; then fail "$name" "чужой ответ 200 засчитан (код 0)"; return; fi
     for line in 'first_200=нет' 'foreign=' 'чужой слушатель' 'result=нет ответа 200'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
+    if log_has 'status='; then fail "$name" "чужой ответ записан статусом /health"; show_log; return; fi
     ok "$name"
 
+    # Без слушателя состояние не меняется: опрос кончается по
+    # -StableMinutes (0.05), и итог называет эту причину и фактическое
+    # время, а не -TimeoutMinutes (0.25).
     name="measure_boot_writes_line_without_answer/$shell"
     measure "$shell" "$port"
     if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без слушателя"; return; fi
-    for line in 'first_response=нет' 'first_200=нет' 'result=нет ответа 200'; do
-      log_has "$line" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$work/measure.log"; return; }
+    for line in 'first_response=нет' 'first_200=нет' 'stop=stable через ' 'result=нет ответа 200 за '; do
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
     done
+    if log_has 'за 0.25 мин' || log_has 'за 30 мин' || log_has 'stop=timeout'; then fail "$name" "итог называет тайм-аут, а опрос кончился по стабильности"; show_log; return; fi
+    grep -qE 'stop=stable через [0-9]+(\.[0-9]+)? мин; result=нет ответа 200 за [0-9]+(\.[0-9]+)? мин опроса' "$work/measure.log" \
+      || { fail "$name" "время опроса не числом с точкой"; show_log; return; }
+    ok "$name"
+
+    # Состояние не меняется, но тайм-аут короче окна стабильности: причина
+    # конца опроса — timeout.
+    name="measure_boot_reports_timeout/$shell"
+    measure_timeout=0.05 measure_stable=1 measure "$shell" "$port"
+    if [ "$rc" -eq 0 ]; then fail "$name" "код 0 без слушателя"; return; fi
+    log_has 'stop=timeout через ' || { fail "$name" "нет «stop=timeout»"; show_log; return; }
+    if log_has 'stop=stable'; then fail "$name" "тайм-аут назван стабильностью"; show_log; return; fi
     ok "$name"
   done
+}
+
+# Смены статуса /health — строками по мере наступления, в порядке, с
+# моментом и секундами от старта ОС; 503 {"status":"unhealthy"} — статус.
+test_measure_boot_records_health_transitions() {
+  local name=measure_boot_records_health_transitions
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell a b c
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_records_health_transitions/$shell"
+    start_stub_seq '503 {"status":"unhealthy"}' '200 {"status":"degraded"}' '200 {"status":"healthy"}' \
+      || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure "$shell" "$port"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    a="$(log_line '; status=unhealthy')"; b="$(log_line '; status=degraded')"; c="$(log_line '; status=healthy')"
+    [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] && [ "$a" -lt "$b" ] && [ "$b" -lt "$c" ] \
+      || { fail "$name" "нет смен unhealthy → degraded → healthy по порядку"; show_log; return; }
+    [ "$(grep -c '; status=' "$work/measure.log")" = 3 ] || { fail "$name" "строк смены статуса не три"; show_log; return; }
+    grep '; status=' "$work/measure.log" | grep -qvE '^boot=[^;]*; health=[0-9T:-]+ \(\+[0-9]+ с\); status=[a-z]+; src=windows' \
+      && { fail "$name" "строка смены без метки загрузки, момента, секунд или src"; show_log; return; }
+    log_has 'result=нет данных о контейнерах' || { fail "$name" "итог не «нет данных о контейнерах»"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Статус не меняется — замер кончается по -StableMinutes, до тайм-аута.
+test_measure_boot_stops_on_stable_status() {
+  local name=measure_boot_stops_on_stable_status
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell began elapsed
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_stops_on_stable_status/$shell"
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    began=$SECONDS
+    # -TimeoutMinutes 0.25 (15 с) у measure_run, -StableMinutes 0.05 (3 с).
+    measure "$shell" "$port"
+    elapsed=$((SECONDS - began))
+    stop_stub
+    [ "$rc" -ne 0 ] || { fail "$name" "код 0 без данных о контейнерах"; show_log; return; }
+    [ "$elapsed" -lt 13 ] || { fail "$name" "замер шёл $elapsed с — не кончился по -StableMinutes до тайм-аута"; show_log; return; }
+    [ "$(grep -c '; status=degraded' "$work/measure.log")" = 1 ] || { fail "$name" "строк status=degraded не одна"; show_log; return; }
+    log_has 'first_response=' || { fail "$name" "нет итоговой строки"; show_log; return; }
+    log_has 'stop=stable через ' || { fail "$name" "итог не называет остановку по стабильности"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Событие пишется сразу, а не после цикла: до конца замера в журнале уже
+# есть os_start и смена статуса. Процесс затем останавливается тестом.
+test_measure_boot_appends_events_before_finish() {
+  local name=measure_boot_appends_events_before_finish
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port pid winpid seen=''
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  start_stub_seq '503 {"status":"unhealthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+  port="$stub_port"
+  rm -f "$work/measure.log"
+  "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$here/measure-boot.ps1")" \
+    -Port "$port" -Project example -Distro example-not-registered -TimeoutMinutes 5 -StableMinutes 5 \
+    -IntervalSeconds 1 -LogPath "$(cygpath -w "$work/measure.log")" >/dev/null 2>&1 </dev/null &
+  pid=$!
+  measure_pid="$pid"
+  for _ in $(seq 1 60); do
+    if [ -f "$work/measure.log" ] && log_has 'os_start=' && log_has '; status=unhealthy'; then seen=1; break; fi
+    sleep 0.5
+  done
+  local alive=''
+  kill -0 "$pid" 2>/dev/null && alive=1
+  winpid="$(cat "/proc/$pid/winpid" 2>/dev/null || true)"
+  if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; fi
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null
+  measure_pid=''
+  stop_stub
+  [ -n "$seen" ] || { fail "$name" "за 30 с в журнале нет os_start и status=unhealthy"; [ -f "$work/measure.log" ] && show_log; return; }
+  [ -n "$alive" ] || { fail "$name" "замер кончился до проверки — событие не доказано записанным до конца"; show_log; return; }
+  if log_has 'first_response='; then fail "$name" "итоговая строка есть — замер уже кончился"; show_log; return; fi
+  ok "$name"
+}
+
+# Дистрибутив не работает — wsl.exe -d не вызывается: замер не поднимает
+# дистрибутив сам; хронология /health идёт дальше.
+test_measure_boot_skips_engine_when_distro_not_running() {
+  local name=measure_boot_skips_engine_when_distro_not_running
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_skips_engine_when_distro_not_running/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-other\n' >"$fake/running"
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    grep -q -- '--list --running --quiet' "$fake/calls.log" 2>/dev/null || { fail "$name" "список работающих не запрошен"; return; }
+    if grep -q -- '^-d ' "$fake/calls.log"; then fail "$name" "wsl.exe -d вызван при неработающем дистрибутиве"; sed 's/^/    | /' "$fake/calls.log"; return; fi
+    log_has 'distro_start=нет данных' || { fail "$name" "нет distro_start=нет данных"; show_log; return; }
+    log_has '; status=degraded' || { fail "$name" "хронология /health не записана"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# wsl.exe не учёл WSL_UTF8 и отдал список UTF-16LE — с BOM и без него: в
+# обоих вариантах между буквами имени остаются NUL, с BOM в начале ещё и
+# U+FFFD. Имя всё равно сопоставляется, зонд вызывается; кириллица из
+# stderr зонда в журнале цела. Нагрузку на разбор даёт сравнение ordinal в
+# measure-boot.ps1: культурное -contains пропускает NUL.
+test_measure_boot_reads_utf16_wsl_list() {
+  local name=measure_boot_reads_utf16_wsl_list
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell bom fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+   for bom in bom nobom; do
+    name="measure_boot_reads_utf16_wsl_list/$shell/$bom"
+    make_fake_wsl "$fake"
+    printf 'example-other\nexample-engine\n' >"$fake/running"
+    printf '%s' "$bom" >"$fake/utf16"
+    probe_step "$fake" 0 1 $'distro_start=1760331000\n' $'boot-probe: docker.service ещё не active\n'
+    start_stub '{"status":"degraded"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    grep -q -- '^-d example-engine -u root --cd .* --exec bash deploy/windows/boot-probe.sh example$' "$fake/calls.log" \
+      || { fail "$name" "зонд не вызван — имя в UTF-16 не сопоставлено"; sed 's/^/    | /' "$fake/calls.log"; show_log; return; }
+    grep -qE '; distro_start=[0-9T:-]+ .*; src=engine$' <(tr -d '\r' <"$work/measure.log") || { fail "$name" "нет события distro_start"; show_log; return; }
+    log_has 'text=boot-probe: docker.service ещё не active' || { fail "$name" "кириллица stderr зонда в журнале искажена или не записана"; show_log; return; }
+    ok "$name"
+   done
+  done
+}
+
+# Зонд отказывает, затем отдаёт только distro_start, затем всё: замер не
+# падает, события появляются по мере данных, distro_start — один раз.
+test_measure_boot_survives_probe_failures() {
+  local name=measure_boot_survives_probe_failures
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl" first_docker first_data
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_survives_probe_failures/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 1 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 2 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    probe_step "$fake" 3 1 $'distro_start=1760331000\n' $'boot-probe: docker.service ещё не active\n'
+    probe_step "$fake" 4 0 $'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\ncontainer name=example-postgres-1 started_at=1760331015 health=none\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    # Три одинаковых отказа подряд — не смена состояния; окно стабильности
+    # (12 с) и тайм-аут (60 с) шире серии отказов, иначе на медленном
+    # powershell.exe опрос кончается до данных зонда. Зелёный случай
+    # кончается по готовности, а не по пределам.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc — все контейнеры healthy, ожидался 0"; show_log; return; }
+    log_has 'stop=ready через ' || { fail "$name" "итог не называет остановку по готовности"; show_log; return; }
+    [ "$(grep -c '; distro_start=' "$work/measure.log")" = 1 ] || { fail "$name" "distro_start не одной строкой"; show_log; return; }
+    first_docker="$(log_line '; docker_active=')"
+    first_data="$(log_line '; distro_start=')"
+    [ -n "$first_docker" ] && [ "$first_data" -lt "$first_docker" ] || { fail "$name" "docker_active не после distro_start"; show_log; return; }
+    [ "$(cat "$fake/probe.count")" -ge 5 ] || { fail "$name" "зонд вызван меньше пяти раз — отказы прервали опрос"; return; }
+    for line in '; container_start=' 'name=example-api-1' '; container_healthy=' 'healthcheck=нет' 'result=ok'; do
+      log_has "$line" || { fail "$name" "нет «$line»"; show_log; return; }
+    done
+    [ "$(grep -c 'probe_error=' "$work/measure.log")" = 2 ] || { fail "$name" "строк probe_error не две (по смене текста)"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Зонд отказывает всегда, /health healthy: пустой набор контейнеров «все
+# healthy» не выполняет — замер не кончается на healthy /health и итог не ok.
+test_measure_boot_probe_always_fails_not_ok() {
+  local name=measure_boot_probe_always_fails_not_ok
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_probe_always_fails_not_ok/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 1 '' $'boot-probe: возраст PID 1 не разобран\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    # Окно стабильности (12 с) вмещает не меньше трёх вызовов зонда и на
+    # медленном шелле: при 3 с опрос кончался по стабильности после двух.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    [ "$(cat "$fake/probe.count")" -ge 3 ] || { fail "$name" "замер кончился на healthy /health, не дождавшись контейнеров"; show_log; return; }
+    if grep -qE '; (docker_active|container_start|container_healthy)=' "$work/measure.log"; then fail "$name" "события движка без данных зонда"; show_log; return; fi
+    log_has 'result=нет данных о контейнерах' || { fail "$name" "итог не «нет данных о контейнерах»"; show_log; return; }
+    if log_has 'result=ok'; then fail "$name" "итог ok без данных о контейнерах"; return; fi
+    ok "$name"
+  done
+}
+
+# Перезапуск контейнера в окне замера: новый started_at — вторая строка
+# container_start с пометкой restart, healthy ждётся заново; без смены
+# started_at повтора нет.
+test_measure_boot_records_container_restart() {
+  local name=measure_boot_records_container_restart
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl" starts healthies restart second_healthy
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_records_container_restart/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    local probe_head=$'distro_start=1760331000\ndocker_active=1760331010\n'
+    probe_step "$fake" 0 0 "${probe_head}container name=example-api-1 started_at=1760331020 health=healthy"$'\n'
+    probe_step "$fake" 1 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=starting"$'\n'
+    probe_step "$fake" 2 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=starting"$'\n'
+    probe_step "$fake" 3 0 "${probe_head}container name=example-api-1 started_at=1760331090 health=healthy"$'\n'
+    start_stub_seq '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"degraded"}' '200 {"status":"healthy"}' \
+      || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    # Между перезапуском и healthy два опроса без смены: окно стабильности
+    # (12 с) их вмещает и на медленном шелле; зелёный случай кончается по
+    # готовности.
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    starts="$(grep -c '; container_start=.*name=example-api-1' "$work/measure.log")"
+    healthies="$(grep -c '; container_healthy=.*name=example-api-1' "$work/measure.log")"
+    [ "$starts" = 2 ] || { fail "$name" "строк container_start $starts, ожидалось 2"; show_log; return; }
+    [ "$healthies" = 2 ] || { fail "$name" "строк container_healthy $healthies, ожидалось 2"; show_log; return; }
+    restart="$(grep -n '; container_start=.*; restart; ' "$work/measure.log" | head -n 1 | cut -d: -f1)"
+    second_healthy="$(grep -n '; container_healthy=.*name=example-api-1' "$work/measure.log" | sed -n 2p | cut -d: -f1)"
+    [ -n "$restart" ] && [ -n "$second_healthy" ] && [ "$restart" -lt "$second_healthy" ] \
+      || { fail "$name" "второй старт без пометки restart или healthy не после него"; show_log; return; }
+    log_has 'result=ok' || { fail "$name" "итог не ok"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Один контейнер проекта не работает (зонд: state=stopped), остальные и
+# /health healthy: готовности нет — код 1, не stop=ready, итог называет
+# этот контейнер; моментов прошлого запуска у него в журнале нет.
+test_measure_boot_names_stopped_container() {
+  local name=measure_boot_names_stopped_container
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_names_stopped_container/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 0 $'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\ncontainer name=example-postgres-1 started_at=1760331015 health=none\ncontainer name=example-homeassistant-1 state=stopped\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure_stable=0.05 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    if log_has 'stop=ready'; then fail "$name" "готовность при неработающем контейнере"; show_log; return; fi
+    log_has 'не работает: example-homeassistant-1' || { fail "$name" "итог не называет неработающий контейнер"; show_log; return; }
+    if log_has 'result=ok'; then fail "$name" "итог ok при неработающем контейнере"; show_log; return; fi
+    if grep -qE '; container_(start|healthy)=.*name=example-homeassistant-1' "$work/measure.log"; then fail "$name" "события по неработающему контейнеру"; show_log; return; fi
+    log_has 'name=example-api-1' || { fail "$name" "работающие контейнеры не записаны"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Отказ зонда, восстановление, тот же отказ снова: вторая строка
+# probe_error с тем же текстом есть — после успешного опроса текст
+# прежнего отказа сброшен.
+test_measure_boot_repeats_probe_error_after_recovery() {
+  local name=measure_boot_repeats_probe_error_after_recovery
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_repeats_probe_error_after_recovery/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    local head=$'distro_start=1760331000\ndocker_active=1760331010\n'
+    probe_step "$fake" 0 1 $'distro_start=1760331000\n' $'boot-probe: example отказ docker\n'
+    probe_step "$fake" 1 0 "$head"
+    probe_step "$fake" 2 1 $'distro_start=1760331000\n' $'boot-probe: example отказ docker\n'
+    probe_step "$fake" 3 0 "${head}container name=example-api-1 started_at=1760331020 health=healthy"$'\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc, ожидался 0"; show_log; return; }
+    [ "$(grep -c 'text=boot-probe: example отказ docker' "$work/measure.log")" = 2 ] || { fail "$name" "повтор отказа после восстановления не записан"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Разбор вывода зонда и статуса /health — функциями measure-boot.ps1 из
+# AST: секунды Unix → тот же местный момент, что FromUnixTimeSeconds(…)
+# .ToLocalTime(); местное время вместо секунд — нет данных, а не сдвиг.
+test_boot_probe_parse() {
+  local name=boot_probe_parse shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/measure-boot.ps1" '
+      $d = ConvertFrom-BootProbe @("distro_start=1760331000", "docker_active=1760331010", "container name=example-api-1 started_at=1760331020 health=healthy", "container name=example-postgres-1 started_at=1760331015 health=none", "noise")
+      $want = [DateTimeOffset]::FromUnixTimeSeconds(1760331000).ToLocalTime().DateTime
+      if ($d.DistroStart -ne $want) { "distro_start $($d.DistroStart), ожидалось $want"; exit 1 }
+      if ($d.DockerActive -ne [DateTimeOffset]::FromUnixTimeSeconds(1760331010).ToLocalTime().DateTime) { "docker_active не тот"; exit 1 }
+      if (@($d.Containers).Count -ne 2) { "контейнеров $(@($d.Containers).Count)"; exit 1 }
+      $api = @($d.Containers)[0]
+      if ($api.Name -ne "example-api-1" -or $api.Health -ne "healthy" -or $api.StartedAt -ne [DateTimeOffset]::FromUnixTimeSeconds(1760331020).ToLocalTime().DateTime) { "контейнер api разобран не так"; exit 1 }
+      if (@($d.Containers)[1].Health -ne "none") { "health=none потерян"; exit 1 }
+      $local = ConvertFrom-BootProbe @("distro_start=Mon Oct 13 08:50:00 2025", "docker_active=2025-10-13T08:50:10+03:00", "container name=example-api-1 started_at=2025-10-13T05:50:20Z health=healthy")
+      if ($null -ne $local.DistroStart -or $null -ne $local.DockerActive -or @($local.Containers).Count) { "местное время принято за момент"; exit 1 }
+      $st = @((ConvertFrom-BootProbe @("container name=example-homeassistant-1 state=stopped")).Containers)
+      if ($st.Count -ne 1 -or $st[0].Name -ne "example-homeassistant-1" -or $st[0].Running -or $null -ne $st[0].StartedAt) { "state=stopped разобран не так"; exit 1 }
+      if (-not @($d.Containers)[0].Running) { "работающий контейнер разобран неработающим"; exit 1 }
+      $partial = ConvertFrom-BootProbe @("distro_start=1760331000")
+      if ($null -eq $partial.DistroStart -or $null -ne $partial.DockerActive) { "частичный вывод не засчитан построчно"; exit 1 }
+      foreach ($case in @(@(200, "{`"status`":`"healthy`"}", "healthy", $false), @(200, "{`"status`":`"degraded`"}", "degraded", $false), @(503, "{`"status`":`"unhealthy`"}", "unhealthy", $false),
+                          @(200, "example foreign page", "", $true), @(200, "{`"status`":`"unhealthy`"}", "", $true), @(503, "example error", "", $false), @(503, "{`"status`":`"healthy`"}", "", $false))) {
+        $h = Get-HealthStatus $case[0] $case[1]
+        if ($h.Status -ne $case[2] -or $h.Foreign -ne $case[3]) { "Get-HealthStatus $($case[0]) $($case[1]): $($h.Status)/$($h.Foreign)"; exit 1 }
+      }
+      $names = ConvertFrom-WslList @(([char]0xFFFD + [char]0xFFFD + "e`0x`0a`0m`0p`0l`0e`0-`0e`0n`0g`0i`0n`0e`0`r`0"), "`0")
+      if ($names -notcontains "example-engine") { "имя из UTF-16 не разобрано: $($names -join "|")"; exit 1 }' \
+      ConvertFrom-BootProbe ConvertFrom-UnixSeconds Get-HealthStatus ConvertFrom-WslList
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# README говорит, где читать логи и хронологию, и держит опоры пути нового
+# ПК. Полноту и выполнимость шагов проверяет чтение, не этот поиск.
+test_readme_points_to_logs() {
+  local name=readme_points_to_logs pattern
+  for pattern in 'journalctl CONTAINER_NAME=' 'measure-boot.log' 'engine-setup.ps1 -Install' 'restore.sh --project <COMPOSE_PROJECT_NAME> --from '; do
+    grep -qF -- "$pattern" "$root/README.md" || { fail "$name" "в README нет «$pattern»"; return; }
+  done
+  ok "$name"
 }
 
 test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
 test_mss_clamp_unit
+test_journald_dropin
+test_docker_log_driver
+test_boot_probe_output
 test_apt_waits_for_lock
 test_no_localhost_url
 test_docker_wsl_passes_arguments
 test_ps1_encoding_and_parse
+test_no_docker_desktop_paths
 test_engine_setup_dry_run
-test_engine_setup_uninstall_dry_run
-test_engine_setup_migrate_dry_run
+test_uninstall_dry_run_without_rollback
 test_rule_profile_private_only
 test_vm_firewall_problems
+test_journald_config_problems
+test_container_log_problems
 test_native_output_encoding
+test_boot_probe_parse
 test_measure_boot
+test_measure_boot_records_health_transitions
+test_measure_boot_stops_on_stable_status
+test_measure_boot_appends_events_before_finish
+test_measure_boot_skips_engine_when_distro_not_running
+test_measure_boot_reads_utf16_wsl_list
+test_measure_boot_survives_probe_failures
+test_measure_boot_probe_always_fails_not_ok
+test_measure_boot_records_container_restart
+test_measure_boot_names_stopped_container
+test_measure_boot_repeats_probe_error_after_recovery
+test_readme_points_to_logs
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]
