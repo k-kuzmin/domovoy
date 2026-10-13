@@ -137,7 +137,7 @@
       },
       {
         "option": "Задача при загрузке, переписывающая адрес прослушивания portproxy",
-        "reason": "Лишнее звено автозапуска (довод 0028:123–125) и задача с правами администратора — netsh portproxy требует повышения, а задачи -Install идут без Highest (проверка в test_engine_setup_dry_run); смену адреса ловит -Check, адрес хоста телефону и так нужен постоянный."
+        "reason": "Лишнее звено автозапуска (0028:123–125) и задача с правами администратора — задачи движка идут без Highest; смену адреса ловит -Check."
       },
       {
         "option": "Проба браузером (Edge headless) в -Check или замере",
@@ -149,7 +149,7 @@
       },
       {
         "option": "Дополнение к 0028 вместо новой записи",
-        "reason": "Меняется само решение о сети и отвергнутый вариант 0028, а записи не переписываются (docs/decisions/README.md:16–17); прецедент частичной замены — 0029 для 0027."
+        "reason": "Меняется само решение о сети, а записи не переписываются (docs/decisions/README.md:16–17); прецедент — 0029 для 0027."
       }
     ]
   },
@@ -216,8 +216,8 @@
       "name": "test_engine_setup_dry_run",
       "file": "deploy/windows/engine-setup.test.sh",
       "new": false,
-      "covers": ["check-nat", "migration", "no-addresses"],
-      "behavior": "Сухой прогон -Install с -AssumeListenAddress 192.0.2.10 (RFC 5737) в обоих PowerShell: строки wslconfig.line: networkingMode=nat, правило firewall Windows (имя domovoy-engine-ports, Inbound, TCP, порты API и HA, remoteaddress LocalSubnet, профиль Private, private_only True) без VMCreatorId, две строки portproxy на 127.0.0.1 тех же портов и строка снятия прежнего правила Hyper-V; адреса 192.0.2.10 в выводе нет. Внутри: engine_setup_wslconfig_kept — байты с nat для CRLF/LF/без секции, nat в файле — changed False; mirrored с копией .domovoy-backup или отметкой .domovoy-absent — changed True и nat; mirrored без них и bridged — код 1 и wslconfig.conflict; localhostForwarding=false — код 1 и конфликт назван; firewall=false больше не отказ; -AssumeListenAddress без -DryRun — код 2. На нынешнем коде сценарий красный (ждёт nat, получает mirrored)."
+      "covers": ["check-nat", "migration", "no-addresses", "browser-pc"],
+      "behavior": "Сухой прогон -Install с -AssumeListenAddress 192.0.2.10 (RFC 5737) в обоих PowerShell: строки wslconfig.line: networkingMode=nat, правило firewall Windows (имя domovoy-engine-ports, Inbound, TCP, порты API и HA, remoteaddress LocalSubnet, профиль Private, private_only True) без VMCreatorId, две строки portproxy на 127.0.0.1 тех же портов и строка снятия прежнего правила Hyper-V; адреса 192.0.2.10 в выводе нет. Внутри: engine_setup_wslconfig_kept — байты с nat для CRLF/LF/без секции, nat в файле — changed False; mirrored с копией .domovoy-backup или отметкой .domovoy-absent — changed True и nat; mirrored без них и bridged — код 1 и wslconfig.conflict; localhostForwarding=false — код 1 и конфликт назван; firewall=false больше не отказ; -AssumeListenAddress без -DryRun — код 2. На нынешнем коде сценарий красный (ждёт nat, получает mirrored). Для browser-pc это лишь автоматическая часть (записывается nat, снимается правило Hyper-V); сам пункт закрывает живой Edge."
     },
     {
       "name": "test_uninstall_dry_run_without_rollback",
@@ -237,14 +237,14 @@
       "name": "test_portproxy_problems",
       "file": "deploy/windows/engine-setup.test.sh",
       "new": true,
-      "covers": ["check-nat", "check-failure", "lan-address"],
-      "behavior": "Get-PortProxyProblems из AST на подставных записях реестра «адрес/порт» → «127.0.0.1/порт»: по одной своей записи на порт API и HA с нынешним адресом — замечаний нет; нет записи порта, запись на прежний адрес (DHCP сменил), цель не 127.0.0.1 или другой порт, две записи одного порта, запись этого порта на 0.0.0.0 или 127.0.0.1 (петля) — замечание с названием порта и без адреса в тексте; чужие записи других портов замечаний не дают."
+      "covers": ["check-nat", "check-failure", "lan-address", "phone-lan", "after-boot"],
+      "behavior": "Get-PortProxyProblems из AST на подставных записях реестра «адрес/порт» → «127.0.0.1/порт»: по одной своей записи на порт API и HA с нынешним адресом — замечаний нет; нет записи порта, запись на прежний адрес (DHCP сменил), цель не 127.0.0.1 или другой порт, две записи одного порта, запись этого порта на 0.0.0.0 или 127.0.0.1 (петля) — замечание с названием порта и без адреса в тексте; чужие записи других портов замечаний не дают. Для phone-lan и after-boot — автоматическая часть (то, что -Check поймает после загрузки или смены адреса); сами пункты закрывают телефон и живая загрузка."
     },
     {
       "name": "test_host_rule_problems",
       "file": "deploy/windows/engine-setup.test.sh",
       "new": true,
-      "covers": ["check-nat", "check-failure"],
+      "covers": ["check-nat", "check-failure", "phone-lan"],
       "behavior": "Get-HostRuleProblems из AST на подставном правиле: Enabled True, Inbound, Allow, TCP, RemoteAddress LocalSubnet, профиль Private, порты ровно API и HA — замечаний нет; выключено, Outbound, Block, адрес Any или шире LocalSubnet, профиль Any/Public/Private+Public, лишний или недостающий порт — по замечанию."
     },
     {
@@ -269,11 +269,11 @@
       "behavior": "Без изменений: замер на заглушке без ответа 200 пишет итог «нет ответа 200», а не OK — ветка сбоя замера, которую требует вторая часть критерия."
     },
     {
-      "name": "test_no_localhost_url",
+      "name": "test_network_decision_recorded",
       "file": "deploy/windows/engine-setup.test.sh",
-      "new": false,
-      "covers": ["browser-pc", "phone-lan", "after-boot", "decision"],
-      "behavior": "Проверка прежняя (127.0.0.1 в -Check и замере), правится обоснование. Для живых пунктов browser-pc, phone-lan, after-boot это лишь адрес, по которому -Check и замер ходят в стек — доказательство дают живые прогоны; для decision — греп и чтение."
+      "new": true,
+      "covers": ["decision"],
+      "behavior": "По образцу test_readme_points_to_logs: в README.md есть networkingMode=nat и portproxy и нет networkingMode=mirrored; в docs/decisions/README.md строка 0028 содержит «частично заменено [0030]» и есть строка 0030; в docs/decisions/0030-wsl-nat-portproxy.md есть шапка «Частично заменяет:» со ссылкой на 0028. Без записи решения и правки индекса сценарий красный."
     }
   ],
   "acceptance": [
@@ -328,8 +328,8 @@
     {
       "id": "decision",
       "criterion": "Смена схемы сети зафиксирована решением (issue: «фиксируется решением»), запись 0028 помечена частично заменённой.",
-      "method": "Чтение docs/decisions/0030-wsl-nat-portproxy.md: шапка «Частично заменяет: 0028 — в части сети»; grep -n '0030' docs/decisions/README.md — строка 0028 «частично заменено [0030]» и строка 0030; grep -n mirrored README.md deploy/windows/engine-setup.ps1 — только переход со своего mirrored.",
-      "evidence": "Цитата шапки 0030 с файл:строка; две строки индекса; вывод грепа mirrored."
+      "method": "bash deploy/windows/engine-setup.test.sh — test_network_decision_recorded ok; чтение шапки 0030 и строк индекса.",
+      "evidence": "Строка ok сценария; цитата шапки 0030 и двух строк индекса с файл:строка."
     },
     {
       "id": "no-addresses",
@@ -373,7 +373,7 @@
     },
     {
       "risk": "На хосте владельца остаются опытные правило domovoy-nat-trial и записи portproxy — два правила и неясно, чья запись.",
-      "mitigation": "Шаг до живого -Install — .council/151-nat-trial.ps1 -Mode remove; пункт migration проверяет отсутствие опытного правила; записи portproxy того же вида -Install всё равно пересоздаёт."
+      "mitigation": "До живого -Install — .council/151-nat-trial.ps1 -Mode remove; пункт migration проверяет отсутствие опытного правила."
     },
     {
       "risk": "Удаление test_vm_firewall_problems и смена ожиданий сценариев выглядят как ослабление тестов.",
@@ -385,7 +385,7 @@
     },
     {
       "risk": "Служба IP Helper отключена на хосте — portproxy не работает.",
-      "mitigation": "-Install отказывает при StartType Disabled (чужая настройка службы не меняется), -Check — звено IP Helper (Running и Automatic)."
+      "mitigation": "-Install отказывает при Disabled (чужая настройка службы не меняется), -Check — звено IP Helper."
     }
   ],
   "out_of_scope": [
