@@ -335,6 +335,16 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
    Start-ScheduledTask -TaskName domovoy-engine # держалка: дистрибутив и docker поднимаются
    ```
 
+   `restore.sh` не ждёт docker и на только что поднятом дистрибутиве
+   отказывает «docker недоступен». Перед шагом 5 дождаться `active`:
+
+   ```powershell
+   while ((wsl.exe -d domovoy-engine -u root --exec systemctl is-active docker) -ne 'active') { Start-Sleep -Seconds 5 }
+   ```
+
+   Цикл не кончается за пару минут — `-Check` из шага 6 назовёт звено,
+   которое не поднялось.
+
 5. Восстановление внутри дистрибутива из последнего бэкапа — каталог
    `domovoy-backup-<UTC-метка>` в `BACKUP_DIR` с самой поздней меткой
    (`.partial` — незаконченный, не годится). `restore.sh` сам поднимает
