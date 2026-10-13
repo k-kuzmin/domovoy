@@ -125,6 +125,9 @@ for _step in ("triage", "plan", "implement", "review-correctness", "review-secur
                                                 "description": "d"}}])
 # Порог собственных правок проверяется отдельным сценарием (счёт по сессии).
 PROBES["delegation-thresholds-own-edits"] = None
+# Напоминание оркестратору о срезах уходит в additionalContext, а не в промпт субагента, —
+# общий прогон вызовов Agent его не видит; проверяется отдельным сценарием.
+PROBES["implement-slices"] = None
 
 
 def spawned_rules(out):
@@ -274,6 +277,29 @@ class SessionScenarios(HookCase):
         self.assertNotIn(gate, fired_names(write("notes/f6.txt")))
         self.assertIn(gate, fired_names(write("notes/f7.txt")))
         self.assertNotIn(gate, fired_names(write("notes/f8.txt")))
+
+    def test_implement_slices_reminder_every_spawn(self):
+        h = self.copy()
+        s = sid()
+        rule = "implement-slices"
+
+        def spawn(kind):
+            rc, out, _ = h.run({"session_id": s, "tool_name": "Agent",
+                                "tool_input": {"prompt": "Задача #1.", "subagent_type": kind,
+                                               "description": "d"}})
+            self.assertEqual(rc, 0)
+            return out
+
+        # Два запуска step-implement подряд в одной сессии — напоминание оба раза.
+        for _ in range(2):
+            out = spawn("step-implement")
+            self.assertIn(rule, fired_names(out))
+            self.assertIn("docs/rules/implement.md", out["hookSpecificOutput"]["additionalContext"])
+            # В промпт субагента уходит правило этапа, а напоминание оркестратору — нет.
+            names, prompt = spawned_rules(out)
+            self.assertEqual(names, ["step-rules-implement"])
+            self.assertNotIn("ПРАВИЛО " + rule, prompt)
+        self.assertNotIn(rule, fired_names(spawn("Explore")))
 
     def test_multiedit_is_counted(self):
         h = self.copy()

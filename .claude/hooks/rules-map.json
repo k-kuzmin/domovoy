@@ -169,6 +169,21 @@
       "note": "Правила этапа «реализация» вписываются в промпт субагента step-implement при запуске."
     },
     {
+      "name": "implement-slices",
+      "doc": "docs/rules/implement.md",
+      "tools": [
+        "Agent"
+      ],
+      "input_fields": [
+        "subagent_type"
+      ],
+      "input_any": [
+        "step-implement"
+      ],
+      "repeat": true,
+      "note": "Запуск step-implement. Если в fork_card.slices плана больше одного среза — по исполнителю на срез, независимые срезы одним сообщением; открой docs/rules/implement.md, раздел «Склейка срезов»."
+    },
+    {
       "name": "step-rules-review-correctness",
       "doc": "docs/rules/review-correctness.md",
       "for_subagents": [
