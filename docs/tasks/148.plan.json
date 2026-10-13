@@ -1,0 +1,464 @@
+{
+  "issue": 148,
+  "current_state": [
+    {
+      "path": "scripts/plan-schema.json",
+      "line": 176,
+      "observation": "fork_card.executor — свободная строка с minLength 1; довод «параллелить нельзя» в ней ни с чем не сверяется, поля для срезов в схеме нет"
+    },
+    {
+      "path": "scripts/plan-schema.json",
+      "line": 146,
+      "observation": "полный вариант карточки развилки закрыт additionalProperties: false и required из семи полей; новое поле в required уронило бы на форме каждый старый план, поэтому порог схемой не выражается"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 591,
+      "observation": "do_validate: форма по схеме, затем содержательные проверки по очереди (check_current_state … check_dependency); проверки срезов нет, номер задачи (.issue) ни одна проверка не читает"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 125,
+      "observation": "образец именованной константы с комментарием о причине — PLAN_FILES_WARN=15; порог срезов кладётся рядом в той же форме"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 657,
+      "observation": "ветка рендера fork_card печатает поля карточки поимённо; поле схемы без ветки рендера роняет рендер (do_render, проверка пропущенных полей)"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 219,
+      "observation": "glob_to_regex и matches уже есть — ими же исключается docs/tasks/** из сверки объединения срезов с files"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 204,
+      "observation": "согласованная фикстура CANON имеет issue 4242, то есть попадает под порог 148: ей нужны slices, иначе сценарий «Согласованный план: валидатор молчит» покраснеет"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 498,
+      "observation": "WALK_PROGRAM требует каждое поле схемы вглубь, пустой массив считает пропуском — в CANON нужен хотя бы один срез с непустым after, а single_slice_reason должен присутствовать ключом"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 756,
+      "observation": "сценарий размера заменяет files двадцатью копиями files[0] и ждёт ноль нарушений — при срезах множество files сузится до одного пути и сверка объединения покраснеет"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 853,
+      "observation": "HPLAN во временном репозитории получает files = [docs/old.md] и ждёт код 0 при --at — без согласованного среза покраснеет на объединении"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 815,
+      "observation": "исторические фикстуры проверяются по пинам только для 93, 83, 81; у 84 пина нет"
+    },
+    {
+      "path": "docs/tasks/131.plan.json",
+      "line": 0,
+      "observation": "база до правки: текущий validate без --at уже красный на закрытых планах из-за дрейфа дерева — нарушений 131:61, 133:27, 140:10, 2:1, 3:4, 4:0, 5:3, 6:5, 8:15, fixtures 81:6, 83:18, 84:17, 93:5; пункт критерия «проходит без правки» буквально не выполним и сейчас"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "line": 15,
+      "observation": "предфильтр не фильтрует Agent: такие вызовы идут в python без фильтра, строка предфильтра для нового правила не нужна"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.py",
+      "line": 533,
+      "observation": "subagent_prompt вписывает в промпт субагента только правила с subagent_note — правило без него уходит лишь в additionalContext оркестратора"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.py",
+      "line": 724,
+      "observation": "правила с repeat: true в учёте «уже напоминали» не участвуют — второй спавн в той же сессии напомнит снова"
+    },
+    {
+      "path": ".claude/hooks/rule-injector.py",
+      "line": 435,
+      "observation": "input_fields + input_any — подстрочное совпадение по нормализованному полю; subagent_type «step-implement» ловится без правки движка"
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "line": 207,
+      "observation": "общий прогон PROBES для вызовов Agent смотрит только в промпт субагента (spawned_rules) — правило без subagent_note он не видит, нужна отдельная проба через fired_names"
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "line": 150,
+      "observation": "множество имён PROBES обязано совпадать с таблицей — новое правило ставится в PROBES как None и проверяется своим сценарием, как delegation-thresholds-own-edits"
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "line": 163,
+      "observation": "step-rules-implement уже вписывает docs/rules/implement.md в промпт step-implement; новое правило — отдельная строка для оркестратора, без subagent_note"
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "line": 10,
+      "observation": "«Порядок работы» описывает одного исполнителя на ветке задачи; раздела о срезах, worktree и cherry-pick нет"
+    },
+    {
+      "path": "docs/rules/plan.md",
+      "line": 67,
+      "observation": "таблица карточки развилки: executor — «сам или субагент», полей срезов нет; предел машинной проверки не записан"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 184,
+      "observation": "«Делегирование»: «Большой объём режется и параллелится» — только прозой, без ссылки на поле плана"
+    },
+    {
+      "path": "docs/pipeline.md",
+      "line": 68,
+      "observation": "перечень способов срабатывания впрыска с примерами PreToolUse — сюда строка о напоминании на запуск step-implement"
+    },
+    {
+      "path": ".claude/agents/step-implement.md",
+      "line": 27,
+      "observation": "«Ветка»: если не на ветке feat/<номер>-… — остановись; срез в worktree идёт на временной ветке и по этому тексту обязан остановиться"
+    },
+    {
+      "path": "docs/tasks/133.md",
+      "line": 51,
+      "observation": "практика #133: четыре среза step-implement в отдельных worktree, файлы не пересекаются, склейка cherry-pick в порядке зависимостей"
+    },
+    {
+      "path": ".githooks/pre-commit",
+      "line": 0,
+      "observation": "core.hooksPath задан абсолютным путём в общем .git/config и указывает на .githooks основной копии: в worktree выполняются хуки основной копии (её текущей ветки), а не ветки среза; git в worktree работает (git-dir .git/worktrees/<имя>)"
+    }
+  ],
+  "approach": {
+    "summary": "По решению владельца из issue. Схема: в полный вариант fork_card — необязательные поля slices (array, minItems 1; элемент {name, files[], contract, after[]}, все обязательны, additionalProperties false, name/contract/элементы files minLength 1) и single_slice_reason (string, пустая строка допустима — как new_dependency_reason); trivial-вариант не меняется, его additionalProperties сам отвергает срезы. plan.sh: константа SLICES_FROM_ISSUE=148 с комментарием; функция check_slices после check_fork_card, действует только при .issue >= порога и полной карточке; тексты отказов с общим префиксом «срезы:» — «срезы: в полной карточке развилки нет fork_card.slices — с задачи #148 файлы плана раскладываются на срезы», «срезы: имя среза повторяется: «X»», «срезы: файл отдан нескольким срезам: PATH — «A», «B»», «срезы: файл плана не отдан ни одному срезу: PATH», «срезы: срез «A» называет файл, которого нет в files плана: PATH», «срезы: срез «A» ждёт несуществующий срез «X»», «срезы: цикл в after — не упорядочиваются срезы: «A», «B»», «срезы: срез один, а single_slice_reason пуст — почему задачу нельзя разрезать, не сказано»; files плана сравниваются множеством без путей под docs/tasks/**; цикл — сортировкой Кана в jq, остаток называется. Рендер fork_card печатает срезы списком (имя, файлы, после, контракт) и причину одного среза, если она непуста; шапка plan.sh дополняется в «ЧТО ПРОВЕРЯЕТСЯ» и «ЧЕГО НЕ ЛОВИТ». plan.test.sh: CANON получает два среза (второй с after на первый) и single_slice_reason пустой строкой; сценарии размера и HPLAN получают согласованные срезы без смены утверждений; новые сценарии на каждый отказ с точным текстом, trivial, границу порога (порог читается грепом константы из plan.sh) и тишину проверки на всех планах ниже порога. Хук: строка implement-slices в rules-map.json — tools [Agent], input_fields [subagent_type], input_any [step-implement], repeat true, без subagent_note, note со ссылкой на docs/rules/implement.md, раздел «Склейка срезов»; движок и предфильтр не меняются. Тексты: раздел «Склейка срезов» в implement.md по п.3 issue плюс наблюдения о worktree на Windows; поля и предел машинной проверки — в plan.md; строка-ссылка в CLAUDE.md; строка о напоминании в pipeline.md; абзац «Ветка» в step-implement.md допускает временную ветку worktree среза.",
+    "rejected": [
+      {
+        "option": "slices в required полного варианта схемы",
+        "reason": "уронило бы на форме каждый план ниже порога; порог по номеру схемой не выражается — отказ живёт в plan.sh"
+      },
+      {
+        "option": "разбирать срезы из строки executor",
+        "reason": "issue прямо оставляет executor строкой без разбора; разбор прозы — догадка"
+      },
+      {
+        "option": "проверка срезов на любом плане, где поле есть, независимо от порога",
+        "reason": "issue: «действует только на планы с issue не меньше порога»; критерий буквальный"
+      },
+      {
+        "option": "основная защита в хуке, а не в validate",
+        "reason": "хук видит запуск, а не план; issue назначает validate основной линией, хук — второй"
+      },
+      {
+        "option": "сценарий размера и HPLAN перевести ниже порога (issue < 148)",
+        "reason": "увело бы их из-под новой проверки молча; согласованные срезы сохраняют и утверждения, и покрытие"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "да: форма, проверки, склейка, хук и тексты — пп.1–5 issue; сверх issue — отказ на повторяющееся имя среза (без уникальности имён after неоднозначен — тот же класс, что «after на несуществующий срез») и абзац «Ветка» в step-implement.md (без него срез в worktree обязан остановиться)",
+    "alternative": "нет реалистичного второго: решение выбрано владельцем и уточнено двумя кругами совета; внутренние варианты (место порога, форма сообщений) наблюдаемого результата не меняют",
+    "ripple": "plan.sh validate читают все планы и plan.test.sh (исторические фикстуры по --at — все ниже порога); risk.sh plan читает только files — не задет; CANON в plan.test.sh под порогом — правятся сценарии строк 756 и 853; test_rules_map.py — PROBES и общий прогон Agent; step-rules-implement продолжает вписываться в промпт step-implement (test_step_spawn_carries_rule_file ждёт ровно его); rule-injector.py и rule-injector.sh не меняются (Agent идёт мимо предфильтра); step-implement.md — абзац «Ветка»",
+    "workaround": "нет",
+    "council_signs": [
+      "правка обвязки: scripts/plan.sh, scripts/plan-schema.json, .claude/hooks/rules-map.json (harness_control), .claude/agents, docs/rules",
+      "общий механизм: plan.sh validate проверяет каждый план задачи и исторические фикстуры"
+    ],
+    "executor": "субагенты: три среза параллельно, каждый step-implement с isolation worktree. Срез «форма и валидатор» — scripts/plan-schema.json, scripts/plan.sh, scripts/plan.test.sh; контракт: поля fork_card.slices[{name, files, contract, after}] и fork_card.single_slice_reason, константа SLICES_FROM_ISSUE=148, отказы с префиксом «срезы:»; after: нет. Срез «напоминание» — .claude/hooks/rules-map.json, .claude/hooks/tests/test_rules_map.py; контракт: правило implement-slices, note ведёт в docs/rules/implement.md, раздел «Склейка срезов»; after: нет. Срез «тексты» — docs/rules/implement.md, docs/rules/plan.md, .claude/CLAUDE.md, docs/pipeline.md, .claude/agents/step-implement.md; контракт: раздел implement.md называется «Склейка срезов», имена полей и правила — из контрактов двух других срезов; after: нет. Оркестратор — журнал и перевод этого плана в новую форму (поле slices по этой раскладке) после переноса среза «форма и валидатор»; до переноса поле slices в этом плане не проходит действующую схему",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "scripts/plan-schema.json",
+      "action": "modify",
+      "why": "поля slices и single_slice_reason в полном варианте fork_card; minItems, minLength и форма элемента — схемой (harness_quality)"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "action": "modify",
+      "why": "константа SLICES_FROM_ISSUE, check_slices с отказами п.2 issue, ветка рендера срезов, шапка «ЧТО ПРОВЕРЯЕТСЯ» и «ЧЕГО НЕ ЛОВИТ» (harness_quality)"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "action": "modify",
+      "why": "CANON со срезами, согласованные срезы в сценарии размера и HPLAN, новые сценарии на каждый отказ, trivial, границу порога и тишину ниже порога (harness_quality)"
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "action": "modify",
+      "why": "строка implement-slices: напоминание оркестратору на каждый запуск step-implement (harness_control — триггер «позвать человека»)"
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "action": "modify",
+      "why": "PROBES[implement-slices] = None и сценарий: два спавна подряд — напоминание оба раза, в промпт субагента не попадает (harness_control)"
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "action": "modify",
+      "why": "раздел «Склейка срезов» по п.3 issue и наблюдения о git и хуках в worktree на Windows (harness_quality)"
+    },
+    {
+      "path": "docs/rules/plan.md",
+      "action": "modify",
+      "why": "поля slices и single_slice_reason в таблице карточки развилки и прямо записанный предел: обоснованность одного среза и цепочки after машина не проверяет (harness_quality)"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "«Делегирование» — одна строка: срезы берутся из fork_card.slices плана (harness_quality)"
+    },
+    {
+      "path": "docs/pipeline.md",
+      "action": "modify",
+      "why": "в перечне срабатываний PreToolUse — напоминание на запуск step-implement"
+    },
+    {
+      "path": ".claude/agents/step-implement.md",
+      "action": "modify",
+      "why": "абзац «Ветка»: срез в worktree работает на временной ветке от коммита ветки задачи и не останавливается на ней (harness_quality)"
+    },
+    {
+      "path": "docs/tasks/148.plan.json",
+      "action": "modify",
+      "why": "оркестратор переводит этот план в новую форму — поле slices по раскладке из executor — после переноса среза «форма и валидатор»"
+    },
+    {
+      "path": "docs/tasks/148.md",
+      "action": "modify",
+      "why": "журнал задачи — ведёт оркестратор"
+    }
+  ],
+  "boundaries": [
+    "scripts/plan-schema.json",
+    "scripts/plan.sh",
+    "scripts/plan.test.sh",
+    ".claude/hooks/rules-map.json",
+    ".claude/hooks/tests/test_rules_map.py",
+    "docs/rules/implement.md",
+    "docs/rules/plan.md",
+    ".claude/CLAUDE.md",
+    "docs/pipeline.md",
+    ".claude/agents/step-implement.md",
+    "docs/tasks/148.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "Срезы: полная карточка без срезов при пороге отвергается",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "CANON без fork_card.slices даёт код 1 и строку «срезы: в полной карточке развилки нет fork_card.slices»; без правки plan.sh сценарий красный (код 0)"
+    },
+    {
+      "name": "Срезы: файл в двух срезах отвергается",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "scripts/plan.sh добавлен во второй срез — код 1 и «срезы: файл отдан нескольким срезам: scripts/plan.sh»"
+    },
+    {
+      "name": "Срезы: объединение срезов не равно files плана",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "файл убран из всех срезов — «срезы: файл плана не отдан ни одному срезу: …»; срез называет путь вне files — «срезы: срез «…» называет файл, которого нет в files плана: …»; docs/tasks/4242.md ни в одном срезе — отказа нет"
+    },
+    {
+      "name": "Срезы: after на несуществующий срез и цикл отвергаются",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "after на неизвестное имя — «срезы: срез «…» ждёт несуществующий срез «…»»; взаимные after и after на себя — «срезы: цикл в after — не упорядочиваются срезы:» с именами"
+    },
+    {
+      "name": "Срезы: повторяющееся имя среза отвергается",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "два среза с одним name — код 1 и «срезы: имя среза повторяется:»"
+    },
+    {
+      "name": "Срезы: один срез без причины отвергается, с причиной проходит и доезжает до рендера",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "один срез со всеми файлами и пустым single_slice_reason — «срезы: срез один, а single_slice_reason пуст»; с непустой причиной — код 0, причина в прозе рендера"
+    },
+    {
+      "name": "Срезы: форма среза проверяется схемой",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["refuse-cases"],
+      "behavior": "slices = [] — «элементов 0, схема требует не меньше 1»; срез без contract — «план.fork_card.slices[0].contract: обязательное поле схемы отсутствует»"
+    },
+    {
+      "name": "Срезы: trivial без срезов проходит, trivial со срезами отвергается",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["trivial-cases"],
+      "behavior": "CANON (issue 4242) с fork_card = {trivial} — код 0 без нарушений; {trivial, slices} — код 1, «план.fork_card.slices: поле не описано схемой» и «не подходит ни под один вариант схемы»"
+    },
+    {
+      "name": "Срезы: граница порога — номер на единицу меньше проходит, порог отвергается",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["threshold-boundary"],
+      "behavior": "порог читается грепом SLICES_FROM_ISSUE из plan.sh; CANON без slices с issue = порог−1 — код 0; с issue = порог — код 1 и отказ «срезы: в полной карточке…»"
+    },
+    {
+      "name": "Срезы: планы ниже порога не получают ни одного сообщения о срезах",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["old-plans"],
+      "behavior": "validate по каждому docs/tasks/*.plan.json и scripts/fixtures/plans/*.json с issue ниже порога — в выводе нет ни одной строки «срезы:»; список берётся из дерева, а не перечнем"
+    },
+    {
+      "name": "сверка числа нарушений старых планов с базой",
+      "file": "scripts/plan.sh",
+      "new": false,
+      "covers": ["old-plans"],
+      "behavior": "validate без --at на каждом старом плане даёт ровно столько же нарушений, сколько в базе current_state (131:61 … 93:5) — новая проверка ничего не добавила"
+    },
+    {
+      "name": "Полнота согласованной фикстуры: заполнены и вложенные поля схемы",
+      "file": "scripts/plan.test.sh",
+      "new": false,
+      "covers": ["suites-green"],
+      "behavior": "CANON несёт slices[].name/files/contract/after и single_slice_reason — обход схемы не находит пропусков"
+    },
+    {
+      "name": "Инвариант рендера: каждое строковое значение доезжает до вывода",
+      "file": "scripts/plan.test.sh",
+      "new": false,
+      "covers": ["suites-green"],
+      "behavior": "имена, файлы, after и контракты срезов CANON есть в прозе рендера — у полей есть ветка рендера"
+    },
+    {
+      "name": "test_implement_slices_reminder_every_spawn",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": ["hook-probe"],
+      "behavior": "два вызова Agent со subagent_type step-implement в одной сессии через rule-injector.sh — implement-slices в fired_names оба раза; в updatedInput.prompt нет «ПРАВИЛО implement-slices», а step-rules-implement есть; спавн Explore напоминания не даёт"
+    },
+    {
+      "name": "сверка текстов склейки и ссылок на поле",
+      "file": "docs/rules/implement.md",
+      "new": false,
+      "covers": ["texts"],
+      "behavior": "в разделе «Склейка срезов» есть каждый подпункт п.3 issue; CLAUDE.md и plan.md ссылаются на fork_card.slices, предел машинной проверки записан в plan.md"
+    },
+    {
+      "name": "прогон validate по плану этой задачи в новой форме",
+      "file": "scripts/plan.sh",
+      "new": false,
+      "covers": ["own-plan"],
+      "behavior": "docs/tasks/148.plan.json со срезами проходит новый validate кодом 0"
+    },
+    {
+      "name": "полные прогоны plan.test.sh и тестов хука",
+      "file": "scripts/plan.test.sh",
+      "new": false,
+      "covers": ["suites-green"],
+      "behavior": "оба набора зелёные целиком, без исключений"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "refuse-cases",
+      "criterion": "plan.sh validate отказывает в каждом случае п.2; сценарии plan.test.sh на каждый отказ проверяют точный текст: без правки они красные, с правкой зелёные",
+      "method": "bash scripts/plan.test.sh на коммите со сценариями до правки plan.sh и схемы, затем после",
+      "evidence": "до правки — сценарии «Срезы: …» в списке провалившихся; после — итог «провалено: 0»; тексты отказов в сценариях совпадают с перечнем в approach"
+    },
+    {
+      "id": "trivial-cases",
+      "criterion": "Отдельные сценарии: trivial без срезов проходит; trivial со срезами отвергается",
+      "method": "bash scripts/plan.test.sh",
+      "evidence": "сценарий «Срезы: trivial без срезов проходит, trivial со срезами отвергается» — [ ok  ]"
+    },
+    {
+      "id": "threshold-boundary",
+      "criterion": "На границе порога номер на единицу меньше проходит, а сам порог отвергается",
+      "method": "bash scripts/plan.test.sh; grep -n '^SLICES_FROM_ISSUE=' scripts/plan.sh",
+      "evidence": "сценарий границы — [ ok  ]; строка константы SLICES_FROM_ISSUE=148 с комментарием о причине над ней"
+    },
+    {
+      "id": "old-plans",
+      "criterion": "bash scripts/plan.sh validate проходит на всех docs/tasks/*.plan.json и scripts/fixtures/plans/*.json с номером ниже порога, без их правки",
+      "method": "bash scripts/plan.test.sh (сценарий тишины ниже порога); validate без --at на каждом из 13 планов и сравнение числа нарушений с базой; git diff --name-only origin/main...HEAD не содержит этих файлов",
+      "evidence": "ни одной строки «срезы:»; числа нарушений равны базе 131:61, 133:27, 140:10, 2:1, 3:4, 4:0, 5:3, 6:5, 8:15, 81:6, 83:18, 84:17, 93:5; буквальное «проходит» не достижимо и до правки — дрейф дерева, вопрос владельцу"
+    },
+    {
+      "id": "hook-probe",
+      "criterion": "Проба в test_rules_map.py: два запуска step-implement подряд в одной сессии дают напоминание оба раза; в промпт субагента оно не попадает",
+      "method": "python3 -m unittest discover -s .claude/hooks/tests -v",
+      "evidence": "test_implement_slices_reminder_every_spawn … ok"
+    },
+    {
+      "id": "texts",
+      "criterion": "docs/rules/implement.md описывает склейку по п.3; .claude/CLAUDE.md и docs/rules/plan.md ссылаются на поле, а не пересказывают его",
+      "method": "grep -nE 'isolation|cherry-pick|dotnet restore|git diff --name-only|одним сообщением' docs/rules/implement.md; grep -n 'fork_card.slices' .claude/CLAUDE.md docs/rules/plan.md; чтение раздела «Склейка срезов»",
+      "evidence": "цитаты файл:строка на каждый подпункт п.3; в CLAUDE.md одна строка со ссылкой на поле без перечня правил проверки"
+    },
+    {
+      "id": "own-plan",
+      "criterion": "План этой задачи заполнен по новой форме и проходит новый validate",
+      "method": "bash scripts/plan.sh validate docs/tasks/148.plan.json после перевода плана оркестратором",
+      "evidence": "код 0, «План сходится: нарушений нет.»; в плане поле fork_card.slices из трёх срезов"
+    },
+    {
+      "id": "suites-green",
+      "criterion": "bash scripts/plan.test.sh и python3 -m unittest discover -s .claude/hooks/tests -v зелёные",
+      "method": "оба прогона на ветке задачи после склейки",
+      "evidence": "«Пройдено: N, провалено: 0» и «OK» unittest — числа в журнал"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Проверка срезов краснеет на старых планах.",
+      "mitigation": "порог по номеру задачи; сценарий тишины ниже порога гоняет все планы дерева; сверка числа нарушений с базой"
+    },
+    {
+      "risk": "CANON (issue 4242) под порогом — существующие сценарии размера и HPLAN краснеют, и их легко «починить» ослаблением.",
+      "mitigation": "им даются согласованные срезы, утверждения (код, expect_no_violations, тексты) не меняются; перевод ниже порога отвергнут в approach"
+    },
+    {
+      "risk": "Самоприменение: план этой задачи сейчас не может нести slices — действующая схема его отвергнет; правило «план коммитится до запуска срезов» выполняется только для плана в старой форме.",
+      "mitigation": "раскладка записана в executor; оркестратор переводит план после переноса среза «форма и валидатор» и прогоняет новый validate (пункт own-plan)"
+    },
+    {
+      "risk": "Определения агентов заморожены на старте сессии: правка абзаца «Ветка» в step-implement.md не подействует на срезы этой задачи, и срез на временной ветке worktree может остановиться.",
+      "mitigation": "оркестратор в промпте среза называет его worktree и ожидаемый базовый коммит; остановка среза — сигнал, а не провал: срез перезапускается или правится оркестратором с записью в журнал"
+    },
+    {
+      "risk": "В worktree хуки коммита берутся из .githooks основной копии (абсолютный core.hooksPath), а cherry-pick хуки коммита не гоняет — проверки pre-commit на перенесённых коммитах могут не сработать.",
+      "mitigation": "раздел «Склейка срезов» требует после переноса на ветке задачи полный набор тестов и gitleaks по диапазону origin/main..HEAD; факт записан в implement.md"
+    },
+    {
+      "risk": "Сессия в worktree отбивает составные команды оболочки (циклы, подстановки) — срез тратит ходы или обходит проверку.",
+      "mitigation": "в «Склейке срезов» — команды дробятся на простые; сценарии обвязки запускаются целиком скриптом (bash scripts/plan.test.sh), а не циклом в команде"
+    },
+    {
+      "risk": "Напоминание на каждый спавн step-implement превращается в шум для задач с одним срезом.",
+      "mitigation": "note условный: «если в плане больше одного среза»; ссылка на раздел, а не пересказ"
+    },
+    {
+      "risk": "Шим jq в сценарии «Отказ разбора плана» отказывает на любом запросе со словом current_state — программа check_slices с этим словом сломала бы сценарий не по делу.",
+      "mitigation": "check_slices в программах jq не упоминает current_state; сценарий остаётся в полном прогоне"
+    }
+  ],
+  "out_of_scope": [
+    "перевод старых планов и фикстур на новую форму",
+    "машинная проверка обоснованности одного среза и цепочки after — её сверяют совет и оркестратор",
+    "разбор строки executor",
+    "правка rule-injector.py и rule-injector.sh",
+    "сценарий или скрипт, автоматизирующий cherry-pick срезов",
+    "починка дрейфа старых планов, из-за которого validate без --at красный на них и до этой задачи"
+  ]
+}
