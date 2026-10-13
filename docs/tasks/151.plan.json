@@ -1,0 +1,400 @@
+{
+  "issue": 151,
+  "current_state": [
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 274,
+      "observation": "Get-WslConfigPlan (274–306) — источник .wslconfig для -Install (624) и -Check (929): цель networkingMode=mirrored (297, 300, 303); mirrored — без изменений (283–284), другое значение — Conflict (286), firewall=false — Conflict (277–279)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 612,
+      "observation": "Правило -Install — Hyper-V (839): VMCreatorId WSL (121), LocalSubnet и 127.0.0.1 (124), Private (135), пересоздаётся (836–839); имя domovoy-engine-ports (119) читают -Uninstall (548–553) и -Check (934–960). portproxy и правил firewall Windows в сценарии нет."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 721,
+      "observation": "Отказ при Conflict требует «networkingMode=mirrored и firewall Hyper-V»; вывод — 829, 832; подсказка 857–859 — «wsl --shutdown применяет mirrored»."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 319,
+      "observation": "Get-VmFirewallProblems (319–324): Enabled True и DefaultInboundAction Block у firewall Hyper-V для VM WSL; вызывают звено -Check 962–978 и test_vm_firewall_problems."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 1060,
+      "observation": "-Check ходит на /health только по 127.0.0.1 через Get-Health (396–420, HttpClient); «/health из ЛВС» (1065–1070) всегда SKIP вне итога (Counted, 873, 1087). ::1 и адрес в ЛВС не пробуются."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 413,
+      "observation": "Соглашение: адрес хоста в ЛВС в вывод -Check не попадает (413–415)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 105,
+      "observation": "-AssumeEngineState — подмена состояния только с -DryRun (105–109, 146): образец подмены адреса для тестов."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 547,
+      "observation": "-Uninstall снимает только правило Hyper-V (548–554, сухой прогон 487); portproxy нет."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 131,
+      "observation": "Обоснования, верные только для mirrored: 131–132, 1055–1059, 1065–1069; шапка 46–57, 74–76, 87–89."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "line": 279,
+      "observation": "Замер — HttpClient на http://127.0.0.1:<Port>/health (271–281); обоснование 279–280 ссылается на правило Hyper-V."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 470,
+      "observation": "test_engine_setup_dry_run ждёт firewall.vmcreatorid, remoteaddresses LocalSubnet,127.0.0.1 и networkingMode=mirrored (492–496); внутри — wslconfig_kept (573–596), refuses_foreign_networking_mode (nat — отказ, 598–603), refuses_wsl_firewall_off (604–619)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 682,
+      "observation": "test_uninstall_dry_run_without_rollback ждёт uninstall.firewall.remove (702), .wslconfig с mirrored (694, 724, 736)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 851,
+      "observation": "test_vm_firewall_problems — функция из AST (ps_functions, 781–794); -Check тест не запускает (шапка 29–30)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 352,
+      "observation": "test_no_localhost_url требует 127.0.0.1 в -Check и замере; обоснование 350–351 — правило Hyper-V и ::1."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 1332,
+      "observation": "test_measure_boot_probe_always_fails_not_ok уже проверяет ветку замера «нет ответа 200»."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "line": 47,
+      "observation": "Сеть — mirrored (47–54) и правило Hyper-V (55–66); NAT с portproxy на адрес ВМ отвергнут (123–125); следствия про ЛВС и localhost (148–154)."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "line": 47,
+      "observation": "Образец: строка 0027 — «частично заменено [0029]», в теле 0027 ссылки на 0029 нет (греп пуст), у 0029 шапка «Частично заменяет» (0029:4–5); строка 0028 (48) — «принято»."
+    },
+    {
+      "path": "README.md",
+      "line": 273,
+      "observation": "Частная сеть (273–275); localhost не работает из-за ::1 в правиле Hyper-V (277–282); -Install шаги 4–5 (306–308); mirrored (311–313, 334, 371–374); телефон после загрузки (488–490); -Uninstall (500–506)."
+    },
+    {
+      "path": "docs/tasks/151.md",
+      "line": 54,
+      "observation": "Опыт: NAT + portproxy с адреса в ЛВС на 127.0.0.1 + правило Windows (Private, LocalSubnet) — Edge открыл localhost:8123 и /health, телефон — HA; wslrelay слушает 127.0.0.1 и ::1, portproxy (svchost) — адрес в ЛВС."
+    },
+    {
+      "path": "docs/tasks/151.md",
+      "line": 6,
+      "observation": "На хосте опытная конфигурация и правило domovoy-nat-trial; снимает .council/151-nat-trial.ps1 -Mode remove (вне репозитория)."
+    }
+  ],
+  "bug_analysis": {
+    "symptom": "Воспроизведение из журнала (2026-10-13, mirrored, WSL 2.3.26 и 3.0.3): Edge в фоне с чистым профилем на http://127.0.0.1:8123/ — ERR_CONNECTION_TIMED_OUT (-118), proxy DIRECT, tcpdump в движке на 8123 — 0 пакетов; curl, python, HttpClient — 200; ::1 и адрес в ЛВС с ПК — таймаут. В этом запуске красный прогон не повторялся: хост в опытном NAT, возврат в mirrored — wsl --shutdown на хосте владельца без его согласия. Автоматическое воспроизведение (Chromium через relay mirrored) в тестовой обвязке недостижимо — признак совета; суррогатный тест не пишется.",
+    "precondition": "Дефект есть при networkingMode=mirrored: клиент на хосте (Chromium всегда, после части загрузок — все клиенты) идёт к порту контейнера через relay loopback0 WSL, SYN приходит в движок с подменённым портом назначения. При networkingMode=nat (опыт владельца) соединение с 127.0.0.1/::1 принимает wslrelay — обычный сокет Windows — и Edge открывает localhost и 127.0.0.1; на wsl 3.0.3 в mirrored дефект остаётся.",
+    "root_cause": "deploy/windows/engine-setup.ps1:297",
+    "rejected_hypotheses": [
+      "Системный прокси или политика Chrome — прокси выключен, WinHTTP direct, журнал сети браузера proxy_info DIRECT.",
+      "Сторонний антивирус или файрвол — их нет на хосте.",
+      "VPN WireGuard (раздельный по адресам) — отключение не помогло.",
+      "Нет правила firewall Hyper-V или выключен firewall VM — правило domovoy-engine-ports и настройка Hyper-V на месте, -Check зелёный.",
+      "Расширения и профиль браузера — воспроизводится в фоновом Edge с чистым профилем.",
+      "Устаревший WSL — после wsl --update до 3.0.3 (ядро 6.18) в mirrored те же таймауты на всех адресах.",
+      "Браузер не умеет в петлю вообще — тот же Edge открывает HTTP-сервер на самом Windows (127.0.0.1:8765)."
+    ]
+  },
+  "approach": {
+    "summary": "Дефект в relay loopback WSL (#41137); в проекте под него хост ставит выбор mirrored в Get-WslConfigPlan (engine-setup.ps1:297, 300, 303). Фикс — уйти с механизма: движок в NAT, где 127.0.0.1 и ::1 принимает wslrelay (сокет Windows, localhostForwarding), а доступ из ЛВС даёт постоянная запись portproxy с адреса хоста на 127.0.0.1 того же порта. Цель — 127.0.0.1, а не адрес ВМ, поэтому довод 0028:123–125 не действует: запись ставится один раз. engine-setup.ps1: (1) .wslconfig — networkingMode=nat явно; nat в файле — без изменений; свой mirrored (есть .domovoy-backup или .domovoy-absent) — переписывается на nat, чужой mirrored и прочие значения — Conflict; localhostForwarding=false — Conflict; отказ firewall=false снимается — его основание (правило Hyper-V сужает доступ к ВМ из ЛВС) в NAT отсутствует. (2) Адрес прослушивания — IPv4 интерфейса с маршрутом 0.0.0.0/0 наименьшей метрики и профилем Private (чистая функция Select-ListenAddress); не один кандидат, петля, 0.0.0.0, APIPA — отказ. В вывод адрес не попадает (соглашение 413–415); для сухого прогона — -AssumeListenAddress только с -DryRun. (3) portproxy v4tov4 на порты API_HTTP_PORT и HA_HTTP_PORT → 127.0.0.1 того же порта; свои записи прежнего адреса снимаются, чужие не трогаются; IP Helper (iphlpsvc) Disabled — отказ. -Check читает записи из реестра (ключ PortProxy/v4tov4/tcp, без администратора). (4) Правило firewall Windows domovoy-engine-ports: Inbound, TCP, порты API и HA, LocalSubnet, Private, Allow — параметры опыта; прежнее правило Hyper-V с тем же именем -Install снимает. (5) -Check: .wslconfig nat; правило Windows (Get-HostRuleProblems); профиль Private ActiveStore Enabled/Block (Get-FirewallProfileProblems вместо Get-VmFirewallProblems); portproxy (Get-PortProxyProblems: одна своя запись на порт, нынешний адрес, нет записей на 0.0.0.0 и петле); IP Helper Running и Automatic; слушатель на адресе (Get-NetTCPConnection); /health на 127.0.0.1, [::1] и по адресу в ЛВС — все в итоге. Звенья Hyper-V, SKIP вне итога и параметр Counted удаляются. (6) -Uninstall снимает свои записи portproxy, правило Windows и прежнее Hyper-V. (7) Обоснования «::1 не принимает правило Hyper-V» в комментариях правятся; 127.0.0.1 в -Check и замере остаётся. Решение — запись 0030, частично заменяющая 0028 в части сети; индекс — «частично заменено [0030]», тело 0028 не правится (прецедент 0027/0029). README — предусловие резервирования адреса в DHCP, localhost с ПК работает, доступ из ЛВС проверяет -Check. Открытые вопросы. Адрес: конкретный — 0.0.0.0 даёт петлю; смена по DHCP — FAIL -Check и повтор -Install; в чужой сети адреса нет, а совпавший закрыт правилом только Private. Перезагрузка: записи portproxy в реестре, iphlpsvc Automatic (прочитано); wslrelay сейчас в сеансе 0 при интерактивном сеансе 1 — relay принадлежит ВМ держалки S4U; привязка portproxy к адресу, появившемуся после старта iphlpsvc, и wslrelay до входа — живой пункт after-boot. Hyper-V: путь из ЛВС в NAT — portproxy → 127.0.0.1 → wslrelay → ВМ, правило Hyper-V в нём не участвует (опыт: NAT без portproxy и с правилом Hyper-V — телефон не открывает HA); снятие правила проверяет browser-pc. Браузерная проба не нужна: дефект сидел в пакетном relay mirrored, в NAT клиент завершает рукопожатие с wslrelay как с любым сокетом Windows, так что HttpClient проверяет путь браузера; остаток — живой browser-pc. Критерий — закрытие дыры: браузер на ПК, телефон, одна загрузка без входа.",
+    "rejected": [
+      {
+        "option": "Остаться на mirrored и ждать исправления WSL #41137 или обновлять WSL",
+        "reason": "#41137 открыта без срока; на wsl 3.0.3 дефект воспроизведён (журнал)."
+      },
+      {
+        "option": "mirrored + hostAddressLoopback или другие ключи mirrored",
+        "reason": "Ключи mirrored меняют достижимость адреса в ЛВС, а не relay петли: Edge таймаутил на всех адресах стека."
+      },
+      {
+        "option": "portproxy на 0.0.0.0",
+        "reason": "Цель — 127.0.0.1 того же порта: без wslrelay подстановочный слушатель принимает собственное соединение — петля; плюс слушатель на всех интерфейсах, включая VPN."
+      },
+      {
+        "option": "portproxy на адрес ВМ (как в документации WSL)",
+        "reason": "Адрес ВМ в NAT меняется на каждой загрузке — довод 0028:123–125 остаётся в силе; цель 127.0.0.1 постоянна."
+      },
+      {
+        "option": "Задача при загрузке, переписывающая адрес прослушивания portproxy",
+        "reason": "Лишнее звено автозапуска (довод 0028:123–125) и задача с правами администратора — netsh portproxy требует повышения, а задачи -Install идут без Highest (проверка в test_engine_setup_dry_run); смену адреса ловит -Check, адрес хоста телефону и так нужен постоянный."
+      },
+      {
+        "option": "Проба браузером (Edge headless) в -Check или замере",
+        "reason": "В NAT браузер и HttpClient идут в один сокет wslrelay; браузер в -Check — новая внешняя зависимость сценария. Совпадение путей проверяет живой browser-pc."
+      },
+      {
+        "option": "Оставить правило Hyper-V и звенья firewall Hyper-V «на всякий случай»",
+        "reason": "В NAT они ничего не сужают: путь из ЛВС — portproxy на хосте, ВМ из ЛВС не адресуема; правило без действия — молчаливый костыль."
+      },
+      {
+        "option": "Дополнение к 0028 вместо новой записи",
+        "reason": "Меняется само решение о сети и отвергнутый вариант 0028, а записи не переписываются (docs/decisions/README.md:16–17); прецедент частичной замены — 0029 для 0027."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да. Issue: «С ПК … HA и api открываются в браузере по localhost и 127.0.0.1 после каждой загрузки, без перезапуска WSL»; NAT даёт оба адреса (опыт: Edge открыл 127.0.0.1 и localhost на 8123 и /health), доступ из ЛВС сохраняется через portproxy (телефон открыл HA). Вторая ветка критерия («если невозможно в принятой схеме — решение, а -Check или measure-boot сообщают о сбое») выполняется сменой схемы с записью 0030, а сообщение о сбое — звеньями -Check по трём адресам и уже существующей веткой «нет ответа 200» замера. Направление выбрал владелец после опыта (журнал, «Направление решения»); число загрузок по его ответу не критерий.",
+    "alternative": "Автоподстройка адреса portproxy задачей при загрузке: владелец увидел бы, что доступ из ЛВС переживает смену адреса без -Install, ценой задачи с правами администратора в автозапуске и лишнего звена цепочки; выбор следует из 0028:123–125 и из того, что задачи движка идут без Highest, поэтому развилкой не считается. Другие варианты дают тот же наблюдаемый результат или не закрывают дыру (rejected).",
+    "ripple": "Греп engine-setup.ps1: Get-WslConfigPlan — 624, 929; Get-VmFirewallProblems — 967 и test 858–862; $RuleName — 119, 487, 548–553, 613, 836–840, 935, 954; $WslVmCreatorId — 121, 616, 966; $RemoteAddresses — 124, 619, 840, 941; Test-PrivateProfileOnly — 703, 943, test 805–807 (остаётся); Get-Health — 1060, test 358; Counted — 873, 874, 1070, 1087. Тесты с mirrored/Hyper-V: 492–496, 553, 576–619, 694, 702, 724, 736, 851–864, 1511. measure-boot.ps1 — комментарий 279–280. README — 273–282, 306–313, 334, 371–374, 488–490, 500–506. Вне репозитория: .wslconfig глобален — остальные дистрибутивы переходят на NAT; опытные правило и portproxy на хосте. Замены тестов: test_vm_firewall_problems → test_firewall_profile_problems той же строгости; refuses_foreign_networking_mode переворачивается; refuses_wsl_firewall_off → отказ при localhostForwarding=false.",
+    "workaround": "Нет. Дефект WSL не обходится в коде проекта: схема сети меняется на ту, где дефектного механизма нет, штатными средствами Windows (portproxy, firewall); // HACK: не нужен. Ожидание исправления #41137 отвергнуто как оставляющее дыру.",
+    "council_signs": [
+      "глобальный переключатель — %USERPROFILE%/.wslconfig networkingMode действует на все дистрибутивы пользователя (0028:141, README:371)",
+      "правка обвязки — docs/decisions/0030 (новая) и docs/decisions/README.md, группа harness_quality",
+      "недостижимое воспроизведение — автоматический красный прогон браузера через relay loopback mirrored в тестовой обвязке недостижим; повторный живой прогон в этом запуске не делался (хост в опытном NAT)",
+      "правка расширяет допустимые состояния — снимается отказ -Install при firewall=false; nat из отказа становится нормой",
+      "новая функциональность — portproxy, правило firewall Windows, звенья -Check для ::1, адреса в ЛВС, portproxy и IP Helper"
+    ],
+    "executor": "Субагент: 6 файлов, правка engine-setup.ps1 и его тестов — сотни строк, порог делегирования превышен. Не параллелится — engine-setup.ps1 и engine-setup.test.sh правятся вместе; порядок: тесты чистых функций и сухого прогона (красные на нынешнем коде), engine-setup.ps1, комментарий measure-boot.ps1, затем отдельным коммитом 0030, индекс решений и README.",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "action": "modify",
+      "why": "NAT в .wslconfig с переходом со своего mirrored и отказом при localhostForwarding=false; Select-ListenAddress, Get-PortProxyProblems, Get-HostRuleProblems, Get-FirewallProfileProblems; portproxy и правило firewall Windows в -Install, снятие прежнего правила Hyper-V; новые звенья -Check и удаление звеньев Hyper-V и SKIP вне итога; -Uninstall снимает portproxy и оба правила; -AssumeListenAddress только с -DryRun; шапка и комментарии."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "action": "modify",
+      "why": "Сценарии чистых функций и сухих прогонов под NAT и portproxy; замена test_vm_firewall_problems на test_firewall_profile_problems; комментарий test_no_localhost_url."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "action": "modify",
+      "why": "Только обоснование 127.0.0.1 в комментарии 279–280: довод про правило Hyper-V в NAT неверен."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Предусловия (частная сеть, резервирование адреса хоста в DHCP), порты и localhost с ПК, шаги -Install, wsl --shutdown применяет NAT, доступ из ЛВС проверяет -Check, что снимает -Uninstall."
+    },
+    {
+      "path": "docs/decisions/0030-wsl-nat-portproxy.md",
+      "action": "create",
+      "why": "Новая запись: сеть движка — NAT + portproxy с адреса в ЛВС на 127.0.0.1 + правило firewall Windows; «Частично заменяет: 0028 — в части сети»; первопричина (relay loopback mirrored, WSL #41137), отвергнутые варианты, следствия (localhost с ПК работает, -Check проверяет доступ из ЛВС, адрес хоста — резервирование DHCP, остальные дистрибутивы в NAT). Путь группы harness_quality."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "Строка 0028 — «частично заменено [0030]», новая строка 0030. Путь группы harness_quality."
+    }
+  ],
+  "boundaries": [
+    "deploy/windows/**",
+    "README.md",
+    "docs/decisions/0030-wsl-nat-portproxy.md",
+    "docs/decisions/README.md",
+    "docs/tasks/151.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "test_engine_setup_dry_run",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["check-nat", "migration", "no-addresses"],
+      "behavior": "Сухой прогон -Install с -AssumeListenAddress 192.0.2.10 (RFC 5737) в обоих PowerShell: строки wslconfig.line: networkingMode=nat, правило firewall Windows (имя domovoy-engine-ports, Inbound, TCP, порты API и HA, remoteaddress LocalSubnet, профиль Private, private_only True) без VMCreatorId, две строки portproxy на 127.0.0.1 тех же портов и строка снятия прежнего правила Hyper-V; адреса 192.0.2.10 в выводе нет. Внутри: engine_setup_wslconfig_kept — байты с nat для CRLF/LF/без секции, nat в файле — changed False; mirrored с копией .domovoy-backup или отметкой .domovoy-absent — changed True и nat; mirrored без них и bridged — код 1 и wslconfig.conflict; localhostForwarding=false — код 1 и конфликт назван; firewall=false больше не отказ; -AssumeListenAddress без -DryRun — код 2. На нынешнем коде сценарий красный (ждёт nat, получает mirrored)."
+    },
+    {
+      "name": "test_uninstall_dry_run_without_rollback",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["uninstall"],
+      "behavior": "Сухой прогон -Uninstall печатает снятие своих записей portproxy правилом отбора (порт ∈ {API, HA}, цель 127.0.0.1 того же порта, без адреса), правила firewall Windows и прежнего правила Hyper-V domovoy-engine-ports; .wslconfig с nat, копия и отметка байт в байт прежние; остальные ожидания сценария (stop, не down; дистрибутив остаётся; нет отката) не ослабляются."
+    },
+    {
+      "name": "test_select_listen_address",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["check-nat", "lan-address"],
+      "behavior": "Select-ListenAddress из AST на подставных маршрутах, профилях и адресах RFC 5737: один маршрут 0.0.0.0/0 через интерфейс Private с одним IPv4 — этот адрес; интерфейс с маршрутом в профиле Public (VPN) — не кандидат; два кандидата, ни одного, только APIPA 169.254.x, петля или 0.0.0.0 — отказ с причиной; из двух маршрутов берётся меньшая метрика."
+    },
+    {
+      "name": "test_portproxy_problems",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["check-nat", "check-failure", "lan-address"],
+      "behavior": "Get-PortProxyProblems из AST на подставных записях реестра «адрес/порт» → «127.0.0.1/порт»: по одной своей записи на порт API и HA с нынешним адресом — замечаний нет; нет записи порта, запись на прежний адрес (DHCP сменил), цель не 127.0.0.1 или другой порт, две записи одного порта, запись этого порта на 0.0.0.0 или 127.0.0.1 (петля) — замечание с названием порта и без адреса в тексте; чужие записи других портов замечаний не дают."
+    },
+    {
+      "name": "test_host_rule_problems",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["check-nat", "check-failure"],
+      "behavior": "Get-HostRuleProblems из AST на подставном правиле: Enabled True, Inbound, Allow, TCP, RemoteAddress LocalSubnet, профиль Private, порты ровно API и HA — замечаний нет; выключено, Outbound, Block, адрес Any или шире LocalSubnet, профиль Any/Public/Private+Public, лишний или недостающий порт — по замечанию."
+    },
+    {
+      "name": "test_firewall_profile_problems",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": ["check-nat", "check-failure"],
+      "behavior": "Замена test_vm_firewall_problems той же строгости: Get-FirewallProfileProblems из AST — Enabled True и DefaultInboundAction Block профиля Private — OK; False/Block, True/Allow, NotConfigured/NotConfigured, True/NotConfigured — замечание. Без этого звена разрешающее правило ничего не сужало бы."
+    },
+    {
+      "name": "test_rule_profile_private_only",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["check-nat"],
+      "behavior": "Без изменений: Test-PrivateProfileOnly принимает только Private и 2; теперь им же проверяется профиль правила firewall Windows в сухом прогоне и в Get-HostRuleProblems."
+    },
+    {
+      "name": "test_measure_boot_probe_always_fails_not_ok",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["check-failure"],
+      "behavior": "Без изменений: замер на заглушке без ответа 200 пишет итог «нет ответа 200», а не OK — ветка сбоя замера, которую требует вторая часть критерия."
+    },
+    {
+      "name": "test_no_localhost_url",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": ["browser-pc", "phone-lan", "after-boot", "decision"],
+      "behavior": "Проверка прежняя (127.0.0.1 в -Check и замере), правится обоснование. Для живых пунктов browser-pc, phone-lan, after-boot это лишь адрес, по которому -Check и замер ходят в стек — доказательство дают живые прогоны; для decision — греп и чтение."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "browser-pc",
+      "criterion": "С ПК, где работает движок, HA и api открываются в браузере по localhost и 127.0.0.1, без перезапуска WSL (issue, «Что должно происходить»).",
+      "method": "Живой хост после снятия опытной конфигурации (.council/151-nat-trial.ps1 -Mode remove), -Install, wsl --shutdown, Start-ScheduledTask domovoy-engine (правило Hyper-V снято -Install): Edge в фоне с чистым профилем открывает localhost и 127.0.0.1 на 8123 и 18080/health. Таймаут хоть на одном — стоп и назад к плану; HttpClient критерий не подменяет.",
+      "evidence": "Четыре загрузки страницы без кода ошибки в журнале сети браузера — строка в «Проверено» журнала задачи, без адресов в ЛВС."
+    },
+    {
+      "id": "phone-lan",
+      "criterion": "Из ЛВС стек доступен, как был: телефон в домашней сети открывает HA.",
+      "method": "Владелец с телефона в домашней сети открывает http://<адрес-хоста>:<HA_HTTP_PORT> и GET http://<адрес-хоста>:<API_HTTP_PORT>/health после -Install; с телефона на мобильном интернете HA не открывается (NFR-SEC-2, README:188–190).",
+      "evidence": "Ответ владельца в сессии: HA открылся в ЛВС и не открылся с мобильного интернета; строка в журнале без адреса хоста."
+    },
+    {
+      "id": "after-boot",
+      "criterion": "Доступ с ПК и из ЛВС поднимается после загрузки без входа и без перезапуска WSL (issue, «после каждой загрузки»; по ответу владельца проверяется закрытие причины, а не серия загрузок).",
+      "method": "Одна загрузка («Перезагрузка» или снятие питания) без входа: телефон в домашней сети открывает HA до входа (README:488–490); затем вход, строка measure-boot.log этой загрузки с первым 200 по 127.0.0.1, Edge на localhost:8123, engine-setup.ps1 -Check — код 0. Не открылся до входа — работа останавливается, расхождение в журнал и вопрос владельцу: это проверка допущений о привязке portproxy к адресу при старте iphlpsvc и о wslrelay под S4U.",
+      "evidence": "Ответ владельца о телефоне до входа; время первого 200 в measure-boot.log этой загрузки; итоговая строка -Check «итог: все звенья … OK» и код 0 — без адресов."
+    },
+    {
+      "id": "check-nat",
+      "criterion": "-Check проверяет новую схему: networkingMode=nat, правило firewall Windows и профиль Private, записи portproxy и их слушатель, IP Helper, /health на 127.0.0.1, [::1] и по адресу в ЛВС — и не печатает адрес хоста в ЛВС.",
+      "method": "bash deploy/windows/engine-setup.test.sh — сценарии test_engine_setup_dry_run, test_select_listen_address, test_portproxy_problems, test_host_rule_problems, test_firewall_profile_problems, test_rule_profile_private_only ok, итог «упало 0»; на живом хосте после -Install — engine-setup.ps1 -Check, код 0.",
+      "evidence": "Строки ok шести сценариев и итог сценария; вывод -Check владельца с OK у звеньев .wslconfig, правило firewall, профиль Private, portproxy, portproxy слушает, IP Helper и трёх /health; поиск адреса хоста в выводе -Check пуст."
+    },
+    {
+      "id": "check-failure",
+      "criterion": "Если путь к стеку не работает, -Check или measure-boot сообщают о сбое (issue, вторая ветка; владелец: проверяется симуляцией на стенде).",
+      "method": "Стенд — живой хост: docker compose stop api через обёртку, engine-setup.ps1 -Check — код 1, FAIL у /health на 127.0.0.1, [::1] и по адресу в ЛВС с «нет ответа», без зависания дольше тайм-аута HttpClient; затем docker compose start api и -Check — код 0. Подставные сбои конфигурации — сценарии test_portproxy_problems, test_host_rule_problems, test_firewall_profile_problems; ветка замера — test_measure_boot_probe_always_fails_not_ok.",
+      "evidence": "Строки FAIL трёх звеньев и итог с кодом 1, затем код 0 — в «Проверено» журнала без адресов; строки ok четырёх сценариев."
+    },
+    {
+      "id": "lan-address",
+      "criterion": "Адрес прослушивания portproxy выбран так, что смена адреса хоста или чужая сеть не открывают стек и не создают петлю, а смена адреса видна.",
+      "method": "Сценарии test_select_listen_address и test_portproxy_problems ok (Public-интерфейс не кандидат; запись на прежний адрес — замечание; 0.0.0.0 и петля — замечание); греп engine-setup.ps1 на listenaddress=0.0.0.0 — пусто.",
+      "evidence": "Строки ok двух сценариев; пустой вывод грепа."
+    },
+    {
+      "id": "migration",
+      "criterion": "Хост, установленный по 0028 (mirrored, правило Hyper-V), переходит на новую схему повторным -Install без ручной правки .wslconfig и без оставшегося правила Hyper-V.",
+      "method": "test_engine_setup_dry_run: mirrored с копией или отметкой — changed True и nat, строка снятия правила Hyper-V; живой хост после -Install: Get-NetFirewallHyperVRule -Name domovoy-engine-ports — ObjectNotFound; Get-NetFirewallRule -Name domovoy-nat-trial — ObjectNotFound (опытное правило снято скриптом опыта до -Install).",
+      "evidence": "Строка ok сценария; два вывода ObjectNotFound в журнале."
+    },
+    {
+      "id": "uninstall",
+      "criterion": "-Uninstall снимает всё, что ставит -Install в новой схеме: свои записи portproxy, правило firewall Windows, прежнее правило Hyper-V, .wslconfig — как раньше.",
+      "method": "bash deploy/windows/engine-setup.test.sh — test_uninstall_dry_run_without_rollback ok в обоих PowerShell.",
+      "evidence": "Строки ok сценария по каждому PowerShell."
+    },
+    {
+      "id": "decision",
+      "criterion": "Смена схемы сети зафиксирована решением (issue: «фиксируется решением»), запись 0028 помечена частично заменённой.",
+      "method": "Чтение docs/decisions/0030-wsl-nat-portproxy.md: шапка «Частично заменяет: 0028 — в части сети»; grep -n '0030' docs/decisions/README.md — строка 0028 «частично заменено [0030]» и строка 0030; grep -n mirrored README.md deploy/windows/engine-setup.ps1 — только переход со своего mirrored.",
+      "evidence": "Цитата шапки 0030 с файл:строка; две строки индекса; вывод грепа mirrored."
+    },
+    {
+      "id": "no-addresses",
+      "criterion": "Ни в коде, ни в тестах, ни в README и записи решения нет реальных адресов ЛВС и имени хоста (.claude/CLAUDE.md, «Безопасность», п. 1).",
+      "method": "gitleaks git --redact --no-banner чист; греп диапазонов 10/8, 172.16/12, 192.168/16 по git diff origin/main...HEAD — пусто; в тестах только RFC 5737 (192.0.2.x), 127.0.0.1, 169.254.x, 0.0.0.0; test_engine_setup_dry_run — подставной адрес в вывод не попадает.",
+      "evidence": "Чистый вывод gitleaks, пустой вывод грепа, строка ok сценария."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "portproxy с конкретным адресом не привязывается на загрузке, если адрес появляется после старта iphlpsvc (DHCP), — доступ из ЛВС лежит до перезапуска службы; без живой загрузки не установлено.",
+      "mitigation": "Звено -Check «portproxy слушает» по Get-NetTCPConnection даёт FAIL; живой пункт after-boot (телефон до входа) проверяет именно это; не открылся — работа останавливается и возвращается к плану, костыль с перезапуском службы без решения не ставится."
+    },
+    {
+      "risk": "Адрес хоста в ЛВС меняется по DHCP или при переезде в другую сеть — запись portproxy указывает на чужой адрес, доступ из ЛВС пропадает.",
+      "mitigation": "-Check сравнивает адрес записей с нынешним (Select-ListenAddress) и даёт FAIL с подсказкой -Install; -Install снимает свои записи прежнего адреса; в README предусловие — резервирование адреса хоста в DHCP роутера (телефону адрес и так нужен постоянный)."
+    },
+    {
+      "risk": "Порты стека открываются в чужой сети или шире локальной подсети.",
+      "mitigation": "Правило — только Private и LocalSubnet (Get-HostRuleProblems), профиль Private — Block по умолчанию (Get-FirewallProfileProblems); в чужой сети адреса нет, совпавший закрыт профилем Public; VPN в Public не кандидат (test_select_listen_address)."
+    },
+    {
+      "risk": "Петля portproxy → 127.0.0.1 → portproxy, если запись окажется на 0.0.0.0 или петле.",
+      "mitigation": "Select-ListenAddress не выдаёт 0.0.0.0, петлю и APIPA; Get-PortProxyProblems даёт замечание на любую запись портов стека на 0.0.0.0 или 127.0.0.1; оба — сценарии теста."
+    },
+    {
+      "risk": "Снятие правила Hyper-V ломает путь хост → ВМ, если трафик wslrelay всё же фильтруется firewall Hyper-V (сейчас LoopbackEnabled True, DefaultInboundAction Block).",
+      "mitigation": "browser-pc идёт после -Install, снимающего правило; FAIL — стоп, правило не возвращается без объяснения механизма. Допущение для совета."
+    },
+    {
+      "risk": "wslrelay в NAT пропускает не всех клиентов одинаково — HttpClient в -Check зелёный при сломанном браузере (то же слепое пятно, что в mirrored).",
+      "mitigation": "wslrelay — сокет Windows, рукопожатие клиент завершает с ним, как с контрольным http.server; проверяют живые browser-pc и after-boot. Допущение для совета."
+    },
+    {
+      "risk": "wslrelay не поднимается до входа пользователя: держалка S4U, проброс localhostForwarding привязан к сеансу.",
+      "mitigation": "Факт: сейчас wslrelay, wsl и wslservice в сеансе 0 при интерактивном сеансе 1 — relay принадлежит ВМ держалки; окончательно — живой пункт after-boot (первый 200 замера до входа и телефон до входа)."
+    },
+    {
+      "risk": ".wslconfig глобален: остальные дистрибутивы пользователя теряют mirrored — их сервисы перестают быть видны из ЛВС.",
+      "mitigation": "README «Затем руками» — проверить остальные дистрибутивы; в 0030 — следствие; NAT — значение WSL по умолчанию, mirrored без нашей копии или отметки -Install не переписывает (отказ)."
+    },
+    {
+      "risk": "На хосте владельца остаются опытные правило domovoy-nat-trial и записи portproxy — два правила и неясно, чья запись.",
+      "mitigation": "Шаг до живого -Install — .council/151-nat-trial.ps1 -Mode remove; пункт migration проверяет отсутствие опытного правила; записи portproxy того же вида -Install всё равно пересоздаёт."
+    },
+    {
+      "risk": "Удаление test_vm_firewall_problems и смена ожиданий сценариев выглядят как ослабление тестов.",
+      "mitigation": "Замены названы в ripple и tests: test_firewall_profile_problems той же строгости, firewall=false → localhostForwarding=false с причиной в 0030; ассерты S4U, Limited, stop вместо down, отсутствия отката не снимаются."
+    },
+    {
+      "risk": "Адрес в тестах и примерах примут за реальный (Безопасность, п. 1).",
+      "mitigation": "Только документационные адреса RFC 5737 (192.0.2.x) и служебные 127.0.0.1, 0.0.0.0, 169.254.x; пункт no-addresses с грепом диапазонов ЛВС по диффу и gitleaks."
+    },
+    {
+      "risk": "Служба IP Helper отключена на хосте — portproxy не работает.",
+      "mitigation": "-Install отказывает при StartType Disabled (чужая настройка службы не меняется), -Check — звено IP Helper (Running и Automatic)."
+    }
+  ],
+  "out_of_scope": [
+    "Исправление relay mirrored (#41137) и mirrored как вариант схемы.",
+    "Автоподстройка адреса portproxy при загрузке — смену ловит -Check, исправляет повтор -Install.",
+    "Доступ из ЛВС по IPv6 (portproxy v6tov6).",
+    "Проба браузером в -Check и замере; HTTP-проба порта HA в -Check — HA идёт тем же relay и записью portproxy, что проверяют звенья.",
+    "Проба адреса в ЛВС в measure-boot.",
+    "Правка тела 0028 — по прецеденту меняется строка индекса.",
+    "Серия проверочных загрузок — по ответу владельца загрузка одна."
+  ]
+}
