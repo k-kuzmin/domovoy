@@ -278,7 +278,8 @@ case "\$*" in
   *) exit 2 ;;
 esac
 EOF
-  # example-old-1 остановлен: StartedAt и healthy прошлого запуска в вывод
+  # example-old-1 остановлен, example-new-1 ни разу не стартовал: оба
+  # названы state=stopped, а StartedAt и healthy прошлого запуска в вывод
   # зонда не попадают.
   cat >"$bin/docker" <<EOF
 #!/usr/bin/env bash
@@ -293,7 +294,9 @@ EOF
   chmod +x "$bin/date" "$bin/ps" "$bin/systemctl" "$bin/docker"
   started_api="$("$real_date" -u -d '2025-10-13T04:51:20Z' +%s)"
   started_pg="$("$real_date" -u -d '2025-10-13T04:51:15Z' +%s)"
-  expected="$(printf 'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=%s health=healthy\ncontainer name=example-postgres-1 started_at=%s health=none' "$started_api" "$started_pg")"
+  expected="$(printf 'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=%s health=healthy\ncontainer name=example-postgres-1 started_at=%s health=none
+container name=example-new-1 state=stopped
+container name=example-old-1 state=stopped' "$started_api" "$started_pg")"
   for tz in UTC Europe/Moscow Asia/Yekaterinburg; do
     rm -f "$work/probe-docker.log"
     out="$(TZ="$tz" PATH="$bin:$PATH" bash "$here/boot-probe.sh" example 2>"$work/out")" || { fail "$name" "TZ=$tz: код $?"; show_out; return; }
@@ -1389,6 +1392,60 @@ test_measure_boot_records_container_restart() {
   done
 }
 
+# Один контейнер проекта не работает (зонд: state=stopped), остальные и
+# /health healthy: готовности нет — код 1, не stop=ready, итог называет
+# этот контейнер; моментов прошлого запуска у него в журнале нет.
+test_measure_boot_names_stopped_container() {
+  local name=measure_boot_names_stopped_container
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_names_stopped_container/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    probe_step "$fake" 0 0 $'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\ncontainer name=example-postgres-1 started_at=1760331015 health=none\ncontainer name=example-homeassistant-1 state=stopped\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure_stable=0.05 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 1 ] || { fail "$name" "код $rc, ожидался 1"; show_log; return; }
+    if log_has 'stop=ready'; then fail "$name" "готовность при неработающем контейнере"; show_log; return; fi
+    log_has 'не работает: example-homeassistant-1' || { fail "$name" "итог не называет неработающий контейнер"; show_log; return; }
+    if log_has 'result=ok'; then fail "$name" "итог ok при неработающем контейнере"; show_log; return; fi
+    if grep -qE '; container_(start|healthy)=.*name=example-homeassistant-1' "$work/measure.log"; then fail "$name" "события по неработающему контейнеру"; show_log; return; fi
+    log_has 'name=example-api-1' || { fail "$name" "работающие контейнеры не записаны"; show_log; return; }
+    ok "$name"
+  done
+}
+
+# Отказ зонда, восстановление, тот же отказ снова: вторая строка
+# probe_error с тем же текстом есть — после успешного опроса текст
+# прежнего отказа сброшен.
+test_measure_boot_repeats_probe_error_after_recovery() {
+  local name=measure_boot_repeats_probe_error_after_recovery
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell fake="$work/fakewsl"
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  for shell in "${shells[@]}"; do
+    name="measure_boot_repeats_probe_error_after_recovery/$shell"
+    make_fake_wsl "$fake"
+    printf 'example-engine\n' >"$fake/running"
+    local head=$'distro_start=1760331000\ndocker_active=1760331010\n'
+    probe_step "$fake" 0 1 $'distro_start=1760331000\n' $'boot-probe: example отказ docker\n'
+    probe_step "$fake" 1 0 "$head"
+    probe_step "$fake" 2 1 $'distro_start=1760331000\n' $'boot-probe: example отказ docker\n'
+    probe_step "$fake" 3 0 "${head}container name=example-api-1 started_at=1760331020 health=healthy"$'\n'
+    start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+    port="$stub_port"
+    measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")"
+    stop_stub
+    [ "$rc" -eq 0 ] || { fail "$name" "код $rc, ожидался 0"; show_log; return; }
+    [ "$(grep -c 'text=boot-probe: example отказ docker' "$work/measure.log")" = 2 ] || { fail "$name" "повтор отказа после восстановления не записан"; show_log; return; }
+    ok "$name"
+  done
+}
+
 # Разбор вывода зонда и статуса /health — функциями measure-boot.ps1 из
 # AST: секунды Unix → тот же местный момент, что FromUnixTimeSeconds(…)
 # .ToLocalTime(); местное время вместо секунд — нет данных, а не сдвиг.
@@ -1408,6 +1465,9 @@ test_boot_probe_parse() {
       if (@($d.Containers)[1].Health -ne "none") { "health=none потерян"; exit 1 }
       $local = ConvertFrom-BootProbe @("distro_start=Mon Oct 13 08:50:00 2025", "docker_active=2025-10-13T08:50:10+03:00", "container name=example-api-1 started_at=2025-10-13T05:50:20Z health=healthy")
       if ($null -ne $local.DistroStart -or $null -ne $local.DockerActive -or @($local.Containers).Count) { "местное время принято за момент"; exit 1 }
+      $st = @((ConvertFrom-BootProbe @("container name=example-homeassistant-1 state=stopped")).Containers)
+      if ($st.Count -ne 1 -or $st[0].Name -ne "example-homeassistant-1" -or $st[0].Running -or $null -ne $st[0].StartedAt) { "state=stopped разобран не так"; exit 1 }
+      if (-not @($d.Containers)[0].Running) { "работающий контейнер разобран неработающим"; exit 1 }
       $partial = ConvertFrom-BootProbe @("distro_start=1760331000")
       if ($null -eq $partial.DistroStart -or $null -ne $partial.DockerActive) { "частичный вывод не засчитан построчно"; exit 1 }
       foreach ($case in @(@(200, "{`"status`":`"healthy`"}", "healthy", $false), @(200, "{`"status`":`"degraded`"}", "degraded", $false), @(503, "{`"status`":`"unhealthy`"}", "unhealthy", $false),
@@ -1462,6 +1522,8 @@ test_measure_boot_reads_utf16_wsl_list
 test_measure_boot_survives_probe_failures
 test_measure_boot_probe_always_fails_not_ok
 test_measure_boot_records_container_restart
+test_measure_boot_names_stopped_container
+test_measure_boot_repeats_probe_error_after_recovery
 test_readme_points_to_logs
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"

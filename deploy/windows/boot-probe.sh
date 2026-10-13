@@ -3,7 +3,7 @@
 #
 #   wsl.exe -d domovoy-engine -u root --cd <клон> --exec bash deploy/windows/boot-probe.sh <проект compose>
 #
-# Вызывает deploy/windows/measure-boot.ps1 на каждом опросе — и только
+# Вызывается из deploy/windows/measure-boot.ps1 на каждом опросе — и только
 # когда дистрибутив уже работает: сам зонд дистрибутив не поднимает, это
 # делает wsl.exe, а замер проверяет список работающих до вызова.
 #
@@ -16,12 +16,17 @@
 #   docker_active=<секунды>  docker.service перешёл в active
 #                            (systemctl show --timestamp=unix);
 #   container name=<имя> started_at=<секунды> health=<состояние>
-#                            по строке на контейнер проекта: последний
-#                            старт ({{.State.StartedAt}}, UTC) и состояние
-#                            healthcheck, без него — none. Не печатается
-#                            контейнер, ни разу не стартовавший, и
-#                            неработающий (.State.Running false): у него
-#                            StartedAt и Health.Status прошлого запуска.
+#                            по строке на работающий контейнер проекта:
+#                            последний старт ({{.State.StartedAt}}, UTC) и
+#                            состояние healthcheck, без него — none;
+#   container name=<имя> state=stopped
+#                            по строке на неработающий контейнер проекта
+#                            (.State.Running false или ни разу не
+#                            стартовал): без моментов — у него StartedAt и
+#                            Health.Status прошлого запуска. Набор строк
+#                            container — все контейнеры проекта из
+#                            docker ps -a, и замер требует running и
+#                            healthy от каждого.
 #
 # Код не 0 — данных на этом опросе нет или они неполные: docker.service ещё
 # не active или docker не ответил. Напечатанное до отказа замер засчитывает
@@ -52,9 +57,12 @@ names="$(docker ps -a --filter "label=com.docker.compose.project=$project" --for
 inspected="$(docker inspect -f '{{.Name}}|{{.State.StartedAt}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.Running}}' $names)"
 while IFS='|' read -r name started health running; do
   [ -n "$name" ] || continue
-  [ "$running" = true ] || continue
-  # Ни разу не стартовавший контейнер: StartedAt 0001-01-01T00:00:00Z.
-  case "$started" in 0001-*) continue ;; esac
+  # Неработающий или ни разу не стартовавший (StartedAt
+  # 0001-01-01T00:00:00Z) — без моментов прошлого запуска.
+  if [ "$running" != true ] || [[ "$started" == 0001-* ]]; then
+    echo "container name=${name#/} state=stopped"
+    continue
+  fi
   seconds="$(date -u -d "$started" +%s)"
   echo "container name=${name#/} started_at=$seconds health=$health"
 done <<<"$inspected"

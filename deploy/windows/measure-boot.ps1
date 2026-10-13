@@ -54,12 +54,14 @@
                        ответ 200), distro_start=нет данных (если дистрибутив
                        так и не увиден), stop, result.
 
-  Опрос кончается, когда /health healthy и каждый контейнер с healthcheck
-  healthy (пустой набор контейнеров этого не выполняет) — stop=ready, когда
+  Опрос кончается, когда /health healthy и каждый контейнер проекта,
+  названный зондом, работает, а с healthcheck — ещё и healthy (пустой набор
+  контейнеров этого не выполняет) — stop=ready, когда
   статус /health и состояния контейнеров не менялись -StableMinutes (5)
   подряд — stop=stable, или по -TimeoutMinutes (30) — stop=timeout; рядом с
   причиной — фактическое время опроса в минутах. Итог result=ok и код 0 —
-  только при /health healthy и переходе в healthy каждого контейнера; без
+  только при /health healthy и переходе в healthy каждого контейнера; не
+  работающие на последнем опросе названы «не работает: <имена>»; без
   ответа 200 формы стека — «нет ответа 200 за <время опроса> мин опроса»;
   без данных о контейнерах — «нет данных о контейнерах», даже при healthy
   /health.
@@ -127,6 +129,7 @@ function ConvertFrom-UnixSeconds([string]$Text) {
 # Вывод deploy/windows/boot-probe.sh: строки key=value, моменты — секунды
 # Unix. Строка с моментом не числом — нет данных по ней, а не сдвинутое
 # время; прочие строки пропускаются. Неполный вывод засчитывается построчно.
+# Контейнер state=stopped — Running false, без моментов.
 function ConvertFrom-BootProbe([string[]]$Lines) {
     $distroStart = $null
     $dockerActive = $null
@@ -141,8 +144,11 @@ function ConvertFrom-BootProbe([string[]]$Lines) {
             $epoch = $Matches[2]
             $started = ConvertFrom-UnixSeconds $epoch
             if ($null -ne $started) {
-                $containers.Add([pscustomobject]@{ Name = $name; StartedAt = $started; Epoch = $epoch; Health = $health })
+                $containers.Add([pscustomobject]@{ Name = $name; Running = $true; StartedAt = $started; Epoch = $epoch; Health = $health })
             }
+        }
+        elseif ($line -match '^container name=(\S+) state=stopped$') {
+            $containers.Add([pscustomobject]@{ Name = $Matches[1]; Running = $false; StartedAt = $null; Epoch = ''; Health = '' })
         }
     }
     # ToArray, а не @(): @(List) значением в [pscustomobject]@{} даёт
@@ -284,7 +290,8 @@ $distroSeen = $false
 $dockerSeen = $false
 $probeError = ''
 # Имя контейнера → последний увиденный старт (секунды Unix), увиден ли
-# healthy после него, есть ли healthcheck.
+# healthy после него, есть ли healthcheck, работает ли он на последнем
+# опросе, где зонд его назвал.
 $containers = @{}
 $started = Get-Date
 $deadline = $started.AddMinutes($TimeoutMinutes)
@@ -338,11 +345,24 @@ try {
             }
             foreach ($c in $data.Containers) {
                 $known = $containers[$c.Name]
+                if (-not $c.Running) {
+                    # Неработающий контейнер готовность держит, но моментов
+                    # у него нет: событий не пишется, только смена состояния.
+                    if ($null -eq $known) {
+                        $containers[$c.Name] = [pscustomobject]@{ Epoch = ''; Healthy = $false; Check = $true; Running = $false }
+                        $changed = $true
+                    }
+                    elseif ($known.Running) {
+                        $known.Running = $false
+                        $changed = $true
+                    }
+                    continue
+                }
                 if ($null -eq $known -or $known.Epoch -ne $c.Epoch) {
                     $parts = @((Get-MomentPart 'container_start' $c.StartedAt), "name=$($c.Name)")
-                    if ($null -ne $known) { $parts += 'restart' }
+                    if ($null -ne $known -and $known.Epoch) { $parts += 'restart' }
                     Write-Event ($parts + 'src=engine')
-                    $known = [pscustomobject]@{ Epoch = $c.Epoch; Healthy = $false; Check = ($c.Health -ne 'none') }
+                    $known = [pscustomobject]@{ Epoch = $c.Epoch; Healthy = $false; Check = ($c.Health -ne 'none'); Running = $true }
                     $containers[$c.Name] = $known
                     $changed = $true
                     if (-not $known.Check) {
@@ -350,13 +370,21 @@ try {
                         Write-Event @((Get-MomentPart 'container_healthy' $c.StartedAt), "name=$($c.Name)", 'healthcheck=нет', 'src=engine')
                     }
                 }
+                elseif (-not $known.Running) {
+                    $known.Running = $true
+                    $changed = $true
+                }
                 if ($known.Check -and -not $known.Healthy -and $c.Health -eq 'healthy') {
                     $known.Healthy = $true
                     $changed = $true
                     Write-Event @((Get-MomentPart 'container_healthy' $now), "name=$($c.Name)", 'src=windows')
                 }
             }
-            if ($probe.Code -ne 0) {
+            if ($probe.Code -eq 0) {
+                # Зонд восстановился: тот же отказ позже — снова строка.
+                $probeError = ''
+            }
+            else {
                 $text = if (@($probe.ErrLines).Count) { ([string]@($probe.ErrLines)[0]).Trim() } else { "код $($probe.Code)" }
                 if ($text.Length -gt 200) { $text = $text.Substring(0, 200) }
                 if ($text -ne $probeError) {
@@ -368,7 +396,7 @@ try {
 
         if ($changed) { $lastChange = $now }
         $allHealthy = $health -eq 'healthy' -and $containers.Count -gt 0 -and
-            -not @($containers.Values | Where-Object { -not $_.Healthy }).Count
+            -not @($containers.Values | Where-Object { -not ($_.Running -and $_.Healthy) }).Count
         if ($allHealthy) { $stop = 'ready'; break }
         if (((Get-Date) - $lastChange).TotalMinutes -ge $StableMinutes) { $stop = 'stable'; break }
         Start-Sleep -Seconds $IntervalSeconds
@@ -397,7 +425,8 @@ if ($foreign) {
 if (-not $distroSeen) { $parts.Add('distro_start=нет данных') }
 $polled = ((Get-Date) - $started).TotalMinutes.ToString('0.##', $invariant)
 $parts.Add(('stop={0} через {1} мин' -f $stop, $polled))
-$notHealthy = @($containers.Keys | Where-Object { -not $containers[$_].Healthy } | Sort-Object)
+$stopped = @($containers.Keys | Where-Object { -not $containers[$_].Running } | Sort-Object)
+$notHealthy = @($containers.Keys | Where-Object { $containers[$_].Running -and -not $containers[$_].Healthy } | Sort-Object)
 $ok = $false
 if (-not $first200) {
     $parts.Add(('result=нет ответа 200 за {0} мин опроса' -f $polled))
@@ -405,9 +434,10 @@ if (-not $first200) {
 elseif (-not $containers.Count) {
     $parts.Add('result=нет данных о контейнерах')
 }
-elseif ($health -ne 'healthy' -or $notHealthy.Count) {
+elseif ($health -ne 'healthy' -or $stopped.Count -or $notHealthy.Count) {
     $why = @()
     if ($health -ne 'healthy') { $why += "/health $health" }
+    if ($stopped.Count) { $why += ('не работает: ' + ($stopped -join ', ')) }
     if ($notHealthy.Count) { $why += ('не healthy: ' + ($notHealthy -join ', ')) }
     $parts.Add('result=не готово: ' + ($why -join '; '))
 }
