@@ -102,6 +102,21 @@
       "observation": "«`feat/<номер>-…`, `gh issue view <номер> --comments`»."
     },
     {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 186,
+      "observation": "Сценарии обвязки запускаются поимённо, по шагу на файл (`risk.test.sh` … `status-progress.test.sh`, строки 168–194), с `if: ${{ !cancelled() }}`; глоба `scripts/*.test.sh` нет — новый сценарий без своего шага в CI не идёт."
+    },
+    {
+      "path": "scripts/review-comments.test.sh",
+      "line": 13,
+      "observation": "Образец сценариев на подставном `gh`: короткий скрипт в начале `PATH` печатает фикстуру и пишет полученные аргументы, в сеть сценарии не ходят."
+    },
+    {
+      "path": "scripts/risk.json",
+      "line": 108,
+      "observation": "`scripts/**` — группа `harness_quality` (medium); `harness_control` (строки 10–16) — только `scripts/risk.*`, `scripts/guard-lite.sh`, `scripts/council.sh`, `.claude/settings.json`, `.claude/hooks/**`. Новый `scripts/merge-wait.sh` уровень high сам не даёт."
+    },
+    {
       "path": "docs/rules/review-correctness.md",
       "line": 18,
       "observation": "«критерий готовности — `gh issue view <N>`» — без `--comments`. Замер: `gh issue view 152 > файл` — 6729 байт, тело есть. Дефект задачи в этой форме не воспроизводится."
@@ -128,7 +143,7 @@
     }
   ],
   "approach": {
-    "summary": "Три правки обвязки одним PR (решение владельца по триажу; третья часть — решение владельца от 2026-10-13, переданное оркестратором).\n\n1. Ожидание мерджа. П. 11 `.claude/CLAUDE.md` переписывается: в том же сообщении, где зелёный PR отдаётся человеку, оркестратор ставит фоновое ожидание (Bash с `run_in_background`): `until s=$(gh pr view <N> --json state --jq .state); [ \"$s\" = MERGED ] || [ \"$s\" = CLOSED ]; do sleep 60; done; echo \"$s\"`. Исход `MERGED` — закрыть задачу, затем удалить worktree срезов и worktree задачи `.claude/worktrees/<N>` (`git worktree remove`), потом ветки срезов и ветку задачи локально (`git branch -D` — после squash-мерджа `-d` отказывает, а мердж уже сверен по state) и на origin. Исход `CLOSED` без мерджа — вопрос человеку, ничего не удаляется. Фоновое ожидание живёт не дольше сессии, а человек мерджит через часы или дни, поэтому в том же сообщении строка журнала `Следующий шаг` ставится на «ожидание мерджа PR #N», и возобновлённая сессия начинает с `gh pr view <N> --json state` (иначе повторится сценарий #148). Строка «Мердж» таблицы шагов `docs/rules/README.md` и `docs/pipeline.md` (роль оркестратора и конец «PR и CI») ссылаются на п. 11, а не копируют его. Правило `merge-wait` в `.claude/hooks/rules-map.json`: tools Bash и PowerShell, command_regex на `gh [-R x] pr checks … --watch` в начале команды (тот же префикс начала команды, что у `issue-create`), `\"repeat\": true` — напоминание на каждый `--watch`, потому что отдача PR следует за последним, а не за первым; note — условие и путь `.claude/CLAUDE.md`, «Рекомендованный порядок», п. 11. Строка предфильтра в `rule-injector.sh` — новый case `*gh*pr*checks*--watch*`.\n\n2. Чтение задачи. Единая форма `gh issue view <номер> --json title,body,labels,comments`: JSON-вывод не зависит от терминала, на задаче без комментариев даёт тело (замер на #152 с нулём комментариев: 7172 байта; `--comments` — 0 байт, код 0) и на задаче с комментариями — их (#148: 185172 байта). labels включены, потому что тип задачи (`type/bug`) решает, нужен ли разбор бага. Форма вписывается в пять определений `step-triage`, `step-plan`, `step-implement`, `step-review-correctness`, `step-review-security` и в таблицу «Вход» `docs/rules/README.md` (файл остаётся `issue.md`: `.json` в каталоге круга `council.sh` читает как вердикт). Проверка пустого входа — в абзаце «Вход» `docs/rules/README.md` рядом с «Красный любой из выводов… совет не собирается»: пустой файл в `in/` — тоже не собирается, проверка `find .council/<N>/<режим>-<круг>/in -type f -empty` с пустым выводом до запуска советников.\n\n3. Worktree задачи. «Первые ходы», пункт «Ветка на задачу одна» `.claude/CLAUDE.md`: найденная или новая ветка задачи ведётся в отдельном worktree `.claude/worktrees/<N>` — новая `git worktree add .claude/worktrees/<N> -b feat/<N>-… origin/main`, найденная `git worktree add .claude/worktrees/<N> <ветка>` (если `git worktree list` её ещё не показывает); основное дерево не переключается — `git switch` и `git checkout` в нём не делаются: там может идти параллельная сессия, и чистый `git status` этого не доказывает (на момент плана основное дерево стоит на `feat/151-…` другой сессии). Оркестратор работает с worktree задачи по абсолютному пути и передаёт этот путь шагам и советникам. Отсюда правка абзаца «Вход» `docs/rules/README.md:137–138`: посылка «код и правила — из рабочего дерева, поэтому на диффе дерево стоит на ветке задачи» больше неверна для основного дерева — советнику вместе с номером, режимом и `in/` передаётся путь worktree задачи, и код и правила он читает оттуда (определения `advisor-*.md` говорят «из рабочего дерева» и ссылаются на «Вход», поэтому не меняются). Абзацы «Ветка» в `step-*.md` (`git branch --show-current`, не на ветке — остановиться) не меняются: шаг, запущенный не в worktree задачи, и должен остановиться. Правило `one-task-one-branch`: command_regex дополняется формой `git worktree add`, note — «создаёт ветку или worktree задачи, или пушит; открой «Первые ходы»: поиск ветки, worktree `.claude/worktrees/<N>`, основное дерево не переключается». В предфильтр case 1 добавляется `*git*worktree*add*`. П. 11 удаляет и worktree задачи (часть 1).\n\nТесты: пробы `merge-wait` и расширенные пробы `one-task-one-branch` в PROBES, сценарий повторного срабатывания `merge-wait` в одной сессии, новые команды — в наборе открытых `test_settings_permissions.py`.",
+    "summary": "Три правки обвязки одним PR (решение владельца по триажу; третья часть — решение владельца от 2026-10-13, переданное оркестратором).\n\n1. Ожидание мерджа. П. 11 `.claude/CLAUDE.md` переписывается: в том же сообщении, где зелёный PR отдаётся человеку, оркестратор ставит фоновое ожидание (Bash с `run_in_background`): `bash scripts/merge-wait.sh <N>` — новый сценарий по образцу `scripts/*.sh`. Контракт: номер PR — единственный аргумент (не число — код 2, `gh` не зовётся); в цикле `gh pr view <N> --json state --jq .state` с паузой `${MERGE_WAIT_INTERVAL:-60}` секунд, пока состояние `OPEN`; `MERGED` или `CLOSED` — печатает состояние в stdout, код 0; сбой `gh` — `gh pr view: код <rc>` в stderr и код 1; иное состояние — диагностика в stderr и код 1. Сбой `gh` (сеть, авторизация) завершает ожидание, а не крутит цикл на пустом значении. Сценарий, а не однострочник: сессия, изолированная в worktree (а именно туда правило ставит сессию), отказывает однострочному циклу дословно «this command is too complex to verify that it stays inside the worktree. Refusing to run it»; тот же цикл из файла прошёл (замер оркестратора 2026-10-13: `bash <файл> 150` — `MERGED`, на `999999` — `gh pr view: код 1`, код 1). Сценарии `scripts/merge-wait.test.sh` — на подставном `gh` в начале PATH, как `scripts/review-comments.test.sh`, в сеть не ходят; шаг в `.github/workflows/ci-fast.yml` рядом с остальными сценариями обвязки (они перечислены явно, глоба нет), команда — в разделе «Команды» `.claude/CLAUDE.md`. Исход `MERGED` — закрыть задачу; выйти из worktree задачи (ExitWorktree, `action: keep`); из основного дерева `git worktree remove .claude/worktrees/<N>` (и worktree срезов, если остались); затем ветки локально (`git branch -D`: после squash-мерджа `-d` отказывает) и на origin — одной-двумя строками, без расписывания. Исход `CLOSED` без мерджа — вопрос человеку, ничего не удаляется. Фоновое ожидание живёт не дольше сессии, а человек мерджит через часы или дни, поэтому в том же сообщении строка журнала `Следующий шаг` ставится на «ожидание мерджа PR #N», и возобновлённая сессия начинает с `gh pr view <N> --json state` (иначе повторится сценарий #148). Строка «Мердж» таблицы шагов `docs/rules/README.md` и `docs/pipeline.md` (роль оркестратора и конец «PR и CI») ссылаются на п. 11, а не копируют его. Правило `merge-wait` в `.claude/hooks/rules-map.json`: tools Bash и PowerShell, command_regex на `gh [-R x] pr checks … --watch` в начале команды или звена цепочки — префикс по образцу `pr-create`/`one-task-one-branch` (`^`, `;`, `|`, `&`, `(`, перевод строки, `{`, `$(`, `sh -c`, обёртки `env`/`timeout`/`nohup`…), так что `git push && gh pr checks 1 --watch` и `cd x; gh pr checks 1 --watch` ловятся, `\"repeat\": true` — напоминание на каждый `--watch`, потому что отдача PR следует за последним, а не за первым; note — условие и путь `.claude/CLAUDE.md`, «Рекомендованный порядок», п. 11. Строка предфильтра в `rule-injector.sh` — новый case `*gh*pr*checks*--watch*`.\n\n2. Чтение задачи. Единая форма `gh issue view <номер> --json title,body,labels,comments`: JSON-вывод не зависит от терминала, на задаче без комментариев даёт тело (замер на #152 с нулём комментариев: 7172 байта; `--comments` — 0 байт, код 0) и на задаче с комментариями — их (#148: 185172 байта). labels включены, потому что тип задачи (`type/bug`) решает, нужен ли разбор бага. Форма вписывается в пять определений `step-triage`, `step-plan`, `step-implement`, `step-review-correctness`, `step-review-security` и в таблицу «Вход» `docs/rules/README.md` (файл остаётся `issue.md`: `.json` в каталоге круга `council.sh` читает как вердикт). Проверка пустого входа — в абзаце «Вход» `docs/rules/README.md` рядом с «Красный любой из выводов… совет не собирается»: пустой файл в `in/` — тоже не собирается, проверка `find .council/<N>/<режим>-<круг>/in -type f -empty` с пустым выводом до запуска советников.\n\n3. Worktree задачи. «Первые ходы», пункт «Ветка на задачу одна» `.claude/CLAUDE.md`: найденная или новая ветка задачи ведётся в отдельном worktree `.claude/worktrees/<N>` — новая `git worktree add .claude/worktrees/<N> -b feat/<N>-… origin/main`, найденная `git worktree add .claude/worktrees/<N> <ветка>`; если `.claude/worktrees/<N>` на этой ветке уже есть (`git worktree list`) — войти в него, а не создавать. Отказ `git worktree add` «is already used by worktree at …» значит, что ветку ведёт другая сессия (в другом worktree или в основном дереве) — стоп и вопрос человеку (замер в песочнице, git 2.45.1: повторный `worktree add` занятой ветки — `fatal: 'feat/1-x' is already used by worktree at '…'`, код 128). Основное дерево не переключается — `git switch` и `git checkout` в нём не делаются: там может идти параллельная сессия, и чистый `git status` этого не доказывает (на момент плана основное дерево стоит на `feat/151-…` другой сессии). Сессия оркестратора после `git worktree add` входит в worktree задачи (EnterWorktree с `path`) до запуска шагов: тогда cwd шагов и советников — worktree, и их относительные пути верны (факт этой задачи: прогон шага плана шёл изолированно в `.claude/worktrees/152`). Отсюда правка фразы `docs/rules/README.md:137–138` «код и правила — из рабочего дерева, поэтому на диффе дерево стоит на ветке задачи»: основание — не переключение основного дерева, а то, что сессия оркестратора стоит в worktree задачи; путей советникам не передаётся (определения `advisor-*.md` говорят «из рабочего дерева» и ссылаются на «Вход», поэтому не меняются). Абзацы «Ветка» в `step-*.md` (`git branch --show-current`, не на ветке — остановиться) не меняются: шаг, запущенный не в worktree задачи, и должен остановиться. Правило `one-task-one-branch`: условие срабатывания (`checkout -b`, `switch -c`, `push`) не меняется — нового regex и строки предфильтра под `git worktree add` нет; меняется только note: «создаёт ветку или пушит; открой «Первые ходы»: ветка задачи — в worktree `.claude/worktrees/<N>`, основное дерево не переключается». Срабатывание на `git switch -c` в основном дереве — ровно тот момент, где напоминание нужно. П. 11 удаляет и worktree задачи (часть 1).\n\nТесты: сценарии `scripts/merge-wait.test.sh` (OPEN→MERGED, CLOSED, сбой `gh`, негодный аргумент), пробы `merge-wait` (включая звенья цепочек) в PROBES, сценарий повторного срабатывания `merge-wait` в одной сессии, команды ожидания и уборки и новые формы — в наборе открытых `test_settings_permissions.py`.",
     "rejected": [
       {
         "option": "Проверка пустого `in/` в `scripts/council.sh`",
@@ -149,20 +164,32 @@
       {
         "option": "Хук, запрещающий `git switch`/`checkout` в основном дереве",
         "reason": "Владелец попросил правило и note, а не границу; запрет потребовал бы различать основное дерево и worktree внутри хука и новой deny-логики в `harness_control` — вне просьбы."
+      },
+      {
+        "option": "Цикл ожидания однострочником в п. 11 (`while s=$(gh pr view …) || {…}; …; do sleep 60; done`)",
+        "reason": "Замер оркестратора 2026-10-13: в сессии, изолированной в worktree, Bash отказывает ему дословно «this command is too complex to verify that it stays inside the worktree. Refusing to run it». Правило ставит сессию в worktree — предписание было бы невыполнимым; к тому же однострочник не покрыт тестом. Тот же цикл из файла проходит."
+      },
+      {
+        "option": "Расширить `one-task-one-branch` (regex и предфильтр) формой `git worktree add`",
+        "reason": "Совет, круг 1 (прагматик): владелец просил поправить текст правила, а не машинное напоминание; это третья правка общего предфильтра в задаче выше порога объёма. Напоминание и так приходит на `git switch -c`/`checkout -b` — там, где его нарушают."
+      },
+      {
+        "option": "Сессия оркестратора в основном дереве, шагам и советникам передаётся абсолютный путь worktree",
+        "reason": "Относительные пути правил и определений (`scripts/…`, `docs/tasks/<N>.plan.json`, `git branch --show-current`) резолвятся от cwd субагента, а `cd` между вызовами Bash не держится; у советников Bash нет вовсе. Вход сессии в worktree (EnterWorktree) делает cwd верным для всех без правки определений."
       }
     ]
   },
   "fork_card": {
     "matches_request": "Да. Части 1 и 2 — по разделу «Решение» задачи: п. 11 с моментом, командой и исходами MERGED/CLOSED, ссылки из README и pipeline, правило `merge-wait` с предфильтром и пробой, единая форма чтения задачи во всех определениях шагов и во «Входе», место проверки пустого входа выбрано планом, как задача и разрешает. Часть 3 — по решению владельца от 2026-10-13, переданному оркестратором и записанному в «Решения» журнала `docs/tasks/152.md` (абзац «Третья часть — ветка задачи в worktree», на момент плана — незакоммиченная правка оркестратора). `docs/rules/review-correctness.md` не правится: там форма без `--comments`, задача правит его «если там та же форма».",
     "alternative": "Проверку пустого входа совета можно было бы сделать машинной — отказом `council.sh` с кодом 3 при пустом файле в `in/`. Владелец увидел бы отказ сводки вместо принятого круга, но лишь после работы советников, ценой правки сценария контроля и его теста. Выбор места задача отдала плану, поэтому развилкой это не считается.",
-    "ripple": "Греп `gh issue view` по `.claude/agents` и `docs/rules`: пять определений шагов, `docs/rules/README.md:128`, `docs/rules/review-correctness.md:18` (другая форма, не трогается). Греп `--comments`: ещё `step-fix.md:33` и `docs/rules/fix.md:29` — это `gh pr view`, другой объект, вне задачи. Предфильтр `rule-injector.sh` — общий механизм на каждом Bash-вызове: новые case пропускают в python только команды с `gh…pr…checks…--watch` и `git…worktree…add`, остальное по-прежнему отсекается. `one-task-one-branch` и `pr-create` — отдельные regex, `pr-create` не меняется. `docs/rules/implement.md:88` (worktree срезов) не меняется: п. 11 лишь добавляет их удаление после мерджа. Греп посылки «дерево на ветке задачи» (`grep -rn -e 'branch --show-current' -e 'рабоч[а-я]* дерев' -e 'дерево стоит' .claude/agents docs/rules docs/pipeline.md .claude/CLAUDE.md`): `docs/rules/README.md:138` — правится (срез docs); `step-fix.md:24`, `step-implement.md:28`, `step-plan.md:28` — проверка ветки с остановкой, в worktree работает как есть, не правятся; `docs/pipeline.md:87` — о хуке, не о ветке. `advisor-*.md` («читай `Read` из рабочего дерева», напр. `advisor-skeptic.md:23–25`) ссылаются на «Вход» и не правятся.",
+    "ripple": "Греп `gh issue view` по `.claude/agents` и `docs/rules`: пять определений шагов, `docs/rules/README.md:128`, `docs/rules/review-correctness.md:18` (другая форма, не трогается). Греп `--comments`: ещё `step-fix.md:33` и `docs/rules/fix.md:29` — это `gh pr view`, другой объект, вне задачи. Предфильтр `rule-injector.sh` — общий механизм на каждом Bash-вызове: новый case пропускает в python только команды с `gh…pr…checks…--watch`, остальное по-прежнему отсекается. У `one-task-one-branch` меняется только note, regex и предфильтр прежние; `pr-create` не меняется. Сценарии обвязки в CI перечислены поимённо (`.github/workflows/ci-fast.yml:168–194`, глоба нет), поэтому `merge-wait.test.sh` без нового шага в CI не запускался бы; правка добавляет строки и ничего не удаляет — правило `removed_lines` группы `harness_control` (`scripts/risk.json:88–96`) не задевается. `scripts/merge-wait.sh` по `scripts/risk.json:108` (`scripts/**`) — `harness_quality`, в `harness_control` (`scripts/risk.*`, `guard-lite.sh`, `council.sh`) не входит. `docs/rules/implement.md:88` (worktree срезов) не меняется: п. 11 лишь добавляет их удаление после мерджа. Греп посылки «дерево на ветке задачи» (`grep -rn -e 'branch --show-current' -e 'рабоч[а-я]* дерев' -e 'дерево стоит' .claude/agents docs/rules docs/pipeline.md .claude/CLAUDE.md`): `docs/rules/README.md:138` — правится (срез docs: основание — сессия оркестратора в worktree задачи); `step-fix.md:24`, `step-implement.md:28`, `step-plan.md:28` — проверка ветки с остановкой, в worktree работает как есть, не правятся; `docs/pipeline.md:87` — о хуке, не о ветке. `advisor-*.md` («читай `Read` из рабочего дерева», напр. `advisor-skeptic.md:23–25`) ссылаются на «Вход» и не правятся.",
     "workaround": "Нет. Чтение задачи чинится заменой команды на форму, вывод которой от терминала не зависит, — это первопричина; ожидание мерджа и worktree — норма процесса, а не обход.",
     "council_signs": [
       "правка обвязки: `.claude/hooks/**` (группа `harness_control`), `.claude/CLAUDE.md`, `.claude/agents/**`, `docs/rules/**` (`harness_quality`)",
       "общий механизм: предфильтр `rule-injector.sh` на каждом Bash/PowerShell-вызове",
       "повторный дефект: пустой вывод `gh issue view --comments` вне терминала уже был на #2, #140 и #148"
     ],
-    "executor": "Субагенты: 12 файлов и около 80–100 строк по задаче целиком — выше порога «до 3 файлов и ~40 строк». Три среза параллельно; журнал и план правит оркестратор.",
+    "executor": "Субагенты: 15 файлов и около 200 строк по задаче целиком — выше порога «до 3 файлов и ~40 строк». Четыре среза параллельно; журнал и план правит оркестратор.",
     "slices": [
       {
         "name": "hooks",
@@ -172,7 +199,7 @@
           ".claude/hooks/tests/test_rules_map.py",
           ".claude/hooks/tests/test_settings_permissions.py"
         ],
-        "contract": "Правило `merge-wait`: doc `.claude/CLAUDE.md`, tools [Bash, PowerShell], `\"repeat\": true`, note ссылается на «Рекомендованный порядок», п. 11 `.claude/CLAUDE.md`. Правило `one-task-one-branch`: имя прежнее, regex дополнен `git worktree add`, note ссылается на «Первые ходы» и называет `.claude/worktrees/<N>`. Предфильтр: case 1 дополнен `*git*worktree*add*`, новый case на `*gh*pr*checks*--watch*`. В набор открытых команд `test_ef_agent_commands_open` входят `gh issue view 133 --json title,body,labels,comments`, `git worktree add .claude/worktrees/133 -b feat/133-x origin/main` и `gh pr view 1 --json state --jq .state` — те же формы, что пишет срез docs.",
+        "contract": "Правило `merge-wait`: doc `.claude/CLAUDE.md`, tools [Bash, PowerShell], `\"repeat\": true`, note ссылается на «Рекомендованный порядок», п. 11 `.claude/CLAUDE.md`. regex `merge-wait` ловит команду в начале строки и в звене цепочки (префикс по образцу `pr-create`). Правило `one-task-one-branch`: имя, regex и предфильтр прежние, меняется только note — ссылается на «Первые ходы» и называет worktree `.claude/worktrees/<N>` и запрет переключать основное дерево. Предфильтр: один новый case на `*gh*pr*checks*--watch*`. В набор открытых команд `test_ef_agent_commands_open` входят `gh issue view 133 --json title,body,labels,comments`, `git worktree add .claude/worktrees/133 -b feat/133-x origin/main`, `git worktree remove .claude/worktrees/133`, `git branch -D feat/133-x`, `git push origin --delete feat/133-x` и `bash scripts/merge-wait.sh 133` — те же формы, что пишет срез docs.",
         "after": []
       },
       {
@@ -182,7 +209,7 @@
           "docs/rules/README.md",
           "docs/pipeline.md"
         ],
-        "contract": "Номер и заголовок п. 11 «Рекомендованного порядка» и заголовок пункта «Ветка на задачу одна» в «Первых ходах» сохраняются — на них ссылаются note правил среза hooks. П. 11 содержит слова `run_in_background`, `MERGED`, `CLOSED`, команду `gh pr view <N> --json state --jq .state`, порядок удаления: worktree срезов и задачи, затем ветки локально (`git branch -D`), затем origin. README («Мердж», «Вход») и pipeline ссылаются строкой «`.claude/CLAUDE.md`, «Рекомендованный порядок», п. 11». Форма чтения задачи во «Входе» — `gh issue view <N> --json title,body,labels,comments`; рядом — правило пустого `in/` с командой `find … -type f -empty`; посылка «дерево стоит на ветке задачи» заменена передачей советнику пути worktree `.claude/worktrees/<N>`. П. 11 ставит `Следующий шаг` журнала на ожидание мерджа.",
+        "contract": "Номер и заголовок п. 11 «Рекомендованного порядка» и заголовок пункта «Ветка на задачу одна» в «Первых ходах» сохраняются — на них ссылаются note правил среза hooks. П. 11 содержит слова `run_in_background`, `MERGED`, `CLOSED` и команду ожидания `bash scripts/merge-wait.sh <N>` (исходы и коды — по контракту среза merge-wait-script: 0 и состояние в stdout на MERGED/CLOSED, 1 на сбой `gh`, 2 на негодный аргумент); в разделе «Команды», в блоке «Обвязка», — строка `bash scripts/merge-wait.sh <номер PR>`; уборка одной-двумя строками: ExitWorktree (`action: keep`), из основного дерева `git worktree remove .claude/worktrees/<N>`, затем `git branch -D` и `git push origin --delete`. «Ветка на задачу одна»: `git worktree add`, вход сессии в worktree (EnterWorktree с `path`) до запуска шагов, существующий worktree — войти, отказ «already used by worktree» — стоп и вопрос человеку, основное дерево не переключается. README («Мердж», «Вход») и pipeline ссылаются строкой «`.claude/CLAUDE.md`, «Рекомендованный порядок», п. 11». Форма чтения задачи во «Входе» — `gh issue view <N> --json title,body,labels,comments`; рядом — правило пустого `in/` с командой `find … -type f -empty`; основание фразы «дерево стоит на ветке задачи» — сессия оркестратора в worktree задачи, путей советникам не передаётся. П. 11 ставит `Следующий шаг` журнала на ожидание мерджа.",
         "after": []
       },
       {
@@ -196,6 +223,16 @@
         ],
         "contract": "Каждое из пяти определений читает задачу одной формой `gh issue view <номер> --json title,body,labels,comments`; `--comments` в них не остаётся (в `step-triage.md` перечень разрешённых команд `gh issue view` на строке 28 остаётся). Фронтматер (name, description, model, tools) не меняется.",
         "after": []
+      },
+      {
+        "name": "merge-wait-script",
+        "files": [
+          "scripts/merge-wait.sh",
+          "scripts/merge-wait.test.sh",
+          ".github/workflows/ci-fast.yml"
+        ],
+        "contract": "`bash scripts/merge-wait.sh <N>`: один аргумент — номер PR из цифр, иначе код 2 и сообщение в stderr без вызова `gh`. Цикл: `gh pr view <N> --json state --jq .state`; `OPEN` — пауза `${MERGE_WAIT_INTERVAL:-60}` секунд и повтор; `MERGED` или `CLOSED` — состояние в stdout, код 0; ненулевой код `gh` — `gh pr view: код <rc>` в stderr, код 1; иное состояние — диагностика в stderr, код 1. Только `bash` и `gh`, без `jq`. `scripts/merge-wait.test.sh` подставляет `gh` в начало PATH (по образцу `scripts/review-comments.test.sh`), задаёт `MERGE_WAIT_INTERVAL=0`, в сеть не ходит. В `ci-fast.yml` — шаг «Сценарии ожидания мерджа» с `if: ${{ !cancelled() }}` и `run: bash scripts/merge-wait.test.sh` рядом со сценариями обвязки; другие строки workflow не трогаются.",
+        "after": []
       }
     ],
     "single_slice_reason": "",
@@ -205,12 +242,27 @@
     {
       "path": ".claude/CLAUDE.md",
       "action": "modify",
-      "why": "П. 11 — фоновое ожидание мерджа: момент, команда, исходы MERGED/CLOSED, удаление worktree и веток; «Первые ходы» — worktree задачи `.claude/worktrees/<N>`, основное дерево не переключается. Группа `harness_quality`."
+      "why": "П. 11 — фоновое ожидание мерджа: момент, команда, исходы MERGED/CLOSED, удаление worktree и веток; «Первые ходы» — worktree задачи `.claude/worktrees/<N>`, вход сессии в него, отказ занятой ветки — стоп, основное дерево не переключается; раздел «Команды» — строка `bash scripts/merge-wait.sh <номер PR>`. Группа `harness_quality`."
+    },
+    {
+      "path": "scripts/merge-wait.sh",
+      "action": "create",
+      "why": "Ожидание мерджа, которое п. 11 предписывает запускать в фоне: однострочный цикл в сессии, изолированной в worktree, Bash отказывается выполнять. Группа `harness_quality` (`scripts/**`), не `harness_control`."
+    },
+    {
+      "path": "scripts/merge-wait.test.sh",
+      "action": "create",
+      "why": "Сценарии на подставном `gh`: OPEN→MERGED, CLOSED, сбой `gh`, негодный аргумент. Группа `harness_quality`."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "Шаг `bash scripts/merge-wait.test.sh` рядом с остальными сценариями обвязки: они перечислены поимённо, без шага сценарий в CI не идёт. Только добавление строк — `removed_lines` (`harness_control`) не задевается; группа `harness_quality` (`.github/**`)."
     },
     {
       "path": "docs/rules/README.md",
       "action": "modify",
-      "why": "Строка «Мердж» таблицы шагов — ссылка на п. 11; таблица «Вход» — новая форма чтения задачи; абзац «Вход» — пустой файл в `in/` останавливает совет, а советнику передаётся путь worktree задачи вместо посылки «дерево стоит на ветке задачи». Группа `harness_quality`."
+      "why": "Строка «Мердж» таблицы шагов — ссылка на п. 11; таблица «Вход» — новая форма чтения задачи; абзац «Вход» — пустой файл в `in/` останавливает совет, а фраза «дерево стоит на ветке задачи» опирается на сессию оркестратора в worktree задачи. Группа `harness_quality`."
     },
     {
       "path": "docs/pipeline.md",
@@ -220,22 +272,22 @@
     {
       "path": ".claude/hooks/rules-map.json",
       "action": "modify",
-      "why": "Новое правило `merge-wait` на `gh pr checks … --watch`; `one-task-one-branch` — regex и note под `git worktree add`. Группа `harness_control` (high) — заявлено."
+      "why": "Новое правило `merge-wait` на `gh pr checks … --watch`; у `one-task-one-branch` меняется только note (worktree задачи, основное дерево не переключать), regex прежний. Группа `harness_control` (high) — заявлено."
     },
     {
       "path": ".claude/hooks/rule-injector.sh",
       "action": "modify",
-      "why": "Строки предфильтра: без них `gh pr checks --watch` и `git worktree add` отсекаются до python и правила молча не срабатывают. Группа `harness_control` (high) — заявлено."
+      "why": "Строка предфильтра: без неё `gh pr checks --watch` отсекается до python и `merge-wait` молча не срабатывает. Группа `harness_control` (high) — заявлено."
     },
     {
       "path": ".claude/hooks/tests/test_rules_map.py",
       "action": "modify",
-      "why": "Пробы `merge-wait` и расширенные пробы `one-task-one-branch`; сценарий повторного срабатывания `merge-wait` в одной сессии. Группа `harness_control` — заявлено."
+      "why": "Пробы `merge-wait`, включая звенья цепочек; сценарий повторного срабатывания `merge-wait` в одной сессии. Группа `harness_control` — заявлено."
     },
     {
       "path": ".claude/hooks/tests/test_settings_permissions.py",
       "action": "modify",
-      "why": "Новые предписанные команды (`gh issue view --json …`, `git worktree add …`, `gh pr view --json state --jq .state`) не должны упираться в deny/ask — иначе предписание невыполнимо. Группа `harness_control` — заявлено."
+      "why": "Новые предписанные команды (`gh issue view --json …`, `git worktree add …`, `bash scripts/merge-wait.sh …`, `git worktree remove …`, `git branch -D …`, `git push origin --delete …`) не должны упираться в deny/ask — иначе предписание невыполнимо. Группа `harness_control` — заявлено."
     },
     {
       "path": ".claude/agents/step-triage.md",
@@ -269,6 +321,9 @@
     "docs/pipeline.md",
     ".claude/hooks/**",
     ".claude/agents/step-*.md",
+    "scripts/merge-wait.sh",
+    "scripts/merge-wait.test.sh",
+    ".github/workflows/ci-fast.yml",
     "docs/tasks/152.md",
     "docs/tasks/152.plan.json"
   ],
@@ -278,11 +333,39 @@
   },
   "tests": [
     {
+      "name": "ожидание: OPEN, затем MERGED — код 0 и MERGED",
+      "file": "scripts/merge-wait.test.sh",
+      "new": true,
+      "covers": ["A8"],
+      "behavior": "Подставной `gh` отдаёт `OPEN` на первые два вызова и `MERGED` на третий; `MERGE_WAIT_INTERVAL=0`. Сценарий печатает ровно `MERGED`, код 0, `gh` вызван трижды с аргументами `pr view <N> --json state --jq .state`. Сценарий, который выходит после первого `OPEN` или не повторяет запрос, этот тест роняет."
+    },
+    {
+      "name": "ожидание: CLOSED — код 0 и CLOSED",
+      "file": "scripts/merge-wait.test.sh",
+      "new": true,
+      "covers": ["A8"],
+      "behavior": "Подставной `gh` сразу отдаёт `CLOSED`: сценарий печатает `CLOSED` и выходит с кодом 0 — оркестратор отличает его от `MERGED` по выводу и задаёт вопрос человеку."
+    },
+    {
+      "name": "ожидание: сбой gh — код 1 и диагностика",
+      "file": "scripts/merge-wait.test.sh",
+      "new": true,
+      "covers": ["A8"],
+      "behavior": "Подставной `gh` выходит с кодом 1 и пустым stdout: сценарий завершается с кодом 1 (а не крутится), в stderr — `gh pr view: код 1`, stdout пуст. Сбой на втором вызове после `OPEN` — тот же исход."
+    },
+    {
+      "name": "ожидание: негодный аргумент — код 2 без вызова gh",
+      "file": "scripts/merge-wait.test.sh",
+      "new": true,
+      "covers": ["A8"],
+      "behavior": "Без аргумента, с `abc` и с двумя аргументами — код 2, сообщение в stderr, журнал вызовов подставного `gh` пуст."
+    },
+    {
       "name": "PROBES[\"merge-wait\"]",
       "file": ".claude/hooks/tests/test_rules_map.py",
       "new": true,
       "covers": ["A2"],
-      "behavior": "Через обёртку `rule-injector.sh` (`EveryRowThroughWrapper.test_rows`): срабатывает на `gh pr checks 150 --watch`, на `gh pr checks --watch 150` в PowerShell и на `gh -R o/r pr checks 1 --watch --interval 30`; молчит на `gh pr checks 150` без `--watch`, на `echo 'gh pr checks 1 --watch'` и на `gh pr view 150 --json state`. Красный по существу без строки предфильтра (правило в таблице есть, но вызов отсекается до python) и без правила в таблице (`test_names_unique_and_every_rule_has_probe`)."
+      "behavior": "Через обёртку `rule-injector.sh` (`EveryRowThroughWrapper.test_rows`): срабатывает на `gh pr checks 150 --watch`, на `gh pr checks --watch 150` в PowerShell, на `gh -R o/r pr checks 1 --watch --interval 30` и в звене цепочки — `git push && gh pr checks 1 --watch`, `cd x; gh pr checks 1 --watch`; молчит на `gh pr checks 150` без `--watch`, на `echo 'gh pr checks 1 --watch'` и на `gh pr view 150 --json state`. Красный по существу без строки предфильтра (правило в таблице есть, но вызов отсекается до python) и без правила в таблице (`test_names_unique_and_every_rule_has_probe`)."
     },
     {
       "name": "test_merge_wait_every_watch",
@@ -292,18 +375,11 @@
       "behavior": "Класс `SessionScenarios`: два вызова `gh pr checks 150 --watch` в одной сессии и одним агентом — напоминание `merge-wait` приходит оба раза, а в additionalContext стоит `.claude/CLAUDE.md`. Без `\"repeat\": true` второй вызов молчит, и тест красный."
     },
     {
-      "name": "PROBES[\"one-task-one-branch\"]",
-      "file": ".claude/hooks/tests/test_rules_map.py",
-      "new": false,
-      "covers": ["A6"],
-      "behavior": "Существующие пробы дополняются: срабатывает на `git worktree add .claude/worktrees/1 -b feat/1-x origin/main` и на `git worktree add .claude/worktrees/1 feat/1-x`; молчит на `git worktree list` и `git worktree remove .claude/worktrees/1`. Прежние пробы (`checkout -b`, `switch -c`, `push`) остаются. Без расширения regex или без строки предфильтра пробы на `worktree add` красные."
-    },
-    {
       "name": "test_ef_agent_commands_open",
       "file": ".claude/hooks/tests/test_settings_permissions.py",
       "new": false,
       "covers": ["A4", "A6"],
-      "behavior": "Набор открытых команд дополняется `gh issue view 133 --json title,body,labels,comments`, `git worktree add .claude/worktrees/133 -b feat/133-x origin/main` и `gh pr view 1 --json state --jq .state`: ни одна не попадает под deny или ask `.claude/settings.json` в Bash и PowerShell, то есть предписанное п. 11, «Первыми ходами» и определениями шагов выполнимо без отказа прав."
+      "behavior": "Набор открытых команд дополняется `gh issue view 133 --json title,body,labels,comments`, `git worktree add .claude/worktrees/133 -b feat/133-x origin/main`, `bash scripts/merge-wait.sh 133`, `git worktree remove .claude/worktrees/133`, `git branch -D feat/133-x` и `git push origin --delete feat/133-x`: ни одна не попадает под deny или ask `.claude/settings.json` в Bash и PowerShell, то есть предписанное п. 11, «Первыми ходами» и определениями шагов выполнимо без отказа прав."
     },
     {
       "name": "сверка текста п. 11, «Первых ходов» и ссылок на п. 11",
@@ -338,7 +414,7 @@
     {
       "id": "A1",
       "criterion": "В п. 11 `.claude/CLAUDE.md` есть фоновое ожидание мерджа: момент запуска, команда и исходы `MERGED`/`CLOSED`. `docs/rules/README.md` и `docs/pipeline.md` ссылаются на него.",
-      "method": "Read блока п. 11 `.claude/CLAUDE.md`; `grep -n -e run_in_background -e MERGED -e CLOSED .claude/CLAUDE.md` — все три слова в строках п. 11; `grep -n 'п. 11' docs/rules/README.md docs/pipeline.md` — непустой вывод: строка «Мердж» таблицы шагов и строки роли оркестратора / «PR и CI».",
+      "method": "Read блока п. 11 `.claude/CLAUDE.md`; `grep -n -e run_in_background -e MERGED -e CLOSED -e merge-wait.sh .claude/CLAUDE.md` — все четыре в строках п. 11, а `merge-wait.sh` ещё и в блоке «Команды»; `grep -n 'п. 11' docs/rules/README.md docs/pipeline.md` — непустой вывод: строка «Мердж» таблицы шагов и строки роли оркестратора / «PR и CI».",
       "evidence": "Цитаты `.claude/CLAUDE.md:<строки п. 11>` с моментом («в том же сообщении, где зелёный PR отдаётся человеку»), командой и обоими исходами; номера строк grep по README и pipeline."
     },
     {
@@ -367,21 +443,27 @@
     },
     {
       "id": "A6",
-      "criterion": "Решение владельца 2026-10-13: ветка задачи ведётся в worktree `.claude/worktrees/<N>`, основное дерево не переключается; п. 11 удаляет и worktree задачи; `one-task-one-branch` отражает новую форму.",
-      "method": "`grep -n 'worktrees/<N>' .claude/CLAUDE.md` — строки в пункте «Ветка на задачу одна» и в п. 11; Read пункта «Ветка на задачу одна» — запрет `git switch`/`git checkout` в основном дереве с причиной; note `one-task-one-branch` в `.claude/hooks/rules-map.json` называет worktree; `grep -n 'дерево стоит на ветке' docs/rules/README.md` — пусто, а абзац «Вход» называет передачу советнику пути worktree задачи; пробы `one-task-one-branch` на `git worktree add` зелёные в прогоне A5.",
-      "evidence": "Номера строк grep, цитата пункта `.claude/CLAUDE.md:<строка>`, цитата note `rules-map.json:<строка>`, subTest `rule='one-task-one-branch'` в зелёном прогоне."
+      "criterion": "Решение владельца 2026-10-13: ветка задачи ведётся в worktree `.claude/worktrees/<N>`, основное дерево не переключается; ветка, уже выданная другому worktree или основному дереву, — стоп и вопрос человеку, существующий worktree задачи — войти в него; п. 11 удаляет и worktree задачи; note `one-task-one-branch` отражает новую форму.",
+      "method": "`grep -n 'worktrees/<N>' .claude/CLAUDE.md` — строки в пункте «Ветка на задачу одна» и в п. 11; Read пункта «Ветка на задачу одна» — `git worktree add`, вход сессии (EnterWorktree с `path`) до запуска шагов, «уже есть — войти», отказ `already used by worktree` — стоп и вопрос человеку, запрет `git switch`/`git checkout` в основном дереве с причиной; Read п. 11 — ExitWorktree до `git worktree remove` из основного дерева; note `one-task-one-branch` в `.claude/hooks/rules-map.json` называет `.claude/worktrees/<N>`; абзац «Вход» `docs/rules/README.md` обосновывает «дерево на ветке задачи» сессией оркестратора в worktree. Поведение отказа сверяется прогоном в песочнице вне репозитория: второй `git worktree add <путь> <занятая ветка>` — код 128 и `already used by worktree`.",
+      "evidence": "Номера строк grep, цитаты `.claude/CLAUDE.md:<строки>` пункта и п. 11, цитата note `rules-map.json:<строка>`, цитата `docs/rules/README.md:<строка>`; текст отказа git из песочницы (на плане: git 2.45.1, `fatal: 'feat/1-x' is already used by worktree at '…'`, код 128)."
     },
     {
       "id": "A7",
       "criterion": "Решение задачи, п. 3: перед запуском совета вход проверяется на пустые файлы; место записи выбирает план.",
       "method": "Read абзаца «Вход» `docs/rules/README.md`: рядом с «Красный любой из выводов … совет не собирается» стоит правило о пустом файле в `in/` с командой `find .council/<N>/<режим>-<круг>/in -type f -empty`.",
       "evidence": "Цитата `docs/rules/README.md:<строка>`."
+    },
+    {
+      "id": "A8",
+      "criterion": "Команда ожидания из п. 11 выполнима в сессии, изолированной в worktree, и различает исходы: MERGED, CLOSED, сбой `gh` (уточнение оркестратора 2026-10-13 по замеру отказа однострочника).",
+      "method": "`bash scripts/merge-wait.test.sh` — код 0, все сценарии зелёные; шаг в `ci-fast.yml` зелёный на PR. Живой прогон в сессии в worktree: `bash scripts/merge-wait.sh <смердженный PR>` — `MERGED`, код 0; `bash scripts/merge-wait.sh 999999` — `gh pr view: код 1`, код 1; отказа «too complex to verify» нет.",
+      "evidence": "Вывод `merge-wait.test.sh` с числом сценариев и код 0; имя и статус шага CI; вывод и коды двух живых прогонов."
     }
   ],
   "risks": [
     {
-      "risk": "Новые case предфильтра пропускают в python лишние Bash-вызовы и замедляют каждый вызов хука.",
-      "mitigation": "Шаблоны узкие и требуют всех частей сразу (`*gh*pr*checks*--watch*`, `*git*worktree*add*`); точное различение — command_regex с якорем начала команды. Пробы silent (`gh pr checks 150`, `git worktree list`, `echo '…'`) держат regex от расползания."
+      "risk": "Новый case предфильтра пропускает в python лишние Bash-вызовы и замедляет каждый вызов хука.",
+      "mitigation": "Шаблон узкий и требует всех частей сразу (`*gh*pr*checks*--watch*`); точное различение — command_regex с якорем начала команды или звена цепочки. Пробы silent (`gh pr checks 150`, `echo 'gh pr checks 1 --watch'`, `gh pr view 150 --json state`) держат regex от расползания."
     },
     {
       "risk": "Определения агентов замораживаются на старте сессии: текущая сессия оркестратора и её шаги продолжат читать задачу `--comments`, пока сессия не перезапущена.",
@@ -389,15 +471,15 @@
     },
     {
       "risk": "Порядок удаления после мерджа: ветку, вынесенную в worktree, `git branch` удалить не даст; `git branch -d` откажет после squash-мерджа; удаление worktree, в котором стоит сессия, рвёт её рабочий каталог.",
-      "mitigation": "П. 11 фиксирует порядок: worktree (`git worktree remove`) раньше веток, `git branch -D` только после state = MERGED, и удаление worktree идёт после того, как ни один шаг задачи в нём не запущен. Где стоит сама сессия оркестратора, правило не фиксирует (путь worktree передаётся по абсолютному пути) — проверяется на первом мердже по этому правилу."
+      "mitigation": "П. 11 фиксирует порядок одной-двумя строками: сессия выходит из worktree (ExitWorktree, `action: keep`), из основного дерева — `git worktree remove .claude/worktrees/<N>`, затем `git branch -D` (только после state = MERGED) и `git push origin --delete`. Права на эти команды держит `test_ef_agent_commands_open`. Живой прогон уборки на настоящем мердже — после PR, при первом мердже по правилу."
     },
     {
       "risk": "Фоновое ожидание умирает с сессией, а мердж случается через часы или дни — при возобновлении оркестратор снова не узнает о мердже.",
       "mitigation": "П. 11 требует в том же сообщении поставить `Следующий шаг` журнала на ожидание мерджа PR #N; возобновление по «Первым ходам» начинается с чтения этой строки и `gh pr view <N> --json state`."
     },
     {
-      "risk": "Советник, запущенный из основного дерева, на ревью диффа прочтёт код чужой ветки (основное дерево больше не переключается на ветку задачи).",
-      "mitigation": "Абзац «Вход» `docs/rules/README.md` требует передавать советнику путь worktree задачи вместе с `in/`; сверка — A6."
+      "risk": "Шаг или советник, запущенный из основного дерева, прочтёт код и правила чужой ветки (основное дерево больше не переключается на ветку задачи); у советников нет Bash, чтобы это заметить.",
+      "mitigation": "«Первые ходы» требуют войти сессией в worktree задачи (EnterWorktree с `path`) до запуска шагов — тогда cwd субагентов и их относительные пути верны (подтверждено прогоном шага плана этой задачи); «Вход» README опирается на это. Шаги с проверкой `git branch --show-current` остановятся вне ветки; сверка текста — A6."
     },
     {
       "risk": "`merge-wait` с repeat зашумит, если `--watch` зовут многократно.",
@@ -408,7 +490,7 @@
       "mitigation": "Размер сопоставим с текстовой формой (185172 против 171045 байт на #148); советники читают файл Read, ответы владельца в `comments[].body` остаются данными. Файл остаётся `issue.md`, не `.json`, — `council.sh` его за вердикт не примет."
     },
     {
-      "risk": "Объём выше порога `size.files`: 12 файлов при пороге 11 (`risk.sh plan`: «файлов 12 > 11»); уровень high задан группой `harness_control`.",
+      "risk": "Объём выше порога `size.files`: 15 файлов при пороге 11 (сценарий ожидания, его тест и шаг CI добавили три); уровень high задан группой `harness_control`.",
       "mitigation": "Один PR — решение владельца (журнал, «Решения»); маршрут high со советом и резюме человеку заложен заранее."
     }
   ],
