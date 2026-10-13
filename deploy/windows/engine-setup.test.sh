@@ -724,15 +724,18 @@ test_uninstall_dry_run_without_rollback() {
   done
 }
 
-# Путей через Docker Desktop нет: поиск по сценариям движка, расписанию
-# бэкапа и README пуст (ключ -w с учётом регистра: -NonInteractive словом
-# Interactive не считается), а режим -Migrate отвергается как неизвестный
-# параметр. Слова ищутся по одному: GNU grep 3.0 из Git for Windows с -w и
-# несколькими -e находит Interactive внутри -NonInteractive.
+# Путей через прежний настольный движок нет: поиск слов из $desktop_words
+# по сценариям движка, расписанию бэкапа и README пуст (ключ -w с учётом
+# регистра: слово типа входа внутри -NonInteractive словом не считается), а
+# прежний режим переезда отвергается как неизвестный параметр. Слова
+# собираются из частей, чтобы сам этот файл не попадал в поиск по дереву;
+# ищутся по одному: GNU grep 3.0 из Git for Windows с -w и несколькими -e
+# находит слово внутри -NonInteractive.
+desktop_words=('Docker'' Desktop' 'Mi''grate' 'Inter''active')
 test_no_docker_desktop_paths() {
   local name=no_docker_desktop_paths word
   : >"$work/out"
-  for word in 'Docker Desktop' Migrate Interactive; do
+  for word in "${desktop_words[@]}"; do
     grep -nw -e "$word" "$root/deploy/windows/engine-setup.ps1" "$root/ops/backup/install-schedule.ps1" "$root/README.md" >>"$work/out"
   done
   if [ -s "$work/out" ]; then fail "$name" "остались упоминания"; show_out; return; fi
@@ -740,12 +743,12 @@ test_no_docker_desktop_paths() {
 
   name=engine_setup_refuses_migrate
   if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
-  local shell
+  local shell mode="${desktop_words[1]}"
   fake_clone "$(printf 'API_HTTP_PORT=28081\r\n')"
   for shell in "${shells[@]}"; do
-    engine_setup "$shell" -Migrate -DryRun
-    [ "$rc" -ne 0 ] || { fail "$name/$shell" "-Migrate принят, код 0"; show_out; return; }
-    grep -q 'Migrate' "$work/out.$shell" || { fail "$name/$shell" "отказ не называет параметр"; show_out; return; }
+    engine_setup "$shell" "-$mode" -DryRun
+    [ "$rc" -ne 0 ] || { fail "$name/$shell" "-$mode принят, код 0"; show_out; return; }
+    grep -q "$mode" "$work/out.$shell" || { fail "$name/$shell" "отказ не называет параметр"; show_out; return; }
     if grep -q '^migrate\.' "$work/out.$shell"; then fail "$name/$shell" "напечатан план переезда"; show_out; return; fi
   done
   ok "$name"

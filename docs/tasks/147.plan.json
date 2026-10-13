@@ -208,12 +208,30 @@
       "path": "docs/decisions/0028-docker-engine-in-wsl.md",
       "action": "modify",
       "why": "Дополнение с датой и причиной: путь через Desktop снят; логи — journald на диске со сбросом 10 с; хронология — measure-boot. Группа harness_quality, заявлено здесь."
+    },
+    {
+      "path": "ops/backup/backup.sh",
+      "action": "modify",
+      "why": "Подсказка отказа docker info без имени прежнего движка (критерий no-desktop)."
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "action": "modify",
+      "why": "Комментарий про Wake-on-LAN без имени прежнего движка; структура примера не меняется. Группа product."
+    },
+    {
+      "path": "docker-compose.override.example.yml",
+      "action": "modify",
+      "why": "Комментарий про USB-координатор без имени прежнего движка; структура примера не меняется. Группа product."
     }
   ],
   "boundaries": [
     "deploy/windows/**",
     "ops/backup/install-schedule.ps1",
     "ops/backup/backup.test.sh",
+    "ops/backup/backup.sh",
+    "config/entities.example.yaml",
+    "docker-compose.override.example.yml",
     "README.md",
     "docker-compose.yml",
     "docs/decisions/0028-docker-engine-in-wsl.md",
@@ -408,7 +426,7 @@
     {
       "id": "no-desktop",
       "criterion": "В engine-setup.ps1, install-schedule.ps1 и README нет путей переезда с Docker Desktop и отката на него; поиск по Docker Desktop, Migrate и Interactive — упоминания только в 0028 и журналах задач.",
-      "method": "grep -nw -e 'Docker Desktop' -e Migrate -e Interactive deploy/windows/engine-setup.ps1 ops/backup/install-schedule.ps1 README.md — пустой вывод, код 1 (ключ -w с учётом регистра: -NonInteractive словом Interactive не считается); git grep -lw -e 'Docker Desktop' -e Migrate -e Interactive по всему дереву (git grep не видит игнорируемый .council) — список файлов ровно: config/entities.example.yaml, deploy/windows/engine-setup.test.sh (сам тест отсутствия несёт искомые строки), docker-compose.override.example.yml, docs/decisions/0027-home-assistant-compose-profile.md, docs/decisions/0028-docker-engine-in-wsl.md, docs/tasks/* (журналы и планы задач), ops/backup/backup.sh. Перечень сверен с git grep до правки (2026-10-13): из него уходят ровно README.md, deploy/windows/engine-setup.ps1, ops/backup/install-schedule.ps1 и ops/backup/backup.test.sh — в последнем после удаления сценариев слов не остаётся. Новые файлы (boot-probe.sh, 0029) и правленые measure-boot.ps1, provision-engine.sh, docker-compose.yml, docs/decisions/README.md этих слов не содержат. Сценарий test_no_docker_desktop_paths ok.",
+      "method": "Слова ищутся по одному — пословная форма, как в сценарии test_no_docker_desktop_paths: for w in 'Docker Desktop' Migrate Interactive; do grep -nw -e \"$w\" deploy/windows/engine-setup.ps1 ops/backup/install-schedule.ps1 README.md; done — пустой вывод по каждому слову, код 1 (ключ -w с учётом регистра: -NonInteractive словом Interactive не считается). Один вызов с несколькими -e не годится: GNU grep 3.0 из Git for Windows с -w и несколькими -e находит Interactive внутри -NonInteractive (engine-setup.ps1, четыре строки с -NonInteractive). По всему дереву (git grep не видит игнорируемый .council): git grep -lw -e 'Docker Desktop' -e Migrate -e Interactive и та же пословная форма for w in …; do git grep -lw -e \"$w\"; done | sort -u — список файлов ровно: docs/decisions/0027-home-assistant-compose-profile.md (история решений, текст 0027 не переписывается — критерий docs), docs/decisions/0028-docker-engine-in-wsl.md, docs/tasks/* (журналы и планы задач). Перечень сверен с git grep до правки (2026-10-13): из него уходят README.md, deploy/windows/engine-setup.ps1, ops/backup/install-schedule.ps1, ops/backup/backup.test.sh (после удаления сценариев слов не остаётся), ops/backup/backup.sh (подсказка отказа docker), config/entities.example.yaml и docker-compose.override.example.yml (комментарии переписаны, структура примеров не меняется), deploy/windows/engine-setup.test.sh (искомые слова собираются из частей). Новые файлы (boot-probe.sh, 0029) и правленые measure-boot.ps1, provision-engine.sh, docker-compose.yml, docs/decisions/README.md этих слов не содержат. Сценарий test_no_docker_desktop_paths ok.",
       "evidence": "Пустой вывод первой команды; список файлов второй совпадает с перечнем — лишний файл значит оставшийся путь Desktop."
     },
     {
@@ -483,7 +501,7 @@
   "out_of_scope": [
     "Новая работа CI для deploy/windows/engine-setup.test.sh — известное ограничение (риски), не правка этой задачи.",
     "Объединение чужого daemon.json — отказ с текстом, а не слияние.",
-    "Упоминания Docker Desktop вне критерия: ops/backup/backup.sh:186 (подсказка «Docker Desktop не запущен?»), config/entities.example.yaml:48, docker-compose.override.example.yml:28, docs/decisions/0027 — в раздел «Попутно» тела PR.",
+    "Упоминания Docker Desktop в docs/decisions/0027-home-assistant-compose-profile.md — история решений: текст записи не переписывается.",
     "Удаление дистрибутива и томов (wsl --unregister) — только руками владельца.",
     "wsl --shutdown внутри -Install — по-прежнему не делается: гасит все дистрибутивы пользователя.",
     "Живой прогон -Uninstall и проверка README на чистой ВМ — решение владельца 2026-10-13.",
