@@ -105,21 +105,25 @@ fi
 cd "$root"
 
 # Канонический путь существующего каталога: запись Windows (D:\…)
-# приводится к POSIX, если есть cygpath; cd … && pwd -P снимает «..» и
-# симлинки. Каталога нет — пустая строка.
+# приводится к POSIX (host_path: cygpath в Git Bash, wslpath в WSL);
+# cd … && pwd -P снимает «..» и симлинки. Каталога нет — пустая строка.
 canonical_dir() {
-  local path="$1"
-  if command -v cygpath >/dev/null 2>&1; then
-    path="$(cygpath -u -- "$path")"
-  fi
+  local path
+  path="$(host_path "$1")"
   (cd -- "$path" 2>/dev/null && pwd -P) || true
 }
 
-# На Windows регистр в путях не различается, а pwd -P его не выравнивает.
+# На Windows регистр в путях не различается, а pwd -P его не выравнивает;
+# так же — диски Windows внутри WSL (/mnt/<диск>/…).
 fold_case() {
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
-    *) printf '%s' "$1" ;;
+    *)
+      case "$1" in
+        /mnt/[A-Za-z]/*) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
+        *) printf '%s' "$1" ;;
+      esac
+      ;;
   esac
 }
 

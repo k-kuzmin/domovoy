@@ -1,0 +1,387 @@
+{
+  "issue": 6,
+  "current_state": [
+    {
+      "path": "docker-compose.yml",
+      "line": 29,
+      "observation": "У postgres стоит restart: unless-stopped с комментарием про AR-5; у api — строка 57, у homeassistant — строка 119. Первая половина первого пункта критерия уже выполнена каркасом."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 58,
+      "observation": "api зависит от postgres через depends_on: condition: service_healthy. Это условие соблюдает docker compose up, а не демон, который после своего старта поднимает контейнеры по политике restart: после перезагрузки api может стартовать раньше базы."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 57,
+      "observation": "AddHealthChecks().AddCheck<ComponentsHealthCheck> без AddHealthCheckPublisher и без кэша: MapHealthChecks (HealthEndpoints.cs:26) запускает проверки заново на каждом запросе. Значит, после ранней недоступности базы /health сам вернётся в 200, когда база поднимется, и перезапуск процесса api для этого не нужен."
+    },
+    {
+      "path": "src/Domovoy.Data/DatabaseProbe.cs",
+      "line": 37,
+      "observation": "Проба базы на каждом вызове выполняет CanConnectAsync; исключение превращается в Unreachable (строка 48), процесс не падает. Проба scoped (DataServiceCollectionExtensions.cs:30), состояния между запросами не держит. Обращений к базе при старте api нет: греп Migrate/EnsureCreated по src пуст. Ранний старт api до готовности postgres даёт 503 до готовности базы, но не вечный 503."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 102,
+      "observation": "Bind mount ./config:/app/config:ro. Относительный путь compose разворачивает в путь клона на стороне CLI. Docker CLI на Windows, подключённый к удалённому Linux-движку, передал бы демону Windows-путь, который демон не найдёт: такие пути переводит только Docker Desktop. Поэтому compose для стека выполняется внутри дистрибутива, где клон виден как /mnt/<диск>/…"
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 98,
+      "observation": "api публикует ${API_HTTP_PORT:-8080}:8080, homeassistant — ${HA_HTTP_PORT:-8123}:8123 (строка 128), на всех интерфейсах. Решение владельца от 2026-10-12: значение по умолчанию порта API на хосте меняется на 18080 в задаче #5, потому что 8080 на хосте занят другим сервисом владельца. Поэтому #6 нигде не зашивает порт хоста: он берётся из API_HTTP_PORT, по умолчанию 18080. Оба порта нужны из ЛВС: Backend — по AR-3, HA — для веб-интерфейса с телефона (README.md:182)."
+    },
+    {
+      "path": "README.md",
+      "line": 182,
+      "observation": "Веб-интерфейс HA опубликован на все интерфейсы хоста для доступа из домашней сети, наружу HA не выставляется (NFR-SEC-2). Правило межсетевого экрана для нового движка ограничивается локальной подсетью."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "line": 138,
+      "observation": "Тест HomeAssistantServiceIsOptInAndRestartsAutomatically проверяет restart: unless-stopped только у homeassistant; у postgres и api политику перезапуска не проверяет никто, у будущих сервисов (ntfy, faster-whisper, запись 0004) — тоже."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "line": 191,
+      "observation": "Готовый разбор ParseComposeServices: ключи первого уровня каждого сервиса, закомментированные строки не засчитываются. Новый тест берёт его, а не пишет второй разбор."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/HealthEndpoints.cs",
+      "line": 26,
+      "observation": "/health смаплен MapHealthChecks без ResultStatusCodes, то есть по умолчанию: Healthy и Degraded — 200, Unhealthy — 503; анонимное тело — одно поле status (README.md:149). При настроенном, но ещё не поднятом Home Assistant ответ 503 (запись 0010)."
+    },
+    {
+      "path": "docs/decisions/0010-health-aggregation.md",
+      "line": 32,
+      "observation": "Недоступный Home Assistant даёт 503, а restart: unless-stopped реагирует только на завершение процесса, не на healthcheck. «Первый ответ /health» и «первый ответ 200» после загрузки — разные моменты, замер называет, какой считается."
+    },
+    {
+      "path": ".gitattributes",
+      "line": 24,
+      "observation": "LF закреплён для *.sh, CRLF — для *.ps1 (строка 25). Файл без расширения получил бы text=auto и CRLF при checkout на Windows, а CRLF ломает bash и в Git Bash, и в дистрибутиве. Поэтому все сценарии для bash в задаче — с расширением .sh, и правка .gitattributes не нужна."
+    },
+    {
+      "path": "docs/tasks/6.md",
+      "line": 24,
+      "observation": "Хост — Windows 11, позже переезд на другой ПК с Windows 11: настройка должна быть воспроизводимой сценарием и инструкцией из репозитория."
+    },
+    {
+      "path": "docs/tasks/6.md",
+      "line": 35,
+      "observation": "Решение владельца по развилке: Docker Engine в своём WSL2-дистрибутиве, запуск при старте системы без входа пользователя. Автовход отвергнут: «пароль учётной записи перестаёт защищать загрузку»."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "line": 12,
+      "observation": "Запись решения нужна по правилу этого файла: «выбран один из нескольких равноправных вариантов, и выбор неочевиден»."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "line": 47,
+      "observation": "Последняя запись — 0027; новая запись получает номер 0028 и строку в таблице."
+    },
+    {
+      "path": "ops/backup/restore.sh",
+      "line": 98,
+      "observation": "--project без --from уходит в usage: последний бэкап из BACKUP_DIR сам выбирается только в режиме --check. Поэтому -Migrate выбирает бэкап сам — каталог domovoy-backup-<метка>, появившийся в BACKUP_DIR после его вызова backup.sh, — и передаёт его в --from путём Windows (X:/…), который host_path внутри дистрибутива переводит через wslpath."
+    },
+    {
+      "path": "ops/backup/restore.sh",
+      "line": 261,
+      "observation": "restore.sh --project сам поднимает стек (dc up -d --build) и ждёт HA API и /health восстановленного api. Отдельный docker compose up после него -Migrate не делает. До подъёма restore.sh отказывает, если в проекте есть контейнеры или тома (project_is_empty, строка 166) — -Migrate проверяет то же условие в движке до остановки Docker Desktop."
+    }
+  ],
+  "approach": {
+    "summary": "Стек переезжает с Docker Desktop на Docker Engine в отдельном WSL2-дистрибутиве domovoy-engine (Ubuntu 24.04). Дистрибутив поднимается задачей Планировщика при старте Windows, без входа пользователя.\n\nНаблюдения на хосте (2026-10-12, только чтение):\n- Docker Desktop 4.76 работает со стеком domovoy;\n- WSL 2.3.26, флаг --install --name в справке есть;\n- %USERPROFILE%\\.wslconfig отсутствует;\n- по сообщению владельца, порт 8080 на хосте занят: wslrelay слушает [::1]:8080 (другой его сервис в WSL), Docker Desktop — 0.0.0.0:8080.\n\nПорт API на хосте — API_HTTP_PORT, по умолчанию 18080 (решение владельца, меняется в #5). Зашитого 8080 для порта хоста в #6 нет. Порт HA — HA_HTTP_PORT, по умолчанию 8123.\n\nЦепочка после включения питания:\n1. BIOS «восстановление после пропадания питания: включиться».\n2. Загрузка Windows до экрана входа, в сессию никто не входит.\n3. Задача «domovoy-engine» (триггер — при запуске системы) запускает держалку wsl.exe -d domovoy-engine --exec sleep infinity. Принципал — учётная запись владельца, а не SYSTEM: дистрибутив WSL регистрируется на пользователя. Тип входа S4U, пароль не хранится. Настройки задачи: ExecutionTimeLimit 0 (по умолчанию предел 72 ч — держалку убило бы на третьи сутки), AllowStartIfOnBatteries и DontStopIfGoingOnBatteries (UPS по USB Windows видит батареей, AR-5), перезапуск при сбое.\n4. systemd в дистрибутиве (wsl.conf [boot] systemd=true) поднимает dockerd (systemctl enable docker).\n5. dockerd поднимает контейнеры по restart: unless-stopped.\n\nСеть. networkingMode=mirrored в %USERPROFILE%\\.wslconfig: порты контейнеров видны на адресе хоста в ЛВС (опыт 2026-10-12: телефон получил /health до входа). С localhost Windows при правиле RemoteAddresses=LocalSubnet в опыте ответа не было (тайм-аут, LoopbackEnabled=True) — правило дополняется адресами петли 127.0.0.1 и ::1, и первым шагом реализации это проверяется прогоном: curl localhost с хоста и адрес хоста из ЛВС; не сойдётся — к владельцу. Плюс правило Hyper-V firewall на входящие API_HTTP_PORT и HA_HTTP_PORT, только с локальной подсети.\n\nДоступ CLI. docker и docker compose для стека выполняются внутри дистрибутива, где клон виден как /mnt/<диск>/… и bind mount ./config разрешается правильно. Для Git Bash есть обёртка deploy/windows/docker-wsl.sh: wsl.exe -d domovoy-engine --cd \"$(cygpath -w \"$PWD\")\" -- docker \"$@\". README предлагает функцию docker() в ~/.bashrc, вызывающую обёртку, так что команды docker из README и .claude/CLAUDE.md работают без правки. Пределы обёртки — в README: абсолютные Windows-пути в аргументах не переводятся, -it для exec зависит от TTY Git Bash. Сценарии задачи #8 (ops/backup/*.sh) запускаются внутри дистрибутива: wsl.exe -d domovoy-engine --cd <клон> -- bash ops/backup/backup.sh /mnt/<диск>/<каталог>. Им нужен git с safe.directory для клона на /mnt, это ставит провижининг.\n\nФайлы:\n1. deploy/windows/engine-setup.ps1, режимы -Install и -Check.\n   - -Install (админский PowerShell, запускает владелец, повторный запуск ничего не дублирует) создаёт дистрибутив (wsl --import domovoy-engine из официального образа ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz с cloud-images.ubuntu.com, SHA256 сверяется с SHA256SUMS; wsl --install --name есть только с WSL 2.4, у владельца 2.3.26 — опыт 2026-10-12) и запускает внутри provision-engine.sh. Затем регистрирует задачи держалки и замера; задача замера получает -Port из API_HTTP_PORT в .env клона (читается только этот ключ), а без него — 18080. Пишет .wslconfig (прежний, если есть, сохраняется копией) и добавляет правило firewall на API_HTTP_PORT и HA_HTTP_PORT.\n   - -Check только читает и ничего не запускает: внутрь дистрибутива заходит, только если wsl --list --running показывает его работающим. Ненулевой код и название звена, если не выполнено хоть одно из звеньев:\n     - дистрибутив зарегистрирован;\n     - задача держалки на месте: AtStartup, S4U, ExecutionTimeLimit 0, оба флага батареи;\n     - задача замера на месте;\n     - в .wslconfig стоит mirrored;\n     - правило firewall есть и ограничено локальной подсетью;\n     - Docker Desktop не запущен;\n     - при работающем дистрибутиве: systemctl is-enabled для docker.service и containerd.service — enabled (строка OK именно по is-enabled: «active» после ручного старта не доказывает автозапуск), is-active отдельной строкой; у каждого контейнера проекта domovoy политика unless-stopped; порт задачи замера равен опубликованному порту api; на этом порту с хоста отвечает /health — 200 формы стека. Звено «кто владеет слушателем» формулируется по итогу опыта (ниже). Если владелец определяется стабильно, звено проверяет его. Если нет, его заменяет проверка ответа /health формы стека, и в -Check звена о процессе нет.\n2. deploy/windows/provision-engine.sh — внутри дистрибутива под root, идемпотентно: wsl.conf с systemd, репозиторий apt Docker по официальной инструкции, пакеты docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin и git, systemctl enable docker, safe.directory для пути клона (параметр).\n3. deploy/windows/docker-wsl.sh — обёртка для Git Bash.\n4. deploy/windows/measure-boot.ps1 — задача при запуске системы, под SYSTEM (дистрибутив ей не нужен). Опрос http://localhost:<Port>/health каждые 5 с до -TimeoutMinutes (по умолчанию 30). -Port задаётся при регистрации: из API_HTTP_PORT, иначе 18080. В журнал под %ProgramData% пишется строка:\n   - момент старта ОС из события System, Microsoft-Windows-Kernel-General, ID 12, и рядом LastBootUpTime (при быстром запуске он может показать гибридную загрузку);\n   - FwPOSTTime;\n   - первый любой ответ и первый ответ 200 с телом;\n   - разницы в секундах.\n   Засчитывается только ответ 200 с телом формы {\"status\":\"healthy|degraded\"}, иной помечается как «чужой слушатель».\n5. README: раздел «Автозапуск после перезагрузки (Windows, WSL2)»:\n   - предусловия: BIOS, BitLocker без PIN;\n   - -Install и -Check;\n   - окно переезда и откат;\n   - функция docker() для Git Bash;\n   - порты из API_HTTP_PORT/HA_HTTP_PORT (по умолчанию 18080/8123);\n   - две проверочные перезагрузки и замер.\n   Правится и раздел #8 о расписании бэкапа: запуск через wsl.exe, без условия «только при входе пользователя».\n6. Запись docs/decisions/0028 и строка в таблице решений.\n7. Тест-страж: restart: unless-stopped у каждого сервиса compose.\n\nНулевой шаг реализации — опыт владельца до переезда, одним сценарием. Сценарий-опыт лежит вне репозитория, у оркестратора: PowerShell от администратора, фазы Prepare → перезагрузка без входа → Verify → Rollback. Он работает на пустом дистрибутиве domovoy-exp с заглушкой /health на 0.0.0.0:18080 вместо dockerd. Docker Desktop, его тома и рабочий стек опыт не трогает; перезагрузка гасит стек на время опыта, Desktop запускается после Rollback. Опыт отвечает на три вопроса:\n- поднимается ли дистрибутив задачей S4U при запуске системы без входа;\n- как в mirrored виден слушатель Linux на порту хоста — Get-NetTCPConnection, OwningProcess и имя процесса — и отвечает ли порт из ЛВС до входа;\n- жив ли сервис владельца на [::1]:8080 после переключения на mirrored.\nОпыт также создаёт правило Hyper-V firewall с RemoteAddresses LocalSubnet и сверяет Kernel-General 12 и FwPOSTTime. Rollback возвращает .wslconfig как было: из копии, а если файла не было — удаляет его; затем удаляет задачу, правило и дистрибутив, выполняет wsl --shutdown. Итог опыта оркестратор переносит в журнал. Звенья -Check формулируются по нему. Отрицательный итог по S4U или по сервису владельца — стоп и вопрос владельцу до реализации.\n\nПереезд данных опирается на #8 и не дублирует её. Реализация #6 — после мержа #8; смена порта по умолчанию — #5, а до её мержа владелец задаёт API_HTTP_PORT=18080 в своём .env. Окно переезда выполняет владелец:\n1. docker compose stop api на Docker Desktop — Backend больше не пишет в базу.\n2. bash ops/backup/backup.sh <диск> из Git Bash, как задумано в #8.\n3. docker compose --profile ha stop — stop, а не down -v: тома Desktop остаются путём отката.\n4. docker desktop stop.\n5. wsl --shutdown — применяет mirrored.\n6. Start-ScheduledTask domovoy-engine.\n7. Внутри дистрибутива bash ops/backup/restore.sh --from <бэкап> --project domovoy.\n8. Подъём стека, /health на API_HTTP_PORT с хоста, HA и /health с телефона в ЛВС. Затем проверка восстановления после ранней недоступности базы: docker compose stop postgres при работающем api, /health отдаёт 503; docker compose start postgres — не позже чем через 60 с /health снова 200 без перезапуска api.\n9. -Check с кодом 0.\n\nРежим -Migrate (решение владельца 2026-10-12: переезд одной командой, а не руками по README). engine-setup.ps1 -Migrate, терминал администратора; вместе с -Install сначала полностью отрабатывает Install, затем Migrate; один -Migrate требует установленного движка (дистрибутив, задача держалки, mirrored в .wslconfig), иначе отказ с подсказкой.\n1. Предусловия до любых действий, отказ — ненулевой код без изменений: Docker Desktop отвечает, в нём работают postgres и homeassistant проекта COMPOSE_PROJECT_NAME; найден bash.exe Git for Windows (не bash WSL из System32); BACKUP_DIR задан путём Windows, каталог есть и лежит вне клона; имя проекта проходит проверку restore.sh; в движке нет ни контейнеров, ни томов проекта (повторный перенос не затирает данные). Проба движка последней: она запускает дистрибутив и ждёт docker с пределом времени; не работал до пробы — при отказе гасится только он.\n2. На Docker Desktop (docker.exe хоста): docker compose stop api → ops/backup/backup.sh <BACKUP_DIR> через Git Bash → docker compose --profile ha stop (stop, тома Desktop не трогаются) → docker desktop stop и ожидание ухода процессов с пределом времени, без убийства.\n3. Автозапуск Desktop при входе выключается: ключ AutoStart в %APPDATA%\\Docker\\settings-store.json (у старых версий autoStart в settings.json), копия файла .domovoy-backup; -Uninstall возвращает прежнее значение ключа из копии. Нет файла — WARN.\n4. wsl --shutdown (гасит все дистрибутивы WSL — сказано в выводе и в -DryRun) → Start-ScheduledTask domovoy-engine → ожидание docker в дистрибутиве с пределом.\n5. В дистрибутиве, в клоне: restore.sh --project <проект> --from <новый бэкап шага 2>; стек поднимает сам restore.sh.\n6. Итог — -Check, его код выхода — код -Migrate.\nОтказ после остановки api: автоматического отката нет; печатается, что тома Docker Desktop целы, и команды отката. -Migrate -DryRun печатает план без действий и без обращений к docker.exe; -AssumeEngineState Absent подменяет «движок не установлен» для теста.\n\nDocker Desktop не удаляется до приёмки: это откат. Шаги отката в README: остановить задачу и wsl --terminate domovoy-engine, вернуть .wslconfig, wsl --shutdown, docker desktop start, docker compose --profile ha start. Удаление Desktop — решение владельца.\n\nАгент пишет файлы и проверяет:\n- dotnet test по тесту-стражу и LivenessRecoversWhenComponentRecovers;\n- разбор .ps1 через [System.Management.Automation.Language.Parser]::ParseFile;\n- bash -n для .sh;\n- grep, что в deploy/windows и новом разделе README нет зашитого 8080;\n- -Check на хосте до переезда: ожидается ненулевой код, дистрибутивы и Desktop не запускаются и не останавливаются.\n\nВладелец (админский PowerShell или ! в сессии) делает:\n- опыт S4U;\n- -Install;\n- окно переезда;\n- обе перезагрузки;\n- комментарий с замером в issue.",
+    "rejected": [
+      {
+        "option": "Автовход Windows (Sysinternals Autologon) + автозапуск Docker Desktop + блокировка экрана",
+        "reason": "Отвергнут владельцем: пароль учётной записи перестаёт защищать загрузку (docs/tasks/6.md, «Развилка карточки» и «Отвергнуто»)."
+      },
+      {
+        "option": "Задача Планировщика под SYSTEM, запускающая wsl.exe",
+        "reason": "Дистрибутив WSL регистрируется на пользователя: под SYSTEM его не видно. Принципал — учётная запись владельца."
+      },
+      {
+        "option": "Сеть WSL в режиме NAT + netsh interface portproxy на адрес ВМ",
+        "reason": "Адрес ВМ WSL меняется на каждой загрузке, и portproxy пришлось бы переписывать сценарием при старте — лишнее звено в цепочке автозапуска; mirrored публикует порты на адресе хоста без этого звена."
+      },
+      {
+        "option": "Docker CLI на Windows ходит в dockerd по TCP (2375 без TLS, 2376 с TLS-контекстом) или через ssh-контекст",
+        "reason": "Мешают пути: bind mount ./config (docker-compose.yml:102) Windows-CLI передаёт демону Windows-путём, и удалённый Linux-движок каталог не находит — переводит такие пути только Docker Desktop. Кроме того, 2375 без TLS даёт root в движке любому локальному процессу."
+      },
+      {
+        "option": "Собственный перенос томов (tar томов с остановленным стеком) вместо сценариев #8",
+        "reason": "Дублирует задачу #8, где бэкап и восстановление проверяются маркерами и манифестом; два способа переноса одних данных разъезжаются."
+      },
+      {
+        "option": "Порт API на хосте 8080 по умолчанию в сценариях",
+        "reason": "Порт занят на хосте другим сервисом владельца (wslrelay на [::1]:8080), а в mirrored-режиме слушатели WSL и Windows делят одно пространство портов. Решение владельца — 18080 (#5); #6 берёт порт из API_HTTP_PORT."
+      },
+      {
+        "option": "Сценарии в scripts/",
+        "reason": "scripts/ — обвязка конвейера агента (harness_quality в scripts/risk.json), а автозапуск хоста — эксплуатация продукта; deploy/windows/ не смешивает их."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да: Docker включается в автозапуск хоста, стек поднимается после перезагрузки без ручных действий и без входа пользователя. Способ — решение владельца по прошлой развилке (docs/tasks/6.md, строка 35).",
+    "alternative": "По способу развилки больше нет: владелец выбрал. Остаётся условная развилка внутри способа. Если wsl.exe не работает под типом входа S4U, единственный известный путь — тип Password. Тогда Планировщик хранит пароль учётной записи, и администратор хоста может его извлечь — то самое свойство, за которое владелец отверг автовход. В этом случае реализация останавливается и вопрос уходит владельцу; тихого перехода на Password в сценарии нет. Вторая условная точка: mirrored-режим глобален для всех дистрибутивов владельца, включая тот, где работает его сервис на [::1]:8080. Если тот сервис в mirrored перестанет быть доступен, как сейчас, — тоже стоп и вопрос владельцу.",
+    "ripple": "Греп «docker compose|docker-compose» по .github, scripts и tests: compose читают tests/Domovoy.Tests/ConfigurationExampleTests.cs (строки 41, 141, 167) и .github/workflows/ci-heavy.yml (88, 126). CI идёт на Linux-раннере с родным движком, compose не меняется. Задача #8 (ветка feat/8-backup-restore): её раздел README ставит бэкап в Планировщик «только при входе пользователя — Docker Desktop живёт в его сессии». После #6 эта посылка неверна, и #6 правит раздел (запуск через wsl.exe внутри дистрибутива, без условия входа). Сценарии ops/backup/*.sh не меняются, но запускаются внутри дистрибутива, где нет cygpath и нужен git с safe.directory. Задача #5 меняет порт по умолчанию на 18080; #6 читает API_HTTP_PORT и не зашивает число. Команды docker из README и .claude/CLAUDE.md на этом хосте после переезда идут через функцию-обёртку. .wslconfig глобальна для всех дистрибутивов пользователя, включая docker-desktop и дистрибутив с другим сервисом владельца.",
+    "workaround": "Нет: Docker Engine под systemd в WSL2 и задача Планировщика при запуске — штатные средства, строк // HACK: нет. Держалка sleep infinity — способ держать экземпляр WSL живым, записывается в 0028 с причиной.",
+    "council_signs": [
+      "новая функциональность: движок, автозапуск и замер на хосте",
+      "глобальный переключатель: .wslconfig (mirrored) действует на все дистрибутивы пользователя, смена движка Docker меняет поведение всех команд docker на хосте",
+      "правка обвязки: docs/decisions/0028 и docs/decisions/README.md — группа harness_quality"
+    ],
+    "executor": "субагент: девять файлов (четыре новых сценария, README, запись 0028 и таблица решений, два файла тестов) — выше порога «до 3 файлов и ~40 строк»",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "action": "create",
+      "why": "Воспроизводимая настройка движка на Windows 11, для переезда на другой ПК. -Install создаёт дистрибутив, провижинит его, регистрирует задачи (порт замера — из API_HTTP_PORT, иначе 18080), пишет .wslconfig и правило firewall. -Check только читает: ненулевой код при любом незакрытом звене, дистрибутив не запускается. Без имён пользователя, хоста и адресов в тексте. -Install последним шагом вызывает ops/backup/install-schedule.ps1 с запуском без входа (S4U) — расписание бэкапа #8 ставится установкой, отдельного шага у владельца нет; -Check включает его -Check. Режим -Migrate — переезд одной командой (подход, «Режим -Migrate»); -Uninstall возвращает прежнее значение AutoStart Docker Desktop."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "action": "create",
+      "why": "Провижининг внутри дистрибутива под root, идемпотентно: systemd в wsl.conf, Docker Engine с compose-плагином из официального репозитория apt Docker, git, systemctl enable docker, safe.directory для клона."
+    },
+    {
+      "path": "deploy/windows/docker-wsl.sh",
+      "action": "create",
+      "why": "Обёртка для Git Bash: выполняет docker с аргументами внутри дистрибутива в текущем каталоге клона. Нужна, чтобы команды из README и .claude/CLAUDE.md работали после переезда."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "action": "create",
+      "why": "Замер от старта ОС до ответа /health: Kernel-General 12 и LastBootUpTime, FwPOSTTime, первый ответ и первый 200 с телом, разницы. -Port без зашитого числа: задаётся при регистрации из API_HTTP_PORT, запасное значение 18080; -TimeoutMinutes 30."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Раздел «Автозапуск после перезагрузки (Windows, WSL2)»: предусловия (BIOS, BitLocker без PIN); -Install и -Check; окно переезда по #8 и откат на Docker Desktop; функция docker() для Git Bash и её пределы; порты API_HTTP_PORT/HA_HTTP_PORT (по умолчанию 18080/8123); параметры замера; две проверочные перезагрузки, первая — именно «Перезагрузка», а не «Завершение работы» при быстром запуске. Кроме того, правка раздела #8 о расписании бэкапа: запуск через wsl.exe, без условия входа. Из раздела #8 убирается абзац «пока #6 не закрыта, задача не ставится» и зависимость от входа пользователя."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "action": "create",
+      "why": "Запись решения: движок в WSL2 вместо Docker Desktop, S4U, держалка, mirrored, обёртка вместо TCP-доступа, отвергнутые варианты. Путь из группы harness_quality (docs/decisions/**), заявляется явно."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "Строка 0028 в таблице решений. Путь из группы harness_quality (docs/decisions/**), заявляется явно."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "action": "modify",
+      "why": "Тест-страж: у каждого сервиса docker-compose.yml стоит restart: unless-stopped. Использует готовый ParseComposeServices."
+    },
+    {
+      "path": "tests/Domovoy.Tests/HealthEndpointTests.cs",
+      "action": "modify",
+      "why": "Тест LivenessRecoversWhenComponentRecovers: /health пересчитывается на каждом запросе и возвращается в 200 после восстановления компонента без перезапуска процесса. Это закрывает сценарий «api стартовал раньше postgres после перезагрузки»."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "action": "modify",
+      "why": "параметр -LogonType S4U|Interactive (по умолчанию S4U после переезда); действие задачи — backup.sh через движок в WSL (docker CLI, которым пользуется обёртка); тест сухого прогона в ops/backup/backup.test.sh на S4U"
+    },
+    {
+      "path": "ops/backup/backup.test.sh",
+      "action": "modify",
+      "why": "сухой прогон install-schedule.ps1: ожидается LogonType S4U"
+    }
+  ],
+  "boundaries": [
+    "deploy/windows/**",
+    "README.md",
+    "docs/decisions/0028-*.md",
+    "docs/decisions/README.md",
+    "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+    "tests/Domovoy.Tests/HealthEndpointTests.cs",
+    "ops/backup/install-schedule.ps1",
+    "ops/backup/backup.test.sh"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "EveryComposeServiceRestartsAutomatically",
+      "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "new": true,
+      "covers": [
+        "restart-policy"
+      ],
+      "behavior": "Для каждого сервиса из секции services: docker-compose.yml, в том числе под профилями, среди ключей есть restart: unless-stopped. Сервис без политики или с закомментированной строкой restart роняет тест с именем сервиса в сообщении. При реализации до коммита проверяется, что тест краснеет, если у postgres или api убрать строку restart. Дубль осознанный: проверку restart у homeassistant в HomeAssistantServiceIsOptInAndRestartsAutomatically (ConfigurationExampleTests.cs:150) новый тест покрывает, но старая остаётся без изменений. Правило запрещает ослаблять существующие тесты, а цена дубля — одна строка утверждения."
+    },
+    {
+      "name": "LivenessRecoversWhenComponentRecovers",
+      "file": "tests/Domovoy.Tests/HealthEndpointTests.cs",
+      "new": true,
+      "covers": [
+        "reboot-unattended"
+      ],
+      "behavior": "Хост api в WebApplicationFactory, регистрации IComponentProbe заменены одной управляемой пробой через ConfigureTestServices. Проба сообщает Unreachable — анонимный /health отдаёт 503. Тот же хост, без перезапуска: проба переключена на Ok — следующий запрос /health отдаёт 200 и тело {\"status\":\"healthy\"}. Тест краснеет, если результат проверок кэшируется (публикатор или кэш ответа) или если отказ пробы ломает процесс. Это доказательство того, что ранний старт api до готовности базы после перезагрузки не оставляет вечный 503."
+    },
+    {
+      "name": "engine-setup.ps1 -Check",
+      "file": "deploy/windows/engine-setup.ps1",
+      "new": true,
+      "covers": [
+        "docker-autostart",
+        "reboot-unattended"
+      ],
+      "behavior": "Проверка на хосте, только чтение. Код 0 и OK на каждое звено:\n- дистрибутив;\n- задача держалки (AtStartup, S4U, ExecutionTimeLimit 0, оба флага батареи);\n- задача замера;\n- mirrored;\n- правило firewall на локальную подсеть;\n- Docker Desktop не запущен;\n- systemctl is-enabled docker.service и containerd.service — enabled (OK по is-enabled, а не по is-active);\n- unless-stopped у контейнеров проекта;\n- порт замера равен опубликованному порту api;\n- /health на этом порту с хоста отвечает 200 формы стека.\nЗвено о владельце слушателя (процесс WSL) появляется, только если опыт показал, что владелец определяется стабильно; иначе его нет, и принадлежность порта доказывает ответ формы стека. Любое незакрытое звено даёт ненулевой код и называется. Остановленный дистрибутив -Check не запускает: звенья внутри него помечаются «не проверено — дистрибутив не запущен», код ненулевой. Агент при реализации запускает -Check на хосте до переезда (ожидается ненулевой код и перечень звеньев) и сверяет wsl --list --running до и после: состояние дистрибутивов не изменилось."
+    },
+    {
+      "name": "measure-boot.ps1 после перезагрузки",
+      "file": "deploy/windows/measure-boot.ps1",
+      "new": true,
+      "covers": [
+        "two-reboots",
+        "boot-time"
+      ],
+      "behavior": "После каждой перезагрузки в журнале под %ProgramData% появляется строка. В ней:\n- момент старта ОС (Kernel-General 12) и рядом LastBootUpTime;\n- время POST;\n- первый ответ /health на порту API_HTTP_PORT;\n- первый ответ 200 с телом;\n- разница от старта ОС до 200 в секундах.\nБез ответа 200 за -TimeoutMinutes (по умолчанию 30) пишется строка «нет ответа 200», а не тишина. Ответ 200 не формы {\"status\":\"healthy|degraded\"} помечается как чужой слушатель и не засчитывается. При реализации на хосте сверяются Kernel-General 12 против LastBootUpTime после «Завершения работы» при быстром запуске и ненулевой FwPOSTTime; нулевой даёт «нет данных», и для boot-time тогда работает секундомер. Прогоняет владелец физическими перезагрузками."
+    },
+    {
+      "name": "провижининг и обёртка: bash -n и разбор PowerShell",
+      "file": "deploy/windows/provision-engine.sh",
+      "new": true,
+      "covers": [
+        "docker-autostart"
+      ],
+      "behavior": "bash -n deploy/windows/provision-engine.sh и bash -n deploy/windows/docker-wsl.sh — код 0. [System.Management.Automation.Language.Parser]::ParseFile для обоих .ps1 — ноль ошибок разбора. grep -n '8080' по deploy/windows — пусто. Это синтаксическая проверка, а не поведенческая: поведение провижининга проверяет -Check после -Install у владельца."
+    },
+    {
+      "name": "engine_setup_migrate_dry_run",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "migrate-one-command"
+      ],
+      "behavior": "Сухой прогон -Migrate -DryRun с -AssumeEngineState Running печатает шаги в порядке: stop api → backup.sh → compose --profile ha stop → docker desktop stop → AutoStart false → wsl --shutdown (с предупреждением, что гасятся все дистрибутивы) → Start-ScheduledTask → ожидание docker → restore.sh --project → -Check; в плане нет down; файл настроек Desktop не меняется. -Migrate -DryRun -AssumeEngineState Absent — ненулевой код и подсказка про -Install; -Install -Migrate -DryRun -AssumeEngineState Absent — код 0. -Uninstall -DryRun при копии настроек Desktop печатает возврат AutoStart. -Migrate с -Check или -Uninstall — код 2. При реализации показывается, что тесты краснеют на мутациях: stop → down -v, бэкап после остановки стека, снятая проверка установленного движка, убранный возврат AutoStart."
+    },
+    {
+      "name": "install_schedule_dry_run_s4u",
+      "file": "ops/backup/backup.test.sh",
+      "new": true,
+      "covers": [
+        "backup-schedule"
+      ],
+      "behavior": "Сухой прогон install-schedule.ps1 (-DryRun) печатает свойства собранного принципала: LogonType S4U по умолчанию и Interactive при -LogonType Interactive; строка берётся из объекта New-ScheduledTaskPrincipal, а не из литерала. При реализации проверяется, что тест краснеет при подмене типа входа в скрипте. Живое срабатывание после ночи без входа — способ проверки пункта, не этот тест."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "restart-policy",
+      "criterion": "все контейнеры стека имеют restart: unless-stopped",
+      "method": "dotnet test --filter \"FullyQualifiedName~EveryComposeServiceRestartsAutomatically\" — Passed; после переезда в новом движке: docker inspect -f \"{{.Name}} {{.HostConfig.RestartPolicy.Name}}\" по контейнерам проекта domovoy (через обёртку) — у каждого unless-stopped",
+      "evidence": "Вывод теста Passed; цитаты docker-compose.yml:29, :57, :119; вывод docker inspect из нового движка"
+    },
+    {
+      "id": "docker-autostart",
+      "criterion": "сам Docker включён в автозапуск хоста",
+      "method": "Предусловие — переезд выполнен (после мержа #8). powershell -File deploy/windows/engine-setup.ps1 -Check на хосте при работающем дистрибутиве: код 0, строки OK для задачи держалки (AtStartup, S4U, ExecutionTimeLimit 0, AllowStartIfOnBatteries, DontStopIfGoingOnBatteries) и для systemctl is-enabled docker.service и containerd.service — enabled",
+      "evidence": "Вывод -Check с кодом 0 — в журнале задачи и комментарии к issue"
+    },
+    {
+      "id": "reboot-unattended",
+      "criterion": "после reboot хоста стек поднимается без ручных действий и GET /health отвечает",
+      "method": "Наблюдение владельца, предусловие — переезд выполнен. Перезагрузка из Windows, в систему не входить. С другого устройства в ЛВС: GET http://<адрес-хоста>:<API_HTTP_PORT>/health (по умолчанию 18080) — ожидается 200 с телом {\"status\":…}; затем вход и -Check — код 0",
+      "evidence": "Строка журнала measure-boot для этой загрузки с первым ответом 200 формы стека; код и тело ответа с устройства в ЛВС; вывод -Check — в комментарии владельца к issue"
+    },
+    {
+      "id": "two-reboots",
+      "criterion": "проверено двумя перезагрузками подряд, из которых одна — жёсткая, по питанию",
+      "method": "Наблюдение владельца: перезагрузка 1 — «Перезагрузка» из Windows; перезагрузка 2 — снять и вернуть питание работающего ПК, ПК включается сам по настройке BIOS. Между ними вручную ничего не запускать и в систему не входить.",
+      "evidence": "Две подряд строки журнала measure-boot с разными моментами старта ОС (Kernel-General 12) и ответом 200 формы {\"status\":…} в каждой; в комментарии к issue указано, какая — по питанию"
+    },
+    {
+      "id": "boot-time",
+      "criterion": "время от включения питания до ответа /health измерено и записано в issue",
+      "method": "Из строки measure-boot для перезагрузки по питанию: время POST (FwPOSTTime) плюс секунды от старта ОС (Kernel-General 12) до первого ответа 200 формы стека. Если FwPOSTTime пуст, время POST — секундомер владельца от подачи питания до логотипа Windows. Сумма не включает загрузчик между POST и стартом ядра, поэтому в той же перезагрузке по питанию владелец сверяет её с полным временем. Полное время — от момента подачи питания по часам с секундами (телефон) до момента первого ответа 200 в журнале measure-boot (часы хоста синхронизированы). Расхождение записывается.",
+      "evidence": "Комментарий владельца в issue #6: полное время от подачи питания до 200 (по часам) как итоговое число; рядом разложение FwPOSTTime + ОС-до-200 и расхождение суммы с полным временем в секундах"
+    },
+    {
+      "id": "backup-schedule",
+      "criterion": "остаток #8: бэкап БД и конфигурации HA выполняется по расписанию на внешний носитель — задачу ставит установщик развёртывания, без входа пользователя",
+      "method": "после engine-setup.ps1 -Install и ночи без входа пользователя: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check — LogonType S4U, LastTaskResult 0, в хвосте backup.log строка «успех:» с меткой этой ночи",
+      "evidence": "вывод -Check (путь к носителю в issue не переносится); комментарий в #8 и закрытие #8"
+    },
+    {
+      "id": "migrate-one-command",
+      "criterion": "решение владельца 2026-10-12: переезд с Docker Desktop в движок WSL выполняется одной командой engine-setup.ps1 -Install -Migrate, а не руками по README",
+      "method": "bash deploy/windows/engine-setup.test.sh — engine_setup_migrate_dry_run ok; затем владелец в терминале администратора: powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -Migrate — код 0, последним блоком вывод -Check со строкой «итог: все звенья, проверяемые с хоста, OK»",
+      "evidence": "строка теста ok; вывод -Install -Migrate владельца с кодом 0 в журнале задачи (без путей носителя и адресов)"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "wsl.exe может не работать из задачи под S4U без входа пользователя (не подтверждено). Единственный известный обход — тип входа Password, при котором Планировщик хранит пароль учётной записи.",
+      "mitigation": "Нулевой шаг реализации — опыт владельца до переезда, сценарий-опыт с фазами Prepare/Verify/Rollback на пустом дистрибутиве domovoy-exp (подход, «Нулевой шаг»). После перезагрузки без входа задача S4U должна показать LastTaskResult 0, а wsl --list --verbose — дистрибутив Running; заглушка /health должна отвечать с телефона до входа. Не работает — стоп и вопрос владельцу (условная развилка карточки), тихого перехода на Password нет."
+    },
+    {
+      "risk": "Экземпляр WSL останавливается без активного wsl.exe, а у задачи по умолчанию предел выполнения 72 ч и остановка при переходе на батарею — UPS по USB Windows видит батареей.",
+      "mitigation": "Держалка sleep infinity в задаче с ExecutionTimeLimit 0, AllowStartIfOnBatteries, DontStopIfGoingOnBatteries и перезапуском при сбое. -Check проверяет каждую настройку, это пункт docker-autostart."
+    },
+    {
+      "risk": ".wslconfig глобальна: mirrored действует на все дистрибутивы владельца, включая тот, где работает его сервис на [::1]:8080, а применение требует wsl --shutdown, которое гасит рабочий стек Docker Desktop.",
+      "mitigation": "-Install только пишет файл (прежний сохраняется копией), применяет владелец в окне переезда. Агент не выполняет ни wsl --shutdown, ни wsl --terminate, ни docker desktop stop. После применения владелец проверяет свой сервис на 8080. Если тот перестал работать, это стоп и вопрос владельцу, а откат — вернуть .wslconfig."
+    },
+    {
+      "risk": "Конфликт порта на хосте: 8080 занят другим сервисом владельца, а в mirrored-режиме слушатели WSL и Windows делят одно пространство портов.",
+      "mitigation": "Порт API берётся из API_HTTP_PORT, по умолчанию 18080 (решение владельца, #5); до мержа #5 владелец задаёт его в .env. Зашитого 8080 нет: grep в тестах плана. -Check сверяет порт задачи замера с опубликованным портом api и ответ /health формы стека на нём; владельца слушателя — только если опыт показал, что он определяется стабильно."
+    },
+    {
+      "risk": "Порты станут доступны шире ЛВС, или из ЛВС, наоборот, не будут доступны (Hyper-V firewall для mirrored).",
+      "mitigation": "Правило New-NetFirewallHyperVRule на входящие API_HTTP_PORT и HA_HTTP_PORT только с локальной подсети. -Check проверяет и наличие, и ограничение. Доступ из ЛВС проверяется запросом с устройства в reboot-unattended. Проброса на роутере нет (README.md:182)."
+    },
+    {
+      "risk": "Два движка на одних портах: если Docker Desktop запустится после переезда, его контейнеры и новый движок конфликтуют.",
+      "mitigation": "На Desktop контейнеры остановлены через stop, и unless-stopped их не поднимет. AutoStart Desktop выключен (сверено: false). -Check красный, если процесс Docker Desktop запущен. Удаление Desktop — после приёмки, решение владельца."
+    },
+    {
+      "risk": "Переезд данных зависит от ещё не смердженной #8: restore.sh --project может не дать рабочего проекта domovoy на .env, а внутри дистрибутива у сценариев нет cygpath, и git отказывает по «dubious ownership» на /mnt.",
+      "mitigation": "Реализация #6 начинается после мержа #8. Провижининг ставит git и safe.directory, пути к бэкапу передаются в форме /mnt/<диск>/… Если --project не даёт рабочего стека — стоп: Desktop с нетронутыми томами остаётся, откат по README, вопрос владельцу. Свой перенос томов не пишется."
+    },
+    {
+      "risk": "История рекордера HA за минуты окна переезда теряется.",
+      "mitigation": "api останавливается до бэкапа, и база Backend консистентна. Потеря истории HA за окно — названная цена в README. Тома Desktop нетронуты до приёмки."
+    },
+    {
+      "risk": "Bind mount ./config с диска Windows (drvfs /mnt/…) и сборка образа с /mnt могут вести себя иначе, чем в Docker Desktop.",
+      "mitigation": "Монтирование только на чтение, как сейчас. При переезде проверяется: /health отвечает, а реестр сущностей читается. Время сборки на замер не влияет: после перезагрузки образы уже собраны."
+    },
+    {
+      "risk": "Без настройки BIOS «восстановление после пропадания питания» ПК не включится сам; BitLocker с PIN до загрузки останавливает загрузку.",
+      "mitigation": "Оба — предусловия в README и в выводе -Install. Проверяются перезагрузкой по питанию в two-reboots: без них строки замера не будет."
+    },
+    {
+      "risk": "Меняется софт хоста: дистрибутив Ubuntu 24.04, docker-ce, containerd, docker-compose-plugin, git. Это не библиотеки проекта, но формально может попасть под триггер «новая зависимость».",
+      "mitigation": "new_dependency=false: в сборку и репозиторий ничего не входит, пакеты ставятся на хост по официальной инструкции Docker. Набор фиксируется в 0028; решение о триггере — за оркестратором."
+    },
+    {
+      "risk": "Источники замера не подтверждены на хосте: событие Kernel-General 12 при быстром запуске и FwPOSTTime (на части прошивок пуст).",
+      "mitigation": "Сверка на хосте при реализации (тест measure-boot). Пустой FwPOSTTime даёт «нет данных», и тогда время POST — по секундомеру владельца."
+    },
+    {
+      "risk": "В сценарии, README или журнал попадут имя пользователя, имя ПК, адрес хоста или путь клона владельца.",
+      "mitigation": "Сценарии берут пользователя и путь из окружения во время выполнения, адреса — localhost и плейсхолдер <адрес-хоста>. gitleaks перед коммитом. Журнал замера лежит под %ProgramData%, а не в дереве."
+    }
+  ],
+  "out_of_scope": [
+    "UPS на машину и роутер — требование AR-5 вне критерия этой issue.",
+    "Бэкап и восстановление — задача #8; #6 только использует её сценарии для переезда и правит в README условие их запуска.",
+    "Смена порта API по умолчанию в docker-compose.yml и .env.example — задача #5.",
+    "Удаление Docker Desktop и его томов после приёмки — решение владельца.",
+    "Переезд на другой ПК как таковой: задача обеспечивает воспроизводимость сценарием и README.",
+    "Хост на Linux или macOS.",
+    "Изменение docker-compose.yml, порядка старта сервисов и маппинга кодов /health.",
+    "Cloudflare Tunnel и его автозапуск — этап публикации наружу."
+  ]
+}

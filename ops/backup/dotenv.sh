@@ -31,6 +31,27 @@ dotenv_value() {
   printf '%s' "$value"
 }
 
+# host_path <путь> — путь из .env или аргумента в форме этой оболочки.
+# Git Bash: cygpath -u переводит D:\… и D:/… в /d/…. Внутри дистрибутива
+# WSL (движок #6, задача бэкапа под S4U) cygpath нет, и запись Windows
+# переводит wslpath -u в /mnt/d/…; остальное возвращается как есть.
+host_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u -- "$path"
+    return
+  fi
+  case "$path" in
+    [A-Za-z]:[\\/]* | [A-Za-z]:)
+      if command -v wslpath >/dev/null 2>&1; then
+        wslpath -u "$path"
+        return
+      fi
+      ;;
+  esac
+  printf '%s' "$path"
+}
+
 # backup_setting <ключ> <корень-клона> — переменная окружения, если она
 # задана (даже пустой), иначе значение из <корень>/.env. Значение с
 # плейсхолдером в угловых скобках, как в .env.example, — не задано.

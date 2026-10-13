@@ -391,6 +391,49 @@ test_dotenv_value_like_compose() {
   ok "$name"
 }
 
+# Внутри дистрибутива движка (#6) cygpath нет: путь Windows из .env
+# переводит wslpath. PATH из одного каталога с подделкой wslpath — так
+# cygpath не виден и в Git Bash; подделка пишет вызовы в журнал.
+host_path_with() {
+  # shellcheck disable=SC2016
+  PATH="$1" "$BASH" -c '. "$1"; host_path "$2"' host_path "$here/dotenv.sh" "$2"
+}
+
+test_host_path_inside_wsl() {
+  local name=host_path_inside_wsl
+  local bin="$work/fakebin-wsl" empty="$work/fakebin-empty" got
+  mkdir -p "$bin" "$empty"
+  cat >"$bin/wslpath" <<EOF
+#!/bin/sh
+echo "\$*" >>"$work/wslpath-called"
+[ "\$1" = -u ] || exit 2
+case "\$2" in
+  D:*) printf '/mnt/d%s\n' "\${2#D:}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$bin/wslpath"
+  rm -f "$work/wslpath-called"
+  got="$(host_path_with "$bin" 'D:/example-backups')"
+  [ "$got" = '/mnt/d/example-backups' ] || { fail "$name" "D:/… → «$got», ожидалось /mnt/d/…"; return; }
+  got="$(host_path_with "$bin" '/mnt/e/example-backups')"
+  [ "$got" = '/mnt/e/example-backups' ] || { fail "$name" "/mnt/… изменён: «$got»"; return; }
+  got="$(host_path_with "$bin" '/srv/example-backups')"
+  [ "$got" = '/srv/example-backups' ] || { fail "$name" "POSIX-путь изменён: «$got»"; return; }
+  [ "$(wc -l <"$work/wslpath-called" | tr -d ' ')" = 1 ] || { fail "$name" "wslpath вызван не только для D:/…"; return; }
+  # Ни cygpath, ни wslpath (обычный Linux) — путь как есть.
+  got="$(host_path_with "$empty" 'D:/example-backups')"
+  [ "$got" = 'D:/example-backups' ] || { fail "$name" "без wslpath путь изменён: «$got»"; return; }
+  # backup.sh и restore.sh переводят пути только через host_path.
+  local script
+  for script in backup.sh restore.sh; do
+    if grep -n 'cygpath' "$here/$script" | grep -qv '^[0-9]*:#'; then
+      fail "$name" "$script вызывает cygpath в обход host_path"; return
+    fi
+  done
+  ok "$name"
+}
+
 test_backup_reads_settings_from_env_file() {
   local name=backup_destination_from_env_file
   local fake_path
@@ -572,14 +615,15 @@ install_schedule_parses() {
 }
 
 # Сухой прогон печатает собранную задачу и ничего не регистрирует; прав
-# администратора не требует. Только на Windows: ищет bash.exe Git for
+# администратора не требует. Только на Windows: объекты задачи собирает
+# модуль ScheduledTasks, а -LogonType Interactive ищет bash.exe Git for
 # Windows в реестре и PATH.
 test_install_schedule_dry_run() {
   install_schedule_parses
-  local name=install_schedule_dry_run
+  local name=install_schedule_dry_run_s4u
   case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*) ;;
-    *) skip "$name" "не Windows — сухой прогон ищет bash.exe Git for Windows"; return ;;
+    *) skip "$name" "не Windows — задачу собирает модуль ScheduledTasks Windows"; return ;;
   esac
   local shells=() shell
   command -v pwsh >/dev/null 2>&1 && shells+=(pwsh)
@@ -588,9 +632,13 @@ test_install_schedule_dry_run() {
 
   rm -rf -- "$work/sched-dest" && mkdir "$work/sched-dest"
   fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
-  local ps1 script_arg
+  local ps1 script_arg engine_arg
   ps1="$(cygpath -w "$work/clone/ops/backup/install-schedule.ps1")"
   script_arg="\"$(cygpath -m "$work/clone/ops/backup/backup.sh")\""
+  # По умолчанию (#6) — запуск без входа пользователя: backup.sh идёт внутри
+  # дистрибутива движка, где docker — сам движок; каталог клона — его
+  # текущий каталог, сценарий — путь от корня клона.
+  engine_arg="-d domovoy-engine --cd \"$(cygpath -w "$work/clone")\" --exec bash ops/backup/backup.sh"
   local first=''
   for shell in "${shells[@]}"; do
     run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
@@ -598,25 +646,54 @@ test_install_schedule_dry_run() {
     tr -d '\r' <"$work/out" >"$work/out.$shell"
     grep -qx 'Task: domovoy-backup' "$work/out.$shell" || { fail "$name/$shell" "нет имени задачи"; show_out; return; }
     grep -qx 'Daily: 03:30' "$work/out.$shell" || { fail "$name/$shell" "не 03:30"; show_out; return; }
-    # До #6 движок — Docker Desktop в сессии пользователя: задача только при входе.
-    grep -qx 'LogonType: Interactive' "$work/out.$shell" || { fail "$name/$shell" "не Interactive"; show_out; return; }
+    # Движок в WSL поднимается без входа (#6): задача идёт под S4U, пароль
+    # учётной записи Планировщик не хранит.
+    grep -qx 'LogonType: S4U' "$work/out.$shell" || { fail "$name/$shell" "не S4U"; show_out; return; }
     grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
+    grep -qix 'Execute: .*\\system32\\wsl\.exe' "$work/out.$shell" || { fail "$name/$shell" "не wsl.exe"; show_out; return; }
+    grep -qxF "Arguments: $engine_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$engine_arg»"; show_out; return; }
     # Строки — свойства объектов, которые уходят в Register-ScheduledTask.
     local setting
     for setting in 'DaysInterval: 1' 'StartWhenAvailable: True' 'ExecutionTimeLimit: PT2H' \
       'MultipleInstances: IgnoreNew' 'DisallowStartIfOnBatteries: False' 'StopIfGoingOnBatteries: False'; do
       grep -qxF "$setting" "$work/out.$shell" || { fail "$name/$shell" "нет «$setting»"; show_out; return; }
     done
-    grep -qix 'Execute: .*\\bin\\bash\.exe' "$work/out.$shell" || { fail "$name/$shell" "не bash.exe Git for Windows"; show_out; return; }
-    if grep -qi '^Execute: .*\\system32\\' "$work/out.$shell"; then fail "$name/$shell" "выбран bash.exe из System32 (WSL)"; return; fi
-    # Аргумент — только путь к backup.sh этого клона: каталог и лимит
-    # читаются из .env при каждом запуске.
-    grep -qxF "Arguments: $script_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$script_arg»"; show_out; return; }
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значение из .env кроме BACKUP_DIR"; return; fi
     # Задача, собранная под Windows PowerShell 5.1 и под pwsh 7, одна и та же.
     if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
       fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
     fi
+  done
+  ok "$name"
+
+  # Откат на Docker Desktop: движок живёт в сессии пользователя, задача —
+  # только при входе, backup.sh — в bash.exe Git for Windows.
+  name=install_schedule_dry_run_interactive
+  first=''
+  for shell in "${shells[@]}"; do
+    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType Interactive
+    if [ "$rc" -ne 0 ]; then fail "$name/$shell" "код $rc"; show_out; return; fi
+    tr -d '\r' <"$work/out" >"$work/out.$shell"
+    grep -qx 'LogonType: Interactive' "$work/out.$shell" || { fail "$name/$shell" "не Interactive"; show_out; return; }
+    grep -qx 'RunLevel: Limited' "$work/out.$shell" || { fail "$name/$shell" "не Limited"; show_out; return; }
+    grep -qix 'Execute: .*\\bin\\bash\.exe' "$work/out.$shell" || { fail "$name/$shell" "не bash.exe Git for Windows"; show_out; return; }
+    if grep -qi '^Execute: .*\\system32\\' "$work/out.$shell"; then fail "$name/$shell" "выбран bash.exe из System32 (WSL)"; return; fi
+    # Аргумент — только путь к backup.sh этого клона: каталог и лимит
+    # читаются из .env при каждом запуске.
+    grep -qxF "Arguments: $script_arg" "$work/out.$shell" || { fail "$name/$shell" "аргументы задачи не «$script_arg»"; show_out; return; }
+    if [ -z "$first" ]; then first="$shell"; elif ! cmp -s "$work/out.$first" "$work/out.$shell"; then
+      fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
+    fi
+  done
+  ok "$name"
+
+  # Тип входа с хранимым паролем (Password) сценарий не собирает: пароль
+  # учётной записи в Планировщике — то, от чего отказались в #6.
+  name=install_schedule_refuses_other_logon_types
+  local logon
+  for logon in Password InteractiveOrPassword; do
+    run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType "$logon"
+    if [ "$rc" -eq 0 ]; then fail "$name" "-LogonType $logon принят"; show_out; return; fi
   done
   ok "$name"
 
@@ -643,7 +720,7 @@ test_install_schedule_dry_run() {
   ok "$name"
 
   name=install_schedule_refuses_wsl_bash
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -BashPath 'C:\Windows\System32\bash.exe'
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -LogonType Interactive -BashPath 'C:\Windows\System32\bash.exe'
   if [ "$rc" -eq 0 ]; then fail "$name" "bash.exe из System32 принят"; show_out; return; fi
   grep -q 'WSL' "$work/out" || { fail "$name" "отказ не назван"; show_out; return; }
   ok "$name"
@@ -1058,6 +1135,7 @@ test_restore_refuses_manifest_without_ha_count
 test_backup_drops_leftover_verify_databases
 test_backup_max_size_prunes_oldest_before_writing
 test_dotenv_value_like_compose
+test_host_path_inside_wsl
 test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
 test_restore_check_defaults_to_latest_backup

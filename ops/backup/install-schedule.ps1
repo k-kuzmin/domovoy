@@ -12,23 +12,35 @@
     powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Uninstall
 
   -Install регистрирует задачу domovoy-backup: ежедневно в 03:30 (-At ЧЧ:ММ)
-  запускает bash.exe Git for Windows с одним аргументом — путём к
-  ops/backup/backup.sh этого клона. Каталог и лимит в задачу не попадают:
-  backup.sh читает BACKUP_DIR и BACKUP_MAX_SIZE_GB из .env клона при каждом
-  запуске, и правка .env не требует переустановки. Секретов в аргументах
-  задачи нет. Повторный -Install заменяет задачу.
+  запускает ops/backup/backup.sh этого клона. Каталог и лимит в задачу не
+  попадают: backup.sh читает BACKUP_DIR и BACKUP_MAX_SIZE_GB из .env клона
+  при каждом запуске, и правка .env не требует переустановки. Секретов в
+  аргументах задачи нет. Повторный -Install заменяет задачу.
 
-  Задача идёт от текущего пользователя с LogonType Interactive и обычными
-  правами (RunLevel Limited): до #6 движок — Docker Desktop, а он работает
-  только в сессии вошедшего пользователя. Поэтому бэкап идёт, только пока
-  пользователь вошёл и Docker Desktop запущен: Docker Desktop не запущен —
-  backup.sh отказывает с ненулевым кодом и строкой в backup.log; никто не
-  вошёл — задача не стартует. Запуск без входа (S4U) — в #6,
-  вместе с переездом движка в WSL. Пропущенный запуск (хост был выключен
-  или никто не вошёл) выполняется при первой возможности; прогон дольше
-  2 ч останавливается; второй экземпляр не запускается.
+  -LogonType S4U (по умолчанию, #6) — движок Docker живёт в WSL-дистрибутиве
+  domovoy-engine (deploy/windows/engine-setup.ps1), задача идёт без входа
+  пользователя и без хранимого пароля:
 
-  bash.exe — только из Git for Windows: InstallPath из
+    wsl.exe -d domovoy-engine --cd "<клон>" --exec bash ops/backup/backup.sh
+
+  backup.sh выполняется внутри дистрибутива: docker там — сам движок, без
+  обёртки и без интерактивной оболочки; клон виден как /mnt/<диск>/…,
+  BACKUP_DIR вида D:/… переводит wslpath (ops/backup/dotenv.sh).
+
+  -LogonType Interactive — откат на Docker Desktop, который работает только
+  в сессии вошедшего пользователя: задача запускает bash.exe Git for Windows
+  с одним аргументом — путём к backup.sh — и стартует, только пока
+  пользователь вошёл; Docker Desktop не запущен — backup.sh отказывает с
+  ненулевым кодом и строкой в backup.log.
+
+  В обоих случаях — текущий пользователь, обычные права (RunLevel Limited).
+  Тип входа с хранимым паролем сценарий не собирает. Пропущенный запуск (хост
+  был выключен) выполняется при первой возможности — сразу после загрузки
+  dockerd может ещё подниматься, тогда прогон отказывает строкой в
+  backup.log, и следующий идёт в срок; прогон дольше 2 ч останавливается;
+  второй экземпляр не запускается.
+
+  bash.exe для Interactive — только из Git for Windows: InstallPath из
   HKLM:\SOFTWARE\GitForWindows, затем HKCU, затем рядом с git.exe из PATH.
   C:\Windows\System32\bash.exe — это WSL, с ним задача не ставится. Путь
   можно задать явно: -BashPath.
@@ -42,6 +54,8 @@ param(
     [switch]$Check,
     [switch]$Uninstall,
     [string]$At = '03:30',
+    [ValidateSet('S4U', 'Interactive')]
+    [string]$LogonType = 'S4U',
     [string]$BashPath,
     [switch]$DryRun
 )
@@ -50,6 +64,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $TaskName = 'domovoy-backup'
+# Имя дистрибутива движка — то же, что в deploy/windows/engine-setup.ps1.
+$Distro = 'domovoy-engine'
 
 function Stop-WithError([string]$Message, [int]$Code = 1) {
     [Console]::Error.WriteLine("install-schedule: $Message")
@@ -165,16 +181,29 @@ if ($Install) {
     }
     if (-not (Test-Path -LiteralPath $backupScript -PathType Leaf)) { Stop-WithError "нет $backupScript" }
 
-    $bash = Resolve-Bash
-    $argument = '"{0}"' -f $backupScript.Replace('\', '/')
+    if ($LogonType -eq 'S4U') {
+        # Внутри дистрибутива переводится только запись Windows (D:/… или
+        # D:\…) и путь /mnt/…; запись Git Bash вида /d/… там не существует.
+        if ($backupDir -notmatch '^[A-Za-z]:[\\/]' -and $backupDir -notmatch '^/mnt/') {
+            Write-Warning "BACKUP_DIR ($backupDir) — не путь Windows вида D:/…: внутри дистрибутива $Distro такой каталог не найдётся, и бэкап будет отказывать"
+        }
+        # Без входа: backup.sh внутри дистрибутива движка, путь сценария —
+        # от корня клона, который wsl.exe делает текущим каталогом.
+        $execute = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        $argument = '-d {0} --cd "{1}" --exec bash ops/backup/backup.sh' -f $Distro, $root
+    }
+    else {
+        $execute = Resolve-Bash
+        $argument = '"{0}"' -f $backupScript.Replace('\', '/')
+    }
     $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
     # Объекты задачи — локальные, прав администратора не требуют. Сухой
     # прогон печатает их свойства, а не описание: что напечатано, то и
     # регистрируется.
-    $action = New-ScheduledTaskAction -Execute $bash -Argument $argument -WorkingDirectory $root
+    $action = New-ScheduledTaskAction -Execute $execute -Argument $argument -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At $time
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType $LogonType -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
         -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
@@ -208,8 +237,8 @@ if ($Install) {
 
     $null = Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
         -Settings $settings -Description 'Домовой: ночной бэкап БД и тома Home Assistant (ops/backup/backup.sh)' -Force
-    Write-Output ("задача {0} зарегистрирована: ежедневно {1}, {2} {3}" -f $TaskName,
-        $time.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture), $bash, $argument)
+    Write-Output ("задача {0} зарегистрирована: ежедневно {1}, {2}, {3} {4}" -f $TaskName,
+        $time.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture), $principal.LogonType, $execute, $argument)
     Write-Output 'проверка: powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check'
     exit 0
 }
@@ -221,6 +250,7 @@ if ($Check) {
     $action = @($task.Actions)[0]
     Write-Output "Task: $TaskName"
     Write-Output "State: $($task.State)"
+    Write-Output "LogonType: $($task.Principal.LogonType)"
     Write-Output "Execute: $($action.Execute) $($action.Arguments)"
     Write-Output "LastRunTime: $($info.LastRunTime)"
     Write-Output ('LastTaskResult: {0} (0x{0:X})' -f $info.LastTaskResult)

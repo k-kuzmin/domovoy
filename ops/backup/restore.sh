@@ -110,8 +110,8 @@ cd "$root"
 . "$root/ops/backup/dotenv.sh"
 
 canonical_dir() {
-  local path="$1"
-  if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -u -- "$path")"; fi
+  local path
+  path="$(host_path "$1")"
   (cd -- "$path" 2>/dev/null && pwd -P) || true
 }
 
@@ -137,9 +137,7 @@ if [ -z "$from_arg" ]; then
   from_arg="$backup_dir/$latest"
 fi
 
-from="$from_arg"
-if command -v cygpath >/dev/null 2>&1; then from="$(cygpath -u -- "$from")"; fi
-from="$( (cd -- "$from" 2>/dev/null && pwd -P) || true)"
+from="$(canonical_dir "$from_arg")"
 [ -n "$from" ] || { echo "restore: каталога бэкапа нет" >&2; exit 1; }
 case "${from##*/}" in
   *.partial) echo "restore: каталог .partial — недописанный бэкап" >&2; exit 1 ;;

@@ -45,3 +45,4 @@
 | [0025](0025-anonymous-device-pairing-endpoint.md) | Обмен кода привязки на токен устройства — анонимный эндпоинт | принято |
 | [0026](0026-human-led-pipeline.md) | Бота нет: конвейер ведёт человек с агентом в Claude CLI | принято |
 | [0027](0027-home-assistant-compose-profile.md) | Home Assistant в общем compose под профилем `ha` | принято |
+| [0028](0028-docker-engine-in-wsl.md) | Docker Engine в своём WSL2-дистрибутиве, запуск без входа пользователя | принято |

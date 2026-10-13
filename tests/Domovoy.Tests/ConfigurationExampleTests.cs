@@ -160,6 +160,26 @@ public sealed class ConfigurationExampleTests
         }
     }
 
+    [Fact(DisplayName = "Каждый сервис compose поднимается сам после перезагрузки хоста")]
+    public void EveryComposeServiceRestartsAutomatically()
+    {
+        Dictionary<string, List<string>> services = ParseComposeServices(
+            File.ReadAllText(RepositoryLayout.Path("docker-compose.yml")));
+
+        services.Should().ContainKeys(["postgres", "api", "homeassistant"],
+            "разбор compose обязан видеть сервисы стека, иначе проверять нечего");
+
+        // После перезагрузки контейнеры поднимает демон по политике restart,
+        // а не docker compose up (AR-5, #6). Сервис без политики остаётся
+        // лежать до ручного запуска — в том числе под профилем.
+        foreach ((string name, List<string> keys) in services)
+        {
+            keys.Should().Contain(
+                "restart: unless-stopped",
+                $"сервис {name} должен подниматься демоном после перезагрузки хоста без ручных действий");
+        }
+    }
+
     [Fact(DisplayName = "База в compose — в своей сети, Home Assistant до неё не достаёт")]
     public void PostgresIsIsolatedFromHomeAssistant()
     {
