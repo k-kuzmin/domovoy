@@ -78,6 +78,30 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
             .Should().Be("not_configured");
     }
 
+    [Fact(DisplayName = "WebSocket-соединение с Home Assistant — отдельное поле ha_websocket рядом с ha")]
+    public async Task HaWebSocketStatusIsSeparateComponent()
+    {
+        using WebApplicationFactory<Program> authorized = WithTestAuthentication();
+        using HttpClient client = authorized.CreateClient();
+
+        using HttpResponseMessage response = await client.GetAsync(
+            new Uri("/api/v1/health", UriKind.Relative));
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument document = JsonDocument.Parse(body);
+        JsonElement components = document.RootElement.GetProperty("components");
+
+        components.TryGetProperty("ha", out _)
+            .Should().BeTrue("REST-проба Home Assistant остаётся своим полем");
+        components.TryGetProperty("ha_websocket", out JsonElement webSocket)
+            .Should().BeTrue("NFR-OBS-3 требует раздельного статуса WebSocket-соединения с HA");
+
+        // Конфигурация примера: токена нет, воркер не подключается.
+        webSocket.GetProperty("state").GetString().Should().Be("not_configured");
+        webSocket.GetProperty("description").GetString()
+            .Should().NotBeNullOrWhiteSpace("описание нужно человеку, который читает ответ");
+    }
+
     [Fact(DisplayName = "В подробном ответе нет ни адресов, ни значений секретов")]
     public async Task DetailedAnswerLeaksNothing()
     {

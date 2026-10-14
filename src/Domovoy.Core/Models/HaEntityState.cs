@@ -15,4 +15,10 @@ public sealed record HaEntityState
     public required IReadOnlyDictionary<string, string> Attributes { get; init; }
 
     public required DateTimeOffset LastChanged { get; init; }
+
+    /// <summary>
+    /// <c>last_updated</c> Home Assistant: меняется и при смене одних
+    /// атрибутов. По нему упорядочиваются события одной сущности.
+    /// </summary>
+    public required DateTimeOffset LastUpdated { get; init; }
 }

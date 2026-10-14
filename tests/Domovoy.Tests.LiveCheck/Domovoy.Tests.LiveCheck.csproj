@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Живые замеры владельца против настоящего Home Assistant (#9, #11):
+    latency — p95 быстрого пути, reconnect — восстановление соединения и
+    кэша после остановки HA. Не тестовый проект: dotnet test его не
+    запускает, сборка решения — собирает, чтобы код не гнил.
+
+    Microsoft.AspNetCore.App — ради хоста, конфигурации и HttpClientFactory
+    теми же сборками, что у api; пакетов сверх решения нет.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Domovoy.Core\Domovoy.Core.csproj" />
+    <ProjectReference Include="..\..\src\Domovoy.Ha\Domovoy.Ha.csproj" />
+  </ItemGroup>
+
+</Project>

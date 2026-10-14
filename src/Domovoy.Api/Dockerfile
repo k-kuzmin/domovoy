@@ -22,6 +22,7 @@ COPY src/Domovoy.Voice/Domovoy.Voice.csproj                 src/Domovoy.Voice/
 COPY src/Domovoy.Notifications/Domovoy.Notifications.csproj src/Domovoy.Notifications/
 COPY src/Domovoy.Data/Domovoy.Data.csproj                   src/Domovoy.Data/
 COPY tests/Domovoy.Tests/Domovoy.Tests.csproj               tests/Domovoy.Tests/
+COPY tests/Domovoy.Tests.LiveCheck/Domovoy.Tests.LiveCheck.csproj tests/Domovoy.Tests.LiveCheck/
 RUN dotnet restore Domovoy.sln
 
 COPY . .

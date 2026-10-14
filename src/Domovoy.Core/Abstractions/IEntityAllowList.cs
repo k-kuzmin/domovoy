@@ -18,9 +18,15 @@ public interface IEntityAllowList
     /// <summary>Все разрешённые сущности.</summary>
     IReadOnlyList<HaEntityDescriptor> All { get; }
 
+    /// <summary>Комнаты реестра с падежами.</summary>
+    IReadOnlyList<HaAreaDescriptor> Areas { get; }
+
     /// <summary>Сущность разрешена и указанное действие для неё допустимо.</summary>
     bool IsActionAllowed(string entityId, string action);
 
     /// <summary>Описание сущности или <c>null</c>, если её нет в списке.</summary>
     HaEntityDescriptor? Find(string entityId);
+
+    /// <summary>Комната по идентификатору или <c>null</c>, если её нет в реестре.</summary>
+    HaAreaDescriptor? FindArea(string areaId);
 }

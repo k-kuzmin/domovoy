@@ -1,4 +1,7 @@
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
+using Domovoy.Core.Routing;
+using Domovoy.Core.Routing.Templates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,6 +32,16 @@ public static class CoreServiceCollectionExtensions
         services.AddValidatedOptions<ProactivityOptions>(configuration, ProactivityOptions.SectionName);
         services.AddValidatedOptions<HomeProfileOptions>(configuration, HomeProfileOptions.SectionName);
         services.AddValidatedOptions<ResponseTemplateOptions>(configuration, ResponseTemplateOptions.SectionName);
+
+        // Быстрый путь (FR-CORE-2). Шаблоны перебираются в порядке
+        // регистрации; новый шаблон — одна строка здесь, роутер не меняется.
+        services.AddSingleton<IFastRouteTemplate, SwitchTemplate>();
+        services.AddSingleton<IFastRouteTemplate, ReadValueTemplate>();
+        services.AddSingleton<IFastRouteTemplate, SetValueTemplate>();
+        services.AddSingleton<IFastRouter, FastRouter>();
+        // Transient, не singleton: ранер держит IHaClient — типизированный
+        // HttpClient, а долгоживущая ссылка на него не переживает смену DNS.
+        services.AddTransient<IFastPath, FastPathRunner>();
 
         return services;
     }

@@ -25,6 +25,11 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
   </ItemGroup>
 
+  <ItemGroup Label="Разбор YAML">
+    <!-- Реестр сущностей и другие файлы config/*.yaml; запись 0031. -->
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Логирование">
     <PackageVersion Include="Serilog.AspNetCore" Version="8.0.3" />
   </ItemGroup>

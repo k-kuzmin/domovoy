@@ -24,9 +24,34 @@ namespace Domovoy.Tests;
 /// для значений, читаемых из собранного хоста (options, IConfiguration
 /// после Build). То, что Program.cs читает до Build, — строка
 /// подключения — этой фабрикой не перекрывается.
+///
+/// Два перекрытия поверх appsettings.json — <see cref="RepositoryOverrides"/>:
+/// реестр сущностей — пример из репозитория по абсолютному пути (реестр
+/// проверяется на старте, а относительный путь считался бы от каталога
+/// проекта Api, где файла нет), и адрес Home Assistant — закрытый порт на
+/// loopback. Хост держит WebSocket-воркер; тест, задавший токен, запускает
+/// его цикл реконнекта, и с адресом из appsettings.json воркер шёл бы в DNS
+/// машины за именем <c>homeassistant</c> — в сети разработчика оно может
+/// оказаться его настоящим HA, и туда ушёл бы тестовый токен. Тесты, которым
+/// нужен ответ HA, подменяют обработчик своего HTTP-клиента; адрес на это
+/// не влияет.
 /// </summary>
 public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
 {
+    /// <summary>
+    /// Адрес, на котором никто не слушает: порт 9 (discard) на loopback.
+    /// Соединение отклоняется без выхода в сеть.
+    /// </summary>
+    internal const string UnreachableHaBaseUrl = "http://127.0.0.1:9";
+
+    /// <summary>Перекрытия конфигурации, общие для всех тестов приложения.</summary>
+    internal static IReadOnlyDictionary<string, string?> RepositoryOverrides { get; } =
+        new Dictionary<string, string?>
+        {
+            ["Ha:EntityRegistryPath"] = RepositoryLayout.Path("config", "entities.example.yaml"),
+            ["Ha:BaseUrl"] = UnreachableHaBaseUrl,
+        };
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -40,6 +65,8 @@ public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
                     configuration.Sources.RemoveAt(index);
                 }
             }
+
+            configuration.AddInMemoryCollection(RepositoryOverrides);
         });
     }
 
