@@ -129,7 +129,7 @@ run_script() {
     : > "$CALLS"
     rm -f "$COUNTER"
     env "PATH=$BIN:$PATH" \
-        "MERGE_WAIT_INTERVAL=0" \
+        "MERGE_WAIT_INTERVAL=${TEST_INTERVAL:-0}" \
         "FAKE_GH_STATES=$states" \
         "FAKE_GH_CALLS=$CALLS" \
         "FAKE_GH_COUNTER=$COUNTER" \
@@ -277,6 +277,17 @@ expect_status 2
 expect_err_nonempty
 expect_calls 0
 end_case
+
+# Нечисловая пауза роняла бы `sleep` и превращала ожидание в опрос без
+# паузы до упора в лимит API.
+for bad in 'abc' '1m' '-5'; do
+    begin_case "негодная пауза «$bad» — код 2 без вызова gh"
+    TEST_INTERVAL="$bad" run_script 'OPEN MERGED' 150
+    expect_status 2
+    expect_err_nonempty
+    expect_calls 0
+    end_case
+done
 
 # ------------------------------------------------------------------
 # Итог

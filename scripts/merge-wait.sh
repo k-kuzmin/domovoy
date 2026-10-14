@@ -25,7 +25,7 @@
 #   0 — PR смерджен или закрыт; состояние (`MERGED` или `CLOSED`) в stdout;
 #   1 — сбой `gh` (`gh pr view: код <rc>` в stderr) или незнакомое состояние;
 #       сбой завершает ожидание, а не крутит цикл на пустом значении;
-#   2 — негодный аргумент; `gh` не зовётся.
+#   2 — негодный аргумент или `MERGE_WAIT_INTERVAL`; `gh` не зовётся.
 #
 # Зависимости — только bash и gh.
 #
@@ -45,6 +45,12 @@ case "$PR" in
 esac
 
 INTERVAL="${MERGE_WAIT_INTERVAL:-60}"
+case "$INTERVAL" in
+    *[!0-9]*)
+        printf 'MERGE_WAIT_INTERVAL — только цифры (секунды), получено: «%s»\n' "$INTERVAL" >&2
+        exit 2
+        ;;
+esac
 
 while :; do
     STATE="$(gh pr view "$PR" --json state --jq .state)"
