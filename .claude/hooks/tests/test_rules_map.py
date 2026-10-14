@@ -175,6 +175,7 @@ class TableShape(unittest.TestCase):
         self.assertIn(".claude/CLAUDE.md", note)
         self.assertRegex(note, r"п\. 10[–-]11")
         self.assertIn("BEHIND", note)
+        self.assertIn("DIRTY", note)
 
     def test_for_subagents_and_note_go_together(self):
         half = [r["name"] for r in TABLE if bool(r.get("for_subagents")) != bool(r.get("subagent_note"))]
