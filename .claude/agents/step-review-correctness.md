@@ -15,7 +15,9 @@ tools: Read, Glob, Grep, Bash
 
 - **имя ветки — дифф.** Читай сам: `git diff origin/main...<ветка>` и
   `git log origin/main..<ветка>`; номер задачи — из имени ветки
-  `feat/<номер>-…`, задача — `gh issue view <номер> --comments`, план —
+  `feat/<номер>-…`, задача —
+  `gh issue view <номер> --json title,labels,body,comments --jq '"# " + .title, "Метки: " + ([.labels[].name] | join(", ")), "", .body, (.comments[] | "", "---", "Комментарий: " + .author.login + ", " + .createdAt, "", .body)'`,
+  план —
   `docs/tasks/<номер>.plan.json`. PR на этом этапе ещё нет;
 - **номер задачи — план.** Читай сам `docs/tasks/<номер>.plan.json` и задачу.
   Человекочитаемый вид — `bash scripts/plan.sh render <файл>`, но источник —
