@@ -46,6 +46,18 @@ python хук пропускает вызов, а не отказывает).
 - **Ветка на задачу одна.** Перед ветвлением — поиск существующей ветки по
   номеру: `git branch -a --list '*/<N>-*'`. Нашлась — работа продолжается в
   ней, с чтения строки `Следующий шаг` журнала. Новая — `feat/<N>-…`.
+  Ветка задачи ведётся в отдельном worktree `.claude/worktrees/<N>`: новая —
+  `git worktree add .claude/worktrees/<N> -b feat/<N>-… origin/main`,
+  найденная — `git worktree add .claude/worktrees/<N> <ветка>`. Сессия
+  оркестратора входит в него (EnterWorktree с `path`) до запуска шагов: тогда
+  рабочий каталог шагов и советников — worktree задачи, и их относительные
+  пути верны. `.claude/worktrees/<N>` уже есть в `git worktree list` — молча
+  не входить: вопрос человеку, возобновление это или там работает другая
+  сессия; вход после ответа. Отказ `git worktree add` «is already used by
+  worktree at …» значит, что ветку ведёт другая сессия, — стоп и вопрос
+  человеку. Основное дерево не переключается — `git switch` и `git checkout`
+  в нём не делаются: там может идти параллельная сессия, и чистый
+  `git status` этого не доказывает.
 - **«Только до маршрута» — стоп на маршруте.** Если просили довести до
   уровня риска и маршрута, дальше не идти.
 
@@ -88,8 +100,17 @@ python хук пропускает вызов, а не отказывает).
     Красная проверка и замечания Copilot, включая построчные, — попытки
     починки; уровень по диффу вырос — назад к пункту 7.
 11. **Мердж делает человек.** Мердж сверяется по `gh pr view --json state`, а
-    не по словам. Затем оркестратор закрывает задачу и удаляет ветку локально
-    и на origin.
+    не по словам. В том же сообщении, где зелёный PR отдаётся человеку,
+    оркестратор ставит фоновое ожидание — Bash с `run_in_background`:
+    `bash scripts/merge-wait.sh <N>` — и строку журнала `Следующий шаг` на
+    «ожидание мерджа PR #N»: ожидание живёт не дольше сессии, а
+    возобновлённая сессия начинает с `gh pr view <N> --json state`. Исход
+    `MERGED` — оркестратор закрывает задачу, выходит из worktree (ExitWorktree,
+    `action: keep`) и из основного дерева убирает
+    `git worktree remove .claude/worktrees/<N>` (и worktree срезов, если
+    остались), затем ветку — `git branch -D` и `git push origin --delete`.
+    Исход `CLOSED` без мерджа — вопрос человеку, ничего не удаляется. Код 1 —
+    сбой `gh` или неожиданное состояние, а не исход мерджа.
 
 **Фикс — это фикс первопричины.** Расширение допустимых состояний (nullable,
 значение по умолчанию, фильтр невалидного) и ретрай поверх детерминированной
@@ -306,7 +327,7 @@ docker compose logs -f api
 docker compose down
 curl -s http://localhost:18080/health
 
-# Обвязка: риск, план, совет, гейт, построчные замечания
+# Обвязка: риск, план, совет, гейт, построчные замечания, ожидание мерджа
 bash scripts/risk.sh plan docs/tasks/<N>.plan.json
 bash scripts/risk.sh diff origin/main HEAD
 bash scripts/plan.sh validate docs/tasks/<N>.plan.json
@@ -314,6 +335,7 @@ bash scripts/plan.sh render   docs/tasks/<N>.plan.json
 bash scripts/council.sh <plan|diff> <артефакт> .council/<N>/<режим>-<круг> [прошлый-хеш]
 bash scripts/guard-lite.sh origin/main HEAD
 bash scripts/review-comments.sh <номер PR>
+bash scripts/merge-wait.sh <номер PR>
 
 # Сценарии обвязки и тесты впрыска правил
 bash scripts/<имя>.test.sh
