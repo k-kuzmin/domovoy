@@ -129,6 +129,13 @@ internal sealed class FakeHomeAssistant : IAsyncDisposable
         set => Interlocked.Exchange(ref _getStatesDelayTicks, value.Ticks);
     }
 
+    /// <summary>
+    /// Код ответа <c>GET /api/</c>, когда REST доступен. Не 200 — как у
+    /// прокси или туннеля перед лежащим HA (502, 503, 504) или у HA,
+    /// отклонившего токен (401).
+    /// </summary>
+    public HttpStatusCode ApiRootStatusCode { get; set; } = HttpStatusCode.OK;
+
     /// <summary>Код ответа <c>GET /api/states</c>.</summary>
     public HttpStatusCode StatesStatusCode { get; set; } = HttpStatusCode.OK;
 
@@ -313,7 +320,10 @@ internal sealed class FakeHomeAssistant : IAsyncDisposable
                 return Results.Empty;
             }
 
-            return Results.Json(new { message = "API running." });
+            HttpStatusCode status = ApiRootStatusCode;
+            return status == HttpStatusCode.OK
+                ? Results.Json(new { message = "API running." })
+                : Results.StatusCode((int)status);
         });
 
         _app.MapGet("/api/states", async (HttpContext context) =>

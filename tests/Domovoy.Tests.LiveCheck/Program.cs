@@ -353,7 +353,8 @@ internal static class Program
 
     /// <summary>
     /// Опрос <c>GET api/</c> раз в секунду; печатается только смена
-    /// доступности. Любой HTTP-ответ — HTTP-сервер HA жив, как у воркера.
+    /// доступности. HTTP-ответ — HTTP-сервер HA жив, кроме 502, 503 и 504
+    /// (ответ прокси перед лежащим HA), как у воркера.
     /// </summary>
     private static async Task PollRestAsync(
         IHttpClientFactory clients,
@@ -366,11 +367,13 @@ internal static class Program
         while (!cancellationToken.IsCancellationRequested)
         {
             int? status = await RestStatusAsync(clients, options, cancellationToken).ConfigureAwait(false);
-            bool answers = status is not null;
+            bool answers = status is int code && code is not (502 or 503 or 504);
 
             if (answers != previous)
             {
-                Print(answers ? $"REST GET api/: отвечает (HTTP {status})" : "REST GET api/: не отвечает");
+                Print(answers
+                    ? $"REST GET api/: отвечает (HTTP {status})"
+                    : status is null ? "REST GET api/: не отвечает" : $"REST GET api/: не отвечает (HTTP {status}, ответ прокси)");
                 rest.Set(answers);
                 previous = answers;
             }

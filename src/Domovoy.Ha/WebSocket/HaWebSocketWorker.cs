@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text.Json;
@@ -29,8 +30,9 @@ namespace Domovoy.Ha.WebSocket;
 ///
 /// Обрыв — статус Reconnecting сразу и пауза по
 /// <see cref="ReconnectBackoff"/>. Во время паузы воркер опрашивает REST
-/// <c>GET api/</c>: первый ответ (любой HTTP-ответ, включая 401 и 5xx)
-/// заканчивает паузу, и попытка идёт сразу. Исключение — отклонённый токен:
+/// <c>GET api/</c>: первый ответ (HTTP-ответ, включая 401, кроме 502, 503
+/// и 504 — их отдаёт прокси перед лежащим HA) заканчивает паузу, и попытка
+/// идёт сразу. Исключение — отклонённый токен:
 /// пауза строго по расписанию, без опроса: частые попытки отклонённый
 /// токен не оживят, а HA может считать их неудачными входами (ip_ban;
 /// поведение WebSocket-входа с исходником HA не сверено).
@@ -543,7 +545,11 @@ internal sealed class HaWebSocketWorker : BackgroundService
         }
     }
 
-    /// <summary>Любой HTTP-ответ, включая 401 и 5xx, — HTTP-сервер HA жив.</summary>
+    /// <summary>
+    /// HTTP-ответ — HTTP-сервер HA жив, включая 401. Кроме 502, 503 и 504:
+    /// их отдаёт прокси или туннель перед лежащим HA, а сам HA на
+    /// <c>api/</c> отвечает 200 или 401.
+    /// </summary>
     private async Task<bool> RestAnswersAsync(CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -558,7 +564,9 @@ internal sealed class HaWebSocketWorker : BackgroundService
             using HttpResponseMessage response = await client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
                 .ConfigureAwait(false);
-            return true;
+            return response.StatusCode is not (HttpStatusCode.BadGateway
+                or HttpStatusCode.ServiceUnavailable
+                or HttpStatusCode.GatewayTimeout);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

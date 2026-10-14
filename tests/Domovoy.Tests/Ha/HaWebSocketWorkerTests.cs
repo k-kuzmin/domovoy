@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
 using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;
@@ -385,6 +386,50 @@ public sealed class HaWebSocketWorkerTests
         await harness.WaitForStatusAsync(HaConnectionStatus.Connected);
         up.Elapsed.Should().BeLessThan(
             Fast.ReadinessPollInterval + Fast.ReadinessPollTimeout + Fast.HandshakeTimeout + Slack);
+    }
+
+    [Theory(DisplayName = "Ответ прокси 502/503/504 при лежащем HA паузу не обрывает: попытки идут по расписанию")]
+    [InlineData(HttpStatusCode.BadGateway)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.GatewayTimeout)]
+    public async Task GatewayErrorDoesNotCutPause(HttpStatusCode status)
+    {
+        var delay = new CancelOnlyDelay();
+        await using Harness harness = await Harness.StartAsync(
+            Fast,
+            delay,
+            fake =>
+            {
+                fake.ApiRootStatusCode = status;
+                fake.WebSocketMode = FakeWebSocketMode.Down;
+            });
+
+        await WaitUntilAsync(() => delay.Started.Count >= 1, WaitLimit);
+
+        // Опросы идут и получают ответ прокси, но пауза (бесконечная у
+        // CancelOnlyDelay) не кончается: по расписанию попытка одна.
+        await WaitUntilAsync(() => harness.Fake.ApiRootRequests.Count >= 3, WaitLimit);
+
+        delay.Requested.Should().Equal(TimeSpan.FromSeconds(1));
+        delay.Finished.Should().BeEmpty("ответ прокси — не готовность HA");
+        harness.Fake.WebSocketRequestCount.Should().Be(1);
+    }
+
+    [Fact(DisplayName = "Ответ 401 на опрос — HA жив, пауза кончается")]
+    public async Task UnauthorizedPollCutsPause()
+    {
+        var delay = new CancelOnlyDelay();
+        await using Harness harness = await Harness.StartAsync(
+            Fast,
+            delay,
+            fake =>
+            {
+                fake.ApiRootStatusCode = HttpStatusCode.Unauthorized;
+                fake.WebSocketMode = FakeWebSocketMode.Down;
+            });
+
+        await WaitUntilAsync(() => delay.Finished.Count >= 1, WaitLimit);
+        await WaitUntilAsync(() => harness.Fake.WebSocketRequestCount >= 2, WaitLimit);
     }
 
     [Fact(DisplayName = "При живом REST каждая пауза кончается первым опросом, опросы не чаще интервала")]
