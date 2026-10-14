@@ -107,8 +107,9 @@ python хук пропускает вызов, а не отказывает).
     возобновлённая сессия начинает с `gh pr view <N> --json state`. Исход
     `MERGED` — оркестратор закрывает задачу, выходит из worktree (ExitWorktree,
     `action: keep`) и из основного дерева убирает
-    `git worktree remove .claude/worktrees/<N>` (и worktree срезов, если
-    остались), затем ветку — `git branch -D` и `git push origin --delete`.
+    `git worktree remove .claude/worktrees/<N>` (и worktree срезов с их
+    ветками, если остались), затем локальную ветку — `git branch -D` — и
+    `git fetch --prune`: ветку на origin GitHub удаляет при мердже сам.
     Исход `CLOSED` без мерджа — вопрос человеку, ничего не удаляется. Код 1 —
     сбой `gh` или неожиданное состояние, а не исход мерджа: сверить
     `gh pr view <N> --json state` и перезапустить ожидание; повторный код 1 —
