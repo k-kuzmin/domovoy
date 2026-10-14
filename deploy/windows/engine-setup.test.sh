@@ -1105,8 +1105,16 @@ test_portproxy_problems() {
       if (($names -join "|") -ne "192.0.2.10/28081|192.0.2.10/28123|192.0.2.99/28081") { "свои записи: $($names -join "|")"; exit 1 }
       # Своя запись на 0.0.0.0 тоже снимается, если её цель — своя.
       $own = @(Select-OwnPortProxy @((e "*/28081" "127.0.0.1/28081")) $ports)
-      if ($own.Count -ne 1 -or $own[0].ListenPort -ne 28081 -or $own[0].ListenAddress -ne "*") { "запись на * не своя"; exit 1 }' \
-      ConvertFrom-PortProxyEntry Get-PortProxyProblems Select-OwnPortProxy
+      if ($own.Count -ne 1 -or $own[0].ListenPort -ne 28081 -or $own[0].ListenAddress -ne "*") { "запись на * не своя"; exit 1 }
+      # Чужая запись на выбранном адресе и порту стека — отказ -Install;
+      # своя, чужая на другом адресе и чужая на другом порту — нет.
+      $f = @(Select-ForeignPortProxyPorts $good "192.0.2.10" $ports)
+      if ($f.Count) { "свои записи названы чужими: $f"; exit 1 }
+      $f = @(Select-ForeignPortProxyPorts @((e "192.0.2.99/28081" "192.0.2.5/80"), (e "192.0.2.10/28500" "192.0.2.5/80")) "192.0.2.10" $ports)
+      if ($f.Count) { "чужая запись другого адреса или порта: $f"; exit 1 }
+      $f = @(Select-ForeignPortProxyPorts @((e "192.0.2.10/28081" "192.0.2.5/28081"), (e "192.0.2.10/28123" "127.0.0.1/28124")) "192.0.2.10" $ports)
+      if (($f -join ",") -ne "28081,28123") { "чужие записи на адресе: $($f -join ",")"; exit 1 }' \
+      ConvertFrom-PortProxyEntry Get-PortProxyProblems Select-OwnPortProxy Select-ForeignPortProxyPorts
     [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
   done
   ok "$name"

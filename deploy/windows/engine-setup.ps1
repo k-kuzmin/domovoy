@@ -65,7 +65,8 @@
        IPv4 интерфейса с маршрутом по умолчанию в частной сети, с наименьшим
        весом (метрика маршрута + метрика интерфейса); два адреса с равным
        весом или ни одного — отказ. Свои записи на прежнем адресе снимаются,
-       чужие не трогаются. Служба IP Helper (iphlpsvc), без которой portproxy
+       чужие не трогаются: чужая запись на выбранном адресе и порту стека —
+       отказ до первого изменения. Служба IP Helper (iphlpsvc), без которой portproxy
        не работает, должна запускаться автоматически — иначе отказ до
        первого изменения. Адрес в
        вывод не попадает. Сменился адрес (DHCP, другая сеть) — повторный
@@ -489,6 +490,16 @@ function Select-OwnPortProxy($Entries, $Ports) {
     $wanted = @($Ports | ForEach-Object { [int]$_ })
     return @($Entries | Where-Object { $null -ne $_ } | ForEach-Object { ConvertFrom-PortProxyEntry $_ } | Where-Object {
             $wanted -contains $_.ListenPort -and $_.ConnectAddress -eq '127.0.0.1' -and $_.ConnectPort -eq $_.ListenPort })
+}
+
+# Порты стека, на которых по адресу $Address стоит чужая запись — та, что
+# Select-OwnPortProxy своей не считает. Адрес в ответе не возвращается.
+function Select-ForeignPortProxyPorts($Entries, [string]$Address, $Ports) {
+    $wanted = @($Ports | ForEach-Object { [int]$_ })
+    $own = @(Select-OwnPortProxy $Entries $Ports | ForEach-Object { $_.Name })
+    return @($Entries | Where-Object { $null -ne $_ } | ForEach-Object { ConvertFrom-PortProxyEntry $_ } | Where-Object {
+            $_.ListenAddress -eq $Address -and $wanted -contains $_.ListenPort -and $own -notcontains $_.Name } |
+        ForEach-Object { $_.ListenPort } | Sort-Object -Unique)
 }
 
 # Записи portproxy портов стека против нужного: на каждый порт ровно одна
@@ -949,6 +960,13 @@ if ($Install) {
         $firewallProfileProblem = 'firewall Windows: {0} — порты стека были бы открыты шире правила; Set-NetFirewallProfile -Profile {1} -Enabled True -DefaultInboundAction Block' -f `
         ((@($openProfiles | ForEach-Object { "профиль $($_.Name): $($_.Problems -join ', ')" }) -join '; '), (@($openProfiles | ForEach-Object { $_.Name }) -join ','))
     }
+    # add заменяет запись того же адреса и порта: чужая запись на выбранном
+    # адресе и порту стека иначе была бы молча переписана.
+    $foreignProxyPorts = @(if (-not $listen.Reason) { Select-ForeignPortProxyPorts (Get-PortProxyRegistry) $listen.Address $stackPorts })
+    $foreignProxyProblem = ''
+    if ($foreignProxyPorts.Count) {
+        $foreignProxyProblem = 'portproxy: на адресе хоста в ЛВС порт {0} занят чужой записью (цель не 127.0.0.1 того же порта) — чужая запись не переписывается; netsh interface portproxy show v4tov4' -f ($foreignProxyPorts -join ',')
+    }
 
     $wslConfig = Get-WslConfigPlan $WslConfigPath
     $wslSave = Get-WslConfigSave $WslConfigPath $wslConfig.Exists
@@ -1051,13 +1069,14 @@ if ($Install) {
         Write-Output ('portproxy.remove: own v4tov4 entries on ports {0} ({1}, same port) at other listen addresses' -f ($stackPorts -join ','), "connect $ProxyTarget")
         Write-Output "iphlpsvc.starttype: $ipHelperStart"
         if ($ipHelperProblem) { Write-Output "iphlpsvc.conflict: $ipHelperProblem" }
+        if ($foreignProxyProblem) { Write-Output "portproxy.conflict: $foreignProxyProblem" }
         Write-Output ('backup: install-schedule.ps1 {0}' -f (($scheduleArgs | Select-Object -Skip 6) -join ' '))
         $schedule = Invoke-Native (Get-Process -Id $PID).Path $scheduleArgs
         $scheduleCode = $schedule.Code
         foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
         foreach ($line in $schedule.ErrLines) { Write-Output "backup.stderr: $line" }
         Write-Output "backup.exitcode: $scheduleCode"
-        if ($wslConfig.Conflict -or $listen.Reason -or $ipHelperProblem -or $firewallProfileProblem -or $scheduleCode -ne 0) {
+        if ($wslConfig.Conflict -or $listen.Reason -or $ipHelperProblem -or $firewallProfileProblem -or $foreignProxyProblem -or $scheduleCode -ne 0) {
             Write-Output 'DryRun: nothing changed'
             exit 1
         }
@@ -1074,6 +1093,7 @@ if ($Install) {
     if ($listen.Reason) { Stop-WithError "адрес хоста в ЛВС для portproxy: $($listen.Reason)" }
     if ($ipHelperProblem) { Stop-WithError $ipHelperProblem }
     if ($firewallProfileProblem) { Stop-WithError $firewallProfileProblem }
+    if ($foreignProxyProblem) { Stop-WithError $foreignProxyProblem }
     if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
         Stop-WithError 'wsl.exe не найден — включите WSL2 (wsl --install) и повторите'
     }
