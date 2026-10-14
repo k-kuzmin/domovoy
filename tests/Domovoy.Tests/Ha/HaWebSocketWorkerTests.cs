@@ -135,7 +135,10 @@ public sealed class HaWebSocketWorkerTests
         {
             fake.SetState(Kitchen, "on");
             fake.SetState(Bedroom, "21");
-            fake.GetStatesDelay = TimeSpan.FromMilliseconds(800);
+            // Окно между запросом get_states и ответом — с запасом Slack: в
+            // него должны уложиться событие и SetState на медленной машине CI.
+            // Фейк отвечает на ping, ожидание дольше ping-окна попытку не рвёт.
+            fake.GetStatesDelay = Slack;
         });
 
         // Подписка уже есть, ответ get_states ещё не ушёл: событие ляжет в
