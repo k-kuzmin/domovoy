@@ -20,7 +20,8 @@ tools: Read, Glob, Grep, Edit, Write, Bash
 «Поиск по коду» в `.claude/CLAUDE.md`, отбор в объёмном выводе —
 `docs/rules/reading.md`.
 
-Задачу и переписку по ней читай сам: `gh issue view <номер> --comments`.
+Задачу и переписку по ней читай сам:
+`gh issue view <номер> --json title,labels,body,comments --jq '"# " + .title, "Метки: " + ([.labels[].name] | join(", ")), "", .body, (.comments[] | "", "---", "Комментарий: " + .author.login + ", " + .createdAt, "", .body)'`.
 Вердикт триажа и ответы владельца — в журнале `docs/tasks/<номер>.md`, раздел
 «Решения»: половина вопросов к задаче уже задана.
 
