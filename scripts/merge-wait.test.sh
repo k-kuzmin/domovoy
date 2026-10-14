@@ -87,6 +87,11 @@ end_case() {
 # выходит с кодом `FAKE_GH_FAIL_CODE` (по умолчанию 1) и пустым stdout, как
 # `gh` на сетевом сбое или несуществующем PR. Номер вызова держится в файле:
 # каждый вызов — отдельный процесс.
+#
+# Состояние вида `OPEN/BEHIND` — пара `state` и `mergeStateStatus`. Вызов,
+# который просит `mergeStateStatus`, получает пару через пробел (`OPEN BEHIND`),
+# как от `--jq '.state + " " + .mergeStateStatus'`; вызов без него — только
+# часть до «/».
 # ------------------------------------------------------------------
 BIN="$SANDBOX/bin"
 mkdir -p "$BIN"
@@ -117,7 +122,10 @@ if [ "$state" = 'FAIL' ]; then
     printf 'подставной gh: сбой\n' >&2
     exit "${FAKE_GH_FAIL_CODE:-1}"
 fi
-printf '%s\n' "$state"
+case "$*" in
+    *mergeStateStatus*) printf '%s\n' "$state" | tr '/' ' ' ;;
+    *) printf '%s\n' "${state%%/*}" ;;
+esac
 FAKE
 chmod +x "$BIN/gh"
 
@@ -203,6 +211,19 @@ expect_status 0
 expect_out_exact 'CLOSED'
 expect_calls 1
 expect_every_call 'pr view 150 --json state --jq .state'
+end_case
+
+# ==================================================================
+# Сценарий 2а. Ветка отстала от main, пока PR ждёт мерджа (#155): GitHub
+# отдаёт mergeStateStatus BEHIND, и смерджить PR владелец не может, пока
+# ветка не подтянет main. Ожидание обязано кончиться исходом BEHIND на том
+# опросе, где он появился, а не ждать мерджа, который не наступит сам.
+# ==================================================================
+begin_case 'OPEN BEHIND — код 0, ровно BEHIND, на том опросе, где появился'
+run_script 'OPEN/CLEAN OPEN/BEHIND MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'BEHIND'
+expect_calls 2
 end_case
 
 # ==================================================================
