@@ -564,13 +564,15 @@ git config core.hooksPath .githooks
 dotnet restore
 dotnet build
 dotnet test
-Ha__EntityRegistryPath=../../config/entities.yaml dotnet run --project src/Domovoy.Api
+dotnet run --project src/Domovoy.Api
 ```
 
 `dotnet run` считает относительные пути от каталога проекта
-`src/Domovoy.Api`, а реестр сущностей проверяется на старте, поэтому путь к
-нему задаётся явно — переменной окружения, как выше, или абсолютным путём.
-Файл — копия `config/entities.example.yaml` (см. «Быстрый старт»).
+`src/Domovoy.Api`, а реестр сущностей проверяется на старте. Путь к нему
+задаёт профиль запуска `http` (`Properties/launchSettings.json`):
+`../../config/entities.yaml`, копия `config/entities.example.yaml` (см.
+«Быстрый старт»). Запуск без профиля (`--no-launch-profile`) требует
+`Ha__EntityRegistryPath` явно — переменной окружения или абсолютным путём.
 
 Ещё два инструмента нужны, если задачу ведёт агент в Claude CLI. Обычной
 разработке руками они не нужны.
@@ -629,7 +631,7 @@ api видно по переходам `components.ha_websocket` в `GET /api/v1
 |---|---|
 | Сборка | `dotnet build` |
 | Тесты | `dotnet test` |
-| Запуск API | `Ha__EntityRegistryPath=../../config/entities.yaml dotnet run --project src/Domovoy.Api` |
+| Запуск API | `dotnet run --project src/Domovoy.Api` |
 | Замер p95 быстрого пути на живом HA | `dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- latency --phrases <файл>` |
 | Наблюдение за реконнектом к живому HA | `dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- reconnect` |
 | Формат и стиль | `dotnet format --verify-no-changes` |
