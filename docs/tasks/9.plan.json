@@ -68,6 +68,11 @@
     },
     {
       "path": "src/Domovoy.Core/Models/ToolResult.cs",
+      "line": 6,
+      "observation": "ToolCallId — required string: результат без ToolCall модели (прямой вызов быстрого пути) обязан что-то в него положить, и без общего значения срезы выберут разные."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/ToolResult.cs",
       "line": 18,
       "observation": "Отказ выражается одной строкой Error; машиночитаемого кода ошибки нет, хотя единый формат ошибок API — ApiError { Code, Message, Details } (src/Domovoy.Core/Models/ApiError.cs:7)."
     },
@@ -130,10 +135,20 @@
       "path": "tests/Domovoy.Tests/ArchitectureTests.cs",
       "line": 117,
       "observation": "Правило «адаптеры не заводят публичных интерфейсов»: внутренний интерфейс в Ha (шов задержки реконнекта) допустим, публичный — нет."
+    },
+    {
+      "path": "docs/decisions/0010-health-aggregation.md",
+      "line": 13,
+      "observation": "«| `unreachable`, `rejected_by_geography`, `error` | `unhealthy` |» (13), «Различия между компонентами нет» (15), «При настроенном, но недоступном Home Assistant `/health` отдаёт 503.» (32), «Пересмотреть вместе с реализацией NFR-COST-2» (36). Компонента с исходом degraded, кроме not_configured, таблица не знает."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/ComponentHealth.cs",
+      "line": 18,
+      "observation": "NotConfigured — «Секрет или адрес не заполнены. Ожидаемое состояние на примерах.»: для настроенного HA с упавшим WebSocket это состояние неправда."
     }
   ],
   "approach": {
-    "summary": "Три подсистемы одной ветки, связанные портами Core. (1) Реестр (#10): YAML-файл по Ha:EntityRegistryPath (путь относительно ContentRoot) читается в EntityRegistryOptions через IConfigureOptions на YamlDotNet; IValidateOptions проверяет обязательные поля, домен по закрытому перечню HaDomainCatalog в коде, действие по домену, совпадение префикса entity_id с domain, ссылку area на areas, уникальность entity_id; регистрация с ValidateOnStart. Отсутствующий файл — отказ старта (ci-heavy уже считает реестр обязательным, тестовая фабрика указывает путь на config/entities.example.yaml). ConfiguredEntityAllowList строится из этих Options и отдаёт ещё и комнаты с падежами. Зависимость YamlDotNet получает запись решения 0031 (docs/decisions/README.md:14). (2) Состояния (#9): BackgroundService HaWebSocketWorker держит ClientWebSocket к ws(s)://<BaseUrl>/api/websocket. Рукопожатие — auth → subscribe_events state_changed → get_states → HaStateCache.ReplaceAll — под одним крайним сроком HandshakeTimeout (10 с); статус Connected ставится только после ReplaceAll этого соединения, при обрыве сразу Reconnecting. Дальше события state_changed применяются к кэшу; подписчикам IHaEventSource уходит только событие, которое Apply принял. Порядок событий — по last_updated (новое поле HaEntityState.LastUpdated): отбрасывается только строго более старое. Значения атрибутов приводятся к строке: строка — как есть, число, bool, объект и массив — сырым JSON-текстом, null — ключ пропускается. Живость: при 20 с тишины воркер шлёт прикладной ping HA ({type: ping}); нет ни одного кадра за 10 с после ping — обрыв, как и истёкший HandshakeTimeout. Обрыв — задержка ReconnectBackoff: 1, 2, 4 … с, потолок HaOptions.ReconnectMaxDelaySeconds (FR-HA-3 буквально); после Connected счётчик сбрасывается, кэш перечитывается целиком (ReplaceAll удаляет исчезнувшее). Бюджет 60 с после подъёма HA (NFR-PERF-7) держит не потолок паузы, а прерывание паузы: во время паузы воркер раз в 5 с опрашивает REST GET api/ (как HaProbe); переход «недоступен → отвечает» прерывает паузу, сбрасывает счётчик и запускает попытку сразу. Восстановление после подъёма ≤ 5 с опроса + таймаут опроса 5 с + HandshakeTimeout 10 с = 20 с < 60 с; если REST отвечал уже в начале паузы (HA жив, сбоит WebSocket), пауза не прерывается и HA не опрашивается чаще расписания. Токен уходит только в кадре auth и заголовке опроса; кадры и исключения с текстом кадра не логируются. Чтение состояний: HaRestClient.GetStatesAsync берёт кэш только при статусе Connected, иначе REST GET api/states (отфильтрованный по allow-list); недоступный REST — HaUnavailableException из Core, FastPathRunner переводит её в ToolResult { ErrorCode=ha_unavailable }. Кэш при обрыве как актуальный не отдаётся. Статус соединения — новая проба IComponentProbe «ha_websocket» → отдельное поле в /api/v1/health, анонимный /health учитывает её только в общем слове (0002, решение владельца). (3) Роутер (#11, ТЗ раздел 0: роутер — в Core): FastRouter реализует IFastRouter, нормализует фразу и обходит IEnumerable<IFastRouteTemplate> в порядке регистрации; шаблоны switch, read_value, set_value — классы в Core/Routing/Templates, сопоставляют глагол, устройство и комнату (падежи из IEntityAllowList.Areas) и возвращают FastRouteMatch { TemplateName, EntityId, Action, Value }. Медиа и пылесос в этот PR не входят: фразы о них уходят в LLM-путь. FastPathRunner (порт IFastPath) выполняет совпадение напрямую через IHaClient: action «read» — GetStatesAsync, иначе CallServiceAsync; LLM в цепочке нет. Нет совпадения — FastPathOutcome.NotMatched без исключения и без обращения к HA: это условие перехода на LLM-путь. Новый шаблон — один класс плюс строка регистрации в CoreServiceCollectionExtensions, FastRouter не меняется. Параметр service порта IHaClient.CallServiceAsync переименован в action с правкой XML-комментария: это действие реестра, а белый список сервисов раздела 4.3 ТЗ — таблица action → сервис HA в HaDomainCatalog; имя сервиса снаружи слоя Ha не приходит. Проверка allow-list для действий — одна точка, HaRestClient.CallServiceAsync до HTTP: сущность вне списка → entity_not_allowed, действие не из списка сущности или чужой домен → action_not_allowed, значение не по типу или вне границ таблицы каталога → invalid_value, сущность с requires_confirmation → confirmation_required (двухфазного подтверждения ещё нет, #47); коды — те же, что Code в ApiError. Чтение фильтруется на входе данных в слой: HaStateCache (ReplaceAll/Apply) и REST-ветка GetStatesAsync. Замер p95 — консольный проект tests/Domovoy.Tests.LiveCheck (решение владельца по #11): режим latency гоняет фразы владельца через FastPathRunner против живого HA, режим reconnect печатает переходы статуса WebSocket и сверяет Snapshot своего кэша с GET /api/states после подъёма HA. Контрольный набор из 30+ фраз — тестовые данные, долю покрытия считает и печатает тест.",
+    "summary": "Три подсистемы одной ветки, связанные портами Core. (1) Реестр (#10): YAML-файл по Ha:EntityRegistryPath (путь относительно ContentRoot) читается в EntityRegistryOptions через IConfigureOptions на YamlDotNet; IValidateOptions проверяет обязательные поля, домен по закрытому перечню HaDomainCatalog в коде, действие по домену, совпадение префикса entity_id с domain, ссылку area на areas, уникальность entity_id; регистрация с ValidateOnStart. Отсутствующий файл — отказ старта (ci-heavy уже считает реестр обязательным, тестовая фабрика указывает путь на config/entities.example.yaml). ConfiguredEntityAllowList строится из этих Options и отдаёт ещё и комнаты с падежами. Зависимость YamlDotNet получает запись решения 0031 (docs/decisions/README.md:14). (2) Состояния (#9): BackgroundService HaWebSocketWorker держит ClientWebSocket к ws(s)://<BaseUrl>/api/websocket. Рукопожатие — auth → subscribe_events state_changed → get_states → HaStateCache.ReplaceAll — под одним крайним сроком HandshakeTimeout (10 с); статус Connected ставится только после ReplaceAll этого соединения, при обрыве сразу Reconnecting. Дальше события state_changed применяются к кэшу; подписчикам IHaEventSource уходит только событие, которое Apply принял. Порядок событий — по last_updated (новое поле HaEntityState.LastUpdated): отбрасывается только строго более старое. Значения атрибутов приводятся к строке: строка — как есть, число, bool, объект и массив — сырым JSON-текстом, null — ключ пропускается. Живость: при 20 с тишины воркер шлёт прикладной ping HA ({type: ping}); нет ни одного кадра за 10 с после ping — обрыв, как и истёкший HandshakeTimeout. Обрыв — пауза до ReconnectBackoff.Delay(attempt): 1, 2, 4 … с, потолок HaOptions.ReconnectMaxDelaySeconds (FR-HA-3 буквально); после Connected счётчик сбрасывается, кэш перечитывается целиком (ReplaceAll удаляет исчезнувшее). Правило паузы: во время паузы воркер опрашивает REST GET api/ (как HaProbe) через 5, 10, 15 … с от её начала, таймаут опроса 5 с; первый ответивший опрос заканчивает паузу, и попытка идёт сразу. Пока REST отвечает, а WebSocket не поднялся, пауза между попытками не больше интервала опроса 5 с (плюс время ответа опроса); экспоненциальный рост до потолка — только когда REST не отвечает. Исключение — AuthRejected (auth_invalid): пауза строго по расписанию, опрос её не обрывает — отклонённый токен частыми попытками не оживёт, а HA может считать неудачные входы. Бюджет 60 с после подъёма HA (NFR-PERF-7), в том числе когда REST HA отвечает раньше WebSocket, считается от готовности WebSocket: попытка, начатая до неё, обрывается не позже HandshakeTimeout 10 с; пауза при живом REST — не больше ReadinessPollInterval 5 с + ReadinessPollTimeout 5 с; успешное рукопожатие — не больше HandshakeTimeout 10 с; итого ≤ 30 с < 60 с. Счётчик попыток при живом REST растёт, но паузу не определяет: её обрывает опрос. Токен уходит только в кадре auth и заголовке опроса; кадры и исключения с текстом кадра не логируются. Чтение состояний: HaRestClient.GetStatesAsync берёт кэш только при статусе Connected, иначе REST GET api/states (отфильтрованный по allow-list); недоступный REST — HaUnavailableException из Core, FastPathRunner переводит её в ToolResult { ErrorCode=ha_unavailable }. Кэш при обрыве как актуальный не отдаётся. Статус соединения — новая проба IComponentProbe «ha_websocket» → отдельное поле в /api/v1/health, анонимный /health учитывает её только в общем слове (0002, решение владельца). Connecting и Reconnecting — Unreachable, AuthRejected — Error: по 0010 это unhealthy и 503 анонимного /health и тогда, когда REST жив (риски). (3) Роутер (#11, ТЗ раздел 0: роутер — в Core): FastRouter реализует IFastRouter, нормализует фразу и обходит IEnumerable<IFastRouteTemplate> в порядке регистрации; шаблоны switch, read_value, set_value — классы в Core/Routing/Templates, сопоставляют глагол, устройство и комнату (падежи из IEntityAllowList.Areas) и возвращают FastRouteMatch { TemplateName, EntityId, Action, Value }. Медиа и пылесос в этот PR не входят: фразы о них уходят в LLM-путь. FastPathRunner (порт IFastPath) выполняет совпадение напрямую через IHaClient: action «read» — GetStatesAsync, иначе CallServiceAsync; LLM в цепочке нет. Нет совпадения — FastPathOutcome.NotMatched без исключения и без обращения к HA: это условие перехода на LLM-путь. Новый шаблон — один класс плюс строка регистрации в CoreServiceCollectionExtensions, FastRouter не меняется. Параметр service порта IHaClient.CallServiceAsync переименован в action с правкой XML-комментария: это действие реестра, а белый список сервисов раздела 4.3 ТЗ — таблица action → сервис HA в HaDomainCatalog; имя сервиса снаружи слоя Ha не приходит. Проверка allow-list для действий — одна точка, HaRestClient.CallServiceAsync до HTTP: сущность вне списка → entity_not_allowed, действие не из списка сущности или чужой домен → action_not_allowed, значение не по типу или вне границ таблицы каталога → invalid_value, действие, помеченное в HaDomainCatalog как требующее подтверждения (все изменяющие действия lock — правило 6 раздела «Безопасность»), или сущность с флагом requires_confirmation → confirmation_required: флаг реестра подтверждение только добавляет, снять пометку каталога не может (двухфазного подтверждения ещё нет, #47); коды — те же, что Code в ApiError. Домен cover в каталог не входит: ворота от штор без описания устройства не отличить. Результат без ToolCall модели несёт ToolCallId = ToolResult.DirectCallId. Чтение фильтруется на входе данных в слой: HaStateCache (ReplaceAll/Apply) и REST-ветка GetStatesAsync. Замер p95 — консольный проект tests/Domovoy.Tests.LiveCheck (решение владельца по #11): режим latency гоняет фразы владельца через FastPathRunner против живого HA, режим reconnect печатает переходы статуса WebSocket и сверяет Snapshot своего кэша с GET /api/states после подъёма HA. Контрольный набор из 30+ фраз — тестовые данные, долю покрытия считает и печатает тест.",
     "rejected": [
       {
         "option": "Свой разбор подмножества YAML вместо YamlDotNet",
@@ -173,7 +188,7 @@
       },
       {
         "option": "При статусе не Connected — отказ ha_unavailable без REST",
-        "reason": "Окно до 20 с после подъёма HA и любой сбой одного WebSocket отказывали бы в чтении при живом REST. Фолбэк поглощает отказ: лежит HA целиком — REST падает и даёт тот же ha_unavailable."
+        "reason": "Окно до 30 с после готовности WebSocket HA и любой сбой одного WebSocket отказывали бы в чтении при живом REST. Фолбэк поглощает отказ: лежит HA целиком — REST падает и даёт тот же ha_unavailable."
       },
       {
         "option": "Бюджет 60 с через снижение потолка паузы ниже 60 с",
@@ -181,11 +196,35 @@
       },
       {
         "option": "Шаблоны media и vacuum в этом PR",
-        "reason": "Критерий #11 закрывают switch, read_value и set_value (13+ формулировок помимо двух названных); новый шаблон добавляется одним классом следующим PR. Каталог доменов остаётся полным: пример реестра обязан проходить валидацию."
+        "reason": "Критерий #11 закрывают switch, read_value и set_value (13+ формулировок помимо двух названных); новый шаблон добавляется одним классом следующим PR. Каталог покрывает все домены примера реестра: пример обязан проходить валидацию."
       },
       {
         "option": "Границы значения в SetValueTemplate",
         "reason": "Шаблон — не единственный вызывающий: call_service из #20 идёт в HaRestClient мимо роутера. Границы — в таблице каталога, проверка на входе в слой Ha, отказ invalid_value."
+      },
+      {
+        "option": "Убрать прикладной ping/pong (IdleBeforePing, PongTimeout) из этого PR (прагматик, совет круг 2)",
+        "reason": "В круге 1 инженер и скептик признали полуоткрытое соединение угрозой критерию #9 «не позже 60 с»: сокет без FIN держит Connected, воркер не переподключается и после подъёма HA, кэш отдаётся как актуальный; ClientWebSocket в .NET 8 ответа на ping сам не ждёт (риски)."
+      },
+      {
+        "option": "Урезать типизацию HaDomainCatalog до set_brightness и set_temperature (прагматик, совет круг 2)",
+        "reason": "HaRestClient.CallServiceAsync — единая точка входа и для call_service из #20, который придёт мимо роутера; значение действия без описания в каталоге уходило бы в HA непроверенным. Поэтому действие со значением без типа и границ в каталог не входит."
+      },
+      {
+        "option": "Двухфазность только по флагу requires_confirmation реестра",
+        "reason": "Правило 6 раздела «Безопасность» требует подтверждения для замков, сигнализации, ворот, газа безусловно; забытый владельцем флаг пропускал бы unlock одним POST. Флаг остаётся, но только добавляет подтверждение к пометке каталога."
+      },
+      {
+        "option": "Оставить cover в каталоге",
+        "reason": "Ворота и шторы — один домен cover, по реестру их не различить; в примере реестра cover нет. Домен вне каталога до #47."
+      },
+      {
+        "option": "Пауза при живом REST по общему экспоненциальному расписанию, прерывание только переходом «недоступен → отвечает»",
+        "reason": "REST HA отвечает раньше WebSocket при старте: преждевременная попытка проваливается, новых переходов нет, паузы 1, 2, 4 … 32 с выводят восстановление за 60 с (скептик, совет круг 2)."
+      },
+      {
+        "option": "Проба ha_websocket при Connecting/Reconnecting — NotConfigured или degraded, раз REST-фолбэк жив",
+        "reason": "0010:15 «Различия между компонентами нет», тонкое правило 0010 откладывает до NFR-COST-2 (0010:36); NotConfigured — «Секрет или адрес не заполнены» (ComponentHealth.cs:18), для настроенного HA неправда."
       }
     ]
   },
@@ -193,7 +232,7 @@
     "matches_request": "Да, с оговорками из журнала: статус соединения — в /api/v1/health, а не в анонимном /health (0002, решение владельца); фильтр allow-list проверяется на уровне кэша и GetStatesAsync, эндпоинт /state — #15; p95 и сценарий «HA остановлен на 5 минут» прогоняет владелец на живом стеке. Для чтения YAML нужна новая зависимость YamlDotNet: обоснование в #10 и ответ владельца до установки, запись решения 0031. Бюджет 60 с после подъёма HA (NFR-PERF-7) держится при потолке паузы 60 с (FR-HA-3) — прерыванием паузы, без правки HaOptions.",
     "alternative": "Реестр в JSON без новой зависимости: владелец увидел бы config/entities.example.json вместо .yaml — расхождение с буквой критерия #10 и ТЗ, запись решения и правку ci-heavy/README/.gitignore-проверок. Цена YamlDotNet — одна библиотека в закрытом наборе; тот же разборщик понадобится response-templates.yaml (#23) и proactive-rules.yaml (#31).",
     "ripple": "Греп по символам: IFastRouter — вызывающих нет; IEntityAllowList — только HaRestClient.cs:18 и регистрация; IHaEventSource — ProactivityWorker.cs:20,27,53 (выключен настройкой); ToolResult — вызывающих нет, новое поле ErrorCode необязательное; IHaClient.CallServiceAsync — реализатор один (HaRestClient.cs:42), вызывающих нет, переименование service → action никого не ломает; аргумент service инструмента call_service (#20, ТЗ таблица инструментов) сопоставляется с action — для всех действий каталога, кроме set_brightness и read, имя действия совпадает с сервисом HA; HaEntityState — конструирований нет, только сигнатуры (IContextFilter, ISystemPromptBuilder, IHaClient), required LastUpdated безопасен; IComponentProbe — ComponentsHealthCheck.cs:34 и HealthEndpointTests.cs:68 (RemoveAll подменяет все пробы, новая проба тест не ломает); CoreServiceCollectionExtensions — Program.cs:35. Наружу меняется /api/v1/health: добавляется поле components.ha_websocket (добавление, разрешено таблицей совместимости). Старт приложения начинает требовать валидный реестр: DomovoyApiFactory, ci-heavy (уже копирует пример), README. Другие подъёмы стека проверены грепом по ops, deploy, scripts: ops/backup/backup.test.sh и restore.sh монтируют тот же ./config, а ci-heavy копирует примеры перед ними (230–237); у владельца на целевой машине реальный config/entities.yaml обязан пройти новый валидатор — см. риски. Dockerfile и Domovoy.sln — из-за нового проекта Domovoy.Tests.LiveCheck.",
-    "workaround": "Нет. Отказ confirmation_required для сущностей с requires_confirmation — не костыль, а безопасное поведение до двухфазного подтверждения (#47): действие не выполняется вовсе.",
+    "workaround": "Нет. Отказ confirmation_required для изменяющих действий lock (по каталогу) и сущностей с requires_confirmation — не костыль, а безопасное поведение до двухфазного подтверждения (#47): действие не выполняется вовсе.",
     "council_signs": [
       "новая функциональность",
       "контракт API: в /api/v1/health добавляется поле components.ha_websocket",
@@ -226,9 +265,10 @@
           "src/Domovoy.Ha/Registry/EntityRegistryFileLoader.cs",
           "src/Domovoy.Ha/Registry/EntityRegistryValidator.cs",
           "src/Domovoy.Ha/ConfiguredEntityAllowList.cs",
-          "tests/Domovoy.Tests/Ha/EntityRegistryTests.cs"
+          "tests/Domovoy.Tests/Ha/EntityRegistryTests.cs",
+          "tests/Domovoy.Tests/Ha/HaDomainCatalogTests.cs"
         ],
-        "contract": "Только объявления, без логики. Core: public sealed record HaAreaDescriptor { required string Id; required string Name; required string Prepositional; string? Genitive }. IEntityAllowList получает IReadOnlyList<HaAreaDescriptor> Areas { get; } и HaAreaDescriptor? FindArea(string areaId) — прежние члены без изменений. ToolResult получает необязательное string? ErrorCode. public static class HaErrorCodes { EntityNotAllowed = \"entity_not_allowed\"; ActionNotAllowed = \"action_not_allowed\"; InvalidValue = \"invalid_value\"; ConfirmationRequired = \"confirmation_required\"; HaUnavailable = \"ha_unavailable\" } — те же строки идут в ApiError.Code. HaEntityState получает required DateTimeOffset LastUpdated (last_updated HA). public sealed class HaUnavailableException : Exception — сообщение без адреса, токена и текста исходного исключения (InnerException не логируется целиком); её бросает GetStatesAsync, когда REST недоступен. IHaClient.CallServiceAsync(string domain, string action, string entityId, string? value, CancellationToken) — параметр service переименован в action; XML-комментарий: «action — имя действия из реестра сущности (allow-list), а не сервис HA; сервис и поле значения слой Ha выводит по своему каталогу доменов — это и есть белый список сервисов раздела 4.3 ТЗ». Запись docs/decisions/0031-yamldotnet-entity-registry.md (контекст — YAML реестра по критерию #10 и ТЗ 5.1.3, решение — YamlDotNet, отвергнуто — свой разбор, JSON; следствие — тот же разборщик для #23, #31) и строка индекса в docs/decisions/README.md пишутся той же правкой, что PackageVersion, и только после ответа владельца на обоснование в #10; до ответа статуса «принято» нет. public sealed record FastRouteMatch { required string TemplateName; required string EntityId; required string Action; string? Value }; Action — имя действия из реестра (turn_on, read, set_temperature …). public interface IFastRouteTemplate { string Name { get; } FastRouteMatch? TryMatch(string normalizedText, IEntityAllowList allowList); } — normalizedText: нижний регистр, ё→е, без знаков препинания, одиночные пробелы. IFastRouter: FastRouteMatch? TryMatch(string text) вместо ToolCall?. public interface IFastPath { Task<FastPathOutcome> TryHandleAsync(string text, CancellationToken cancellationToken); }. public sealed record FastPathOutcome { bool Matched; FastRouteMatch? Match; ToolResult? Result; static FastPathOutcome NotMatched { get; } }. Directory.Packages.props: PackageVersion YamlDotNet — версия последней стабильной проверяется при установке, после опубликованного обоснования в #10. Domovoy.Ha.csproj: PackageReference YamlDotNet и Microsoft.Extensions.Hosting.Abstractions, InternalsVisibleTo Include=\"Domovoy.Tests\" и Include=\"Domovoy.Tests.LiveCheck\" (режиму reconnect нужен Snapshot кэша). Тот же срез — реестр (#10): правка порта IEntityAllowList и его единственного реализатора не разделяются, иначе соседи стартуют на красной сборке. internal static class HaDomainCatalog: закрытый перечень доменов с допустимыми действиями; bool IsKnownDomain(string domain), bool IsActionAllowed(string domain, string action), HaActionSpec? Resolve(string domain, string action) → record HaActionSpec(string Service, string? ValueField, HaValueKind Kind, decimal? Min, decimal? Max); read → null (действие только читает, в каждом домене). Таблица action → сервис [поле: тип, границы]; без поля — сервис того же имени без значения. light: turn_on, turn_off, toggle; set_brightness → turn_on [brightness_pct: целое 0..100]. switch: turn_on, turn_off, toggle. cover: open_cover, close_cover, stop_cover; set_cover_position → set_cover_position [position: целое 0..100]. media_player: turn_on, turn_off, media_play, media_pause, media_stop, media_next_track, media_previous_track, volume_up, volume_down; volume_set → volume_set [volume_level: целое 0..100 % → дробь 0..1]; volume_mute → volume_mute [is_volume_muted: bool true/false]; select_source → select_source [source: непустая строка до 100 символов, как есть]. vacuum: start, pause, stop, return_to_base, locate. climate: turn_on, turn_off; set_temperature → set_temperature [temperature: число 7..35 — умолчания HA climate DEFAULT_MIN_TEMP/DEFAULT_MAX_TEMP, сверить с исходником HA при реализации]. lock: lock, unlock. sensor, binary_sensor: только read. Значение разбирается InvariantCulture (запятая — как точка); значение у действия без поля, отсутствие значения у действия с полем, не тот тип или вне границ — отказ invalid_value. bool TryBuildPayload(HaActionSpec, string entityId, string? value, out JsonObject payload) собирает { entity_id, <ValueField>: типизированное значение } — HA строку вместо числа не приводит. internal sealed class EntityRegistryOptions { List<AreaEntry> Areas; List<EntityEntry> Entities; List<ScriptEntry> Scripts; string? LoadError } — поля 1:1 с ключами config/entities.example.yaml (snake_case через UnderscoredNamingConvention; незнакомый ключ — ошибка разбора). EntityRegistryFileLoader : IConfigureOptions<EntityRegistryOptions> читает файл по IOptions<HaOptions>.EntityRegistryPath, относительный путь — от IHostEnvironment.ContentRootPath; файл не найден или не разобран → LoadError с путём и причиной без содержимого файла. EntityRegistryValidator : IValidateOptions<EntityRegistryOptions> — Fail при LoadError, пустом обязательном поле (entity_id, name, area, domain, actions у сущности; id, name, cases.prepositional у комнаты; script_id, name у сценария), неизвестном домене, действии вне домена, префиксе entity_id ≠ domain + '.', area без записи в areas, повторе entity_id; сообщение называет entity_id и поле. ConfiguredEntityAllowList(IOptions<EntityRegistryOptions>) : IEntityAllowList — All/Find/IsActionAllowed/Areas/FindArea из Options, сравнение entity_id ordinal. Регистрацию в DI срез не пишет: её пишет wiring (AddOptions<EntityRegistryOptions>().ValidateOnStart(), IConfigureOptions и IValidateOptions — singleton). Тесты собирают классы напрямую через InternalsVisibleTo. Итог среза: dotnet build и dotnet test зелёные; от него параллельно стартуют ha-state и router.",
+        "contract": "Только объявления, без логики. Core: public sealed record HaAreaDescriptor { required string Id; required string Name; required string Prepositional; string? Genitive }. IEntityAllowList получает IReadOnlyList<HaAreaDescriptor> Areas { get; } и HaAreaDescriptor? FindArea(string areaId) — прежние члены без изменений. ToolResult получает необязательное string? ErrorCode и public const string DirectCallId = \"direct\" — единственное значение required ToolCallId (ToolResult.cs:6) для результата, построенного не из ToolCall модели: его ставят HaRestClient.CallServiceAsync и FastPathRunner; инструмент из #20 переставляет id своего вызова — result with { ToolCallId = call.Id }. public static class HaErrorCodes { EntityNotAllowed = \"entity_not_allowed\"; ActionNotAllowed = \"action_not_allowed\"; InvalidValue = \"invalid_value\"; ConfirmationRequired = \"confirmation_required\"; HaUnavailable = \"ha_unavailable\" } — те же строки идут в ApiError.Code. HaEntityState получает required DateTimeOffset LastUpdated (last_updated HA). public sealed class HaUnavailableException : Exception — сообщение без адреса, токена и текста исходного исключения (InnerException не логируется целиком); её бросает GetStatesAsync, когда REST недоступен. IHaClient.CallServiceAsync(string domain, string action, string entityId, string? value, CancellationToken) — параметр service переименован в action; XML-комментарий: «action — имя действия из реестра сущности (allow-list), а не сервис HA; сервис и поле значения слой Ha выводит по своему каталогу доменов — это и есть белый список сервисов раздела 4.3 ТЗ». Запись docs/decisions/0031-yamldotnet-entity-registry.md (контекст — YAML реестра по критерию #10 и ТЗ 5.1.3, решение — YamlDotNet, отвергнуто — свой разбор, JSON; следствие — тот же разборщик для #23, #31) и строка индекса в docs/decisions/README.md пишутся той же правкой, что PackageVersion, и только после ответа владельца на обоснование в #10; до ответа статуса «принято» нет. public sealed record FastRouteMatch { required string TemplateName; required string EntityId; required string Action; string? Value }; Action — имя действия из реестра (turn_on, read, set_temperature …). public interface IFastRouteTemplate { string Name { get; } FastRouteMatch? TryMatch(string normalizedText, IEntityAllowList allowList); } — normalizedText: нижний регистр, ё→е, без знаков препинания, одиночные пробелы. IFastRouter: FastRouteMatch? TryMatch(string text) вместо ToolCall?. public interface IFastPath { Task<FastPathOutcome> TryHandleAsync(string text, CancellationToken cancellationToken); }. public sealed record FastPathOutcome { bool Matched; FastRouteMatch? Match; ToolResult? Result; static FastPathOutcome NotMatched { get; } }. Directory.Packages.props: PackageVersion YamlDotNet — версия последней стабильной проверяется при установке, после опубликованного обоснования в #10. Domovoy.Ha.csproj: PackageReference YamlDotNet и Microsoft.Extensions.Hosting.Abstractions, InternalsVisibleTo Include=\"Domovoy.Tests\" и Include=\"Domovoy.Tests.LiveCheck\" (режиму reconnect нужен Snapshot кэша). Тот же срез — реестр (#10): правка порта IEntityAllowList и его единственного реализатора не разделяются, иначе соседи стартуют на красной сборке. internal static class HaDomainCatalog: закрытый перечень доменов с допустимыми действиями; bool IsKnownDomain(string domain), bool IsActionAllowed(string domain, string action), HaActionSpec? Resolve(string domain, string action) → record HaActionSpec(string Service, string? ValueField, HaValueKind Kind, decimal? Min, decimal? Max, int? MaxLength, bool RequiresConfirmation); read → null (действие только читает, в каждом домене). Инвариант: действие с полем значения без типа и границ (у числа — Min и Max, у строки — MaxLength) в каталог не входит. Подтверждение — правило 6 раздела «Безопасность» (замки, сигнализация, ворота, газ): RequiresConfirmation = true у всех изменяющих действий lock; домены alarm_control_panel и valve в каталог этого PR не входят, cover убран — неизвестный домен, отказ старта. Таблица action → сервис [поле: тип, границы]; без поля — сервис того же имени без значения. light: turn_on, turn_off, toggle; set_brightness → turn_on [brightness_pct: целое 0..100]. switch: turn_on, turn_off, toggle. media_player: turn_on, turn_off, media_play, media_pause, media_stop, media_next_track, media_previous_track, volume_up, volume_down; volume_set → volume_set [volume_level: целое 0..100 % → дробь 0..1]; volume_mute → volume_mute [is_volume_muted: bool true/false]; select_source → select_source [source: непустая строка до 100 символов, как есть]. vacuum: start, pause, stop, return_to_base, locate. climate: turn_on, turn_off; set_temperature → set_temperature [temperature: число 7..35 — умолчания HA climate DEFAULT_MIN_TEMP/DEFAULT_MAX_TEMP, сверить с исходником HA при реализации]. lock: lock, unlock — оба RequiresConfirmation. sensor, binary_sensor: только read. Значение разбирается InvariantCulture (запятая — как точка); значение у действия без поля, отсутствие значения у действия с полем, не тот тип или вне границ — отказ invalid_value. bool TryBuildPayload(HaActionSpec, string entityId, string? value, out JsonObject payload) собирает { entity_id, <ValueField>: типизированное значение } — HA строку вместо числа не приводит. internal sealed class EntityRegistryOptions { List<AreaEntry> Areas; List<EntityEntry> Entities; List<ScriptEntry> Scripts; string? LoadError } — поля 1:1 с ключами config/entities.example.yaml (snake_case через UnderscoredNamingConvention; незнакомый ключ — ошибка разбора). EntityRegistryFileLoader : IConfigureOptions<EntityRegistryOptions> читает файл по IOptions<HaOptions>.EntityRegistryPath, относительный путь — от IHostEnvironment.ContentRootPath; файл не найден или не разобран → LoadError с путём и причиной без содержимого файла. EntityRegistryValidator : IValidateOptions<EntityRegistryOptions> — Fail при LoadError, пустом обязательном поле (entity_id, name, area, domain, actions у сущности; id, name, cases.prepositional у комнаты; script_id, name у сценария), неизвестном домене, действии вне домена, префиксе entity_id ≠ domain + '.', area без записи в areas, повторе entity_id; сообщение называет entity_id и поле. ConfiguredEntityAllowList(IOptions<EntityRegistryOptions>) : IEntityAllowList — All/Find/IsActionAllowed/Areas/FindArea из Options, сравнение entity_id ordinal. Регистрацию в DI срез не пишет: её пишет wiring (AddOptions<EntityRegistryOptions>().ValidateOnStart(), IConfigureOptions и IValidateOptions — singleton). Тесты собирают классы напрямую через InternalsVisibleTo; HaDomainCatalogTests проверяют пометку чувствительных доменов и полноту описания значений. Итог среза: dotnet build и dotnet test зелёные; от него параллельно стартуют ha-state и router.",
         "after": []
       },
       {
@@ -247,9 +287,10 @@
           "tests/Domovoy.Tests/Ha/CapturingLoggerProvider.cs",
           "tests/Domovoy.Tests/Ha/ReconnectBackoffTests.cs",
           "tests/Domovoy.Tests/Ha/HaStateCacheTests.cs",
-          "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs"
+          "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs",
+          "tests/Domovoy.Tests/Ha/HaWebSocketProbeTests.cs"
         ],
-        "contract": "internal sealed class HaStateCache(IEntityAllowList) — singleton: void ReplaceAll(IEnumerable<HaEntityState>) (атомарная замена, сущности вне списка отброшены, исчезнувшие удалены), bool Apply(HaStateChange) (false — сущность вне списка или Current.LastUpdated строго меньше, чем у записи; равная метка применяется; new_state = null удаляет запись и возвращает false — подписчикам не уходит), HaEntityState? Find(string entityId), IReadOnlyList<HaEntityState> Snapshot(). Признака IsPrimed нет: актуальность кэша выражает только HaConnectionState.Status == Connected. internal static class ReconnectBackoff { TimeSpan Delay(int attempt, int maxDelaySeconds) } — attempt с 0: 1, 2, 4 … с, не больше maxDelaySeconds. internal interface IReconnectDelay { Task WaitAsync(TimeSpan delay, CancellationToken ct); } и internal sealed class SystemReconnectDelay (Task.Delay); ожидание паузы отменяемо — им пользуется прерывание паузы. internal sealed record HaWebSocketTimings { HandshakeTimeout = 10 с (connect + auth_required + auth_ok + результат subscribe_events + результат get_states — один крайний срок); IdleBeforePing = 20 с; PongTimeout = 10 с; ReadinessPollInterval = 5 с; ReadinessPollTimeout = 5 с } — singleton, не параметр HaOptions; тесты подменяют значения на миллисекунды. internal enum HaConnectionStatus { NotConfigured, Connecting, Connected, Reconnecting, AuthRejected }; internal sealed class HaConnectionState — singleton, Status и время последней смены, потокобезопасно. HaWebSocketWorker : BackgroundService (IOptions<HaOptions>, HaStateCache, HaConnectionState, HaEventSource, IReconnectDelay, HaWebSocketTimings, IHttpClientFactory, ILogger): токен не задан (HaOptions.IsConfigured=false) — NotConfigured и выход; иначе цикл: Connecting → рукопожатие под HandshakeTimeout → ReplaceAll → Connected, счётчик попыток = 0 → приём; тишина IdleBeforePing — кадр {id, type: ping}; ни одного кадра за PongTimeout после ping — обрыв; закрытие, ошибка сокета, истёкший срок — обрыв: статус Reconnecting сразу, затем пауза ReconnectBackoff.Delay. Во время паузы — опрос GET api/ клиентом «ha-probe» раз в ReadinessPollInterval с таймаутом ReadinessPollTimeout; ответ — любой HTTP-ответ, включая 401 и 5xx (HTTP-сервер HA жив, как в healthcheck 0029), недоступность — нет соединения или истёк таймаут; опрос видел недоступность, а следующий — ответ: пауза прерывается, счётчик = 0, попытка сразу. Бюджет после подъёма HA: ReadinessPollInterval + ReadinessPollTimeout + HandshakeTimeout = 20 с ≤ 60 с. auth_invalid — AuthRejected и пауза по расписанию без прерывания. Любое исключение кроме отмены перехватывается, хост не падает. Атрибуты события и get_states приводятся к строке: string — как есть; number, true/false, object, array — JsonElement.GetRawText(); null — ключ пропускается; правило живёт в internal static HaEntityState HaWebSocketProtocol.ParseState(JsonElement) — объект состояния HA один для WebSocket и REST, ha-rest его переиспользует. HaEventSource : IHaEventSource — singleton-раздатчик: internal void Publish(HaStateChange) вызывается только при Apply == true и пишет в BoundedChannel каждого активного подписчика (ёмкость 256, FullMode = DropOldest), SubscribeAsync отдаёт поток до отмены и при обрыве не завершается. HaWebSocketProbe : IComponentProbe, ComponentName = \"ha_websocket\": Connected → Ok «соединение установлено», NotConfigured → NotConfigured, Connecting/Reconnecting → Unreachable «переподключение», AuthRejected → Error «токен отклонён»; описания без адресов и токена. FakeHomeAssistant (тестовый помощник, Kestrel на 127.0.0.1:0): BaseUrl; сценарий WebSocket — принять или отклонить токен, отдать состояния на get_states, протолкнуть state_changed, ответить или не ответить pong, замолчать с открытым сокетом, оборвать соединение; REST включается и выключается отдельно от WebSocket; счётчики auth/subscribe_events/get_states; REST GET /api/states и POST /api/services/{domain}/{service} с записью запросов (метод, путь, тело, наличие Authorization) — REST-часть потребляют ha-rest и wiring. CapturingLoggerProvider — ILoggerProvider, копит отрендеренные сообщения, исключения и свойства. Регистрацию в DI пишет wiring: HaStateCache, HaConnectionState, HaWebSocketTimings, HaEventSource (и как IHaEventSource на тот же экземпляр), IReconnectDelay → SystemReconnectDelay — singleton; AddHostedService<HaWebSocketWorker>; IComponentProbe → HaWebSocketProbe.",
+        "contract": "internal sealed class HaStateCache(IEntityAllowList) — singleton: void ReplaceAll(IEnumerable<HaEntityState>) (атомарная замена, сущности вне списка отброшены, исчезнувшие удалены), bool Apply(HaStateChange) (false — сущность вне списка или Current.LastUpdated строго меньше, чем у записи; равная метка применяется; new_state = null удаляет запись и возвращает false — подписчикам не уходит), HaEntityState? Find(string entityId), IReadOnlyList<HaEntityState> Snapshot(). Признака IsPrimed нет: актуальность кэша выражает только HaConnectionState.Status == Connected. internal static class ReconnectBackoff { TimeSpan Delay(int attempt, int maxDelaySeconds) } — attempt с 0: 1, 2, 4 … с, не больше maxDelaySeconds. internal interface IReconnectDelay { Task WaitAsync(TimeSpan delay, CancellationToken ct); } и internal sealed class SystemReconnectDelay (Task.Delay); ожидание паузы отменяемо — им пользуется прерывание паузы. internal sealed record HaWebSocketTimings { HandshakeTimeout = 10 с (connect + auth_required + auth_ok + результат subscribe_events + результат get_states — один крайний срок); IdleBeforePing = 20 с; PongTimeout = 10 с; ReadinessPollInterval = 5 с; ReadinessPollTimeout = 5 с } — singleton, не параметр HaOptions; тесты подменяют значения на миллисекунды. internal enum HaConnectionStatus { NotConfigured, Connecting, Connected, Reconnecting, AuthRejected }; internal sealed class HaConnectionState — singleton, Status и время последней смены, потокобезопасно. HaWebSocketWorker : BackgroundService (IOptions<HaOptions>, HaStateCache, HaConnectionState, HaEventSource, IReconnectDelay, HaWebSocketTimings, IHttpClientFactory, ILogger): токен не задан (HaOptions.IsConfigured=false) — NotConfigured и выход; иначе цикл: Connecting → рукопожатие под HandshakeTimeout → ReplaceAll → Connected, счётчик попыток = 0 → приём; тишина IdleBeforePing — кадр {id, type: ping}; ни одного кадра за PongTimeout после ping — обрыв; закрытие, ошибка сокета, истёкший срок — обрыв: статус Reconnecting сразу, затем пауза ReconnectBackoff.Delay. Во время паузы — опрос GET api/ клиентом «ha-probe» через ReadinessPollInterval, 2×ReadinessPollInterval … от начала паузы, каждый с таймаутом ReadinessPollTimeout; ответ — любой HTTP-ответ, включая 401 и 5xx (HTTP-сервер HA жив, как в healthcheck 0029), недоступность — нет соединения или истёк таймаут. Первый ответивший опрос заканчивает паузу, попытка сразу; пауза короче ReadinessPollInterval кончается по расписанию. Счётчик попыток сбрасывает только Connected, но при живом REST пауза от него не зависит: не больше ReadinessPollInterval + ReadinessPollTimeout. Рост паузы до потолка — только пока REST не отвечает. Бюджет от готовности WebSocket HA, в том числе когда REST поднялся раньше: HandshakeTimeout (попытка в полёте) + ReadinessPollInterval + ReadinessPollTimeout (пауза) + HandshakeTimeout (успешная попытка) = 30 с ≤ 60 с. auth_invalid — AuthRejected и пауза строго по ReconnectBackoff: опроса нет, предел ReadinessPollInterval на неё не распространяется — HA может считать неудачные входы (ip_ban; сверить с исходником HA при реализации). Любое исключение кроме отмены перехватывается, хост не падает. Атрибуты события и get_states приводятся к строке: string — как есть; number, true/false, object, array — JsonElement.GetRawText(); null — ключ пропускается; правило живёт в internal static HaEntityState HaWebSocketProtocol.ParseState(JsonElement) — объект состояния HA один для WebSocket и REST, ha-rest его переиспользует. HaEventSource : IHaEventSource — singleton-раздатчик: internal void Publish(HaStateChange) вызывается только при Apply == true и пишет в BoundedChannel каждого активного подписчика (ёмкость 256, FullMode = DropOldest), SubscribeAsync отдаёт поток до отмены и при обрыве не завершается. HaWebSocketProbe : IComponentProbe, ComponentName = \"ha_websocket\": Connected → Ok «соединение установлено», NotConfigured → NotConfigured, Connecting/Reconnecting → Unreachable «переподключение» (и при живом REST: по 0010:13 и 0010:15 это unhealthy, 503 анонимного /health — решение плана, риски), AuthRejected → Error «токен отклонён»; описания без адресов и токена. FakeHomeAssistant (тестовый помощник, Kestrel на 127.0.0.1:0): BaseUrl; сценарий WebSocket — принять или отклонить токен, отдать состояния на get_states, протолкнуть state_changed, ответить или не ответить pong, замолчать с открытым сокетом, оборвать соединение; REST включается и выключается отдельно от WebSocket, WebSocket может отказывать в апгрейде при живом REST; счётчики auth/subscribe_events/get_states; REST GET /api/states и POST /api/services/{domain}/{service} с записью запросов (метод, путь, тело, наличие Authorization) — REST-часть потребляют ha-rest и wiring. CapturingLoggerProvider — ILoggerProvider, копит отрендеренные сообщения, исключения и свойства. Регистрацию в DI пишет wiring: HaStateCache, HaConnectionState, HaWebSocketTimings, HaEventSource (и как IHaEventSource на тот же экземпляр), IReconnectDelay → SystemReconnectDelay — singleton; AddHostedService<HaWebSocketWorker>; IComponentProbe → HaWebSocketProbe.",
         "after": [
           "foundation"
         ]
@@ -270,7 +311,7 @@
           "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
           "tests/Domovoy.Tests/Routing/FastRouterControlSetTests.cs"
         ],
-        "contract": "Core, без ссылок на периферию. PhraseNormalizer.Normalize(string) — правило нормализации из контракта foundation. EntityResolver — разрешение «устройство + комната» в HaEntityDescriptor через IEntityAllowList.All и Areas (имя или его основа + падеж prepositional/genitive); неоднозначность — нет совпадения. public sealed class FastRouter(IEnumerable<IFastRouteTemplate>, IEntityAllowList) : IFastRouter — первый непустой результат по порядку регистрации; конкретных типов шаблонов не упоминает. PhraseNormalizer, EntityResolver и шаблоны — internal sealed (InternalsVisibleTo в Core не нужен: тесты берут роутер из DI, а FastRouter — по публичному типу); шаблонов три, Name — стабильная строка: switch (включи/выключи/зажги/погаси/отключи … → turn_on/turn_off), read_value (какая температура/влажность в …, сколько градусов в …, открыто ли окно …, есть ли протечка … → read), set_value (поставь … градусов, сделай/убавь свет … на N процентов → set_temperature/set_brightness с Value — число из фразы как есть, границы проверяет слой Ha). Шаблонов media и vacuum нет: их фразы — NotMatched, уходят в LLM-путь. Формулировки вне двух названных в критерии параметрических шаблонов («включи/выключи <устройство> в <комната>», «какая температура в <комната>»; подстановка другого устройства или комнаты в них формулировкой не считается), каждая — другой глагол или другая конструкция, действие есть у сущности примера: 1 переключи свет на кухне (toggle), 2 зажги свет на кухне, 3 погаси свет в гостиной, 4 отключи свет на кухне, 5 вруби свет в гостиной, 6 выруби кондиционер в спальне, 7 какая влажность в спальне, 8 сколько градусов в спальне, 9 открыто ли окно на кухне, 10 есть ли протечка на кухне, 11 поставь 22 градуса в спальне, 12 сделай свет на кухне на 40 процентов, 13 убавь свет в гостиной до 30 процентов. Шаблон возвращает совпадение, только если действие есть в AllowedActions сущности (разрешение имени, не проверка безопасности). public sealed class FastPathRunner(IFastRouter, IHaClient) : IFastPath — нет совпадения → FastPathOutcome.NotMatched без вызова IHaClient; Action «read» → GetStatesAsync(area: null, domain: descriptor.Domain) и выбор по EntityId, HaUnavailableException → Result { Success=false, ErrorCode=ha_unavailable }; иначе CallServiceAsync(descriptor.Domain, action: Action, EntityId, Value). Зависимостей от ILlmProvider нет. CoreServiceCollectionExtensions.AddDomovoyCore: AddSingleton<IFastRouter, FastRouter>, AddSingleton<IFastRouteTemplate, …> по строке на шаблон, AddSingleton<IFastPath, FastPathRunner>. fast-router-control-set.json: массив { phrase, expected: { entity_id, action, value } | null }, не меньше 30 фраз по вымышленной квартире из config/entities.example.yaml, в том числе не меньше 8 правдоподобных фраз с expected=null. ExampleApartment — тестовый IEntityAllowList с теми же сущностями и комнатами, что пример.",
+        "contract": "Core, без ссылок на периферию. PhraseNormalizer.Normalize(string) — правило нормализации из контракта foundation. EntityResolver — разрешение «устройство + комната» в HaEntityDescriptor через IEntityAllowList.All и Areas (имя или его основа + падеж prepositional/genitive); неоднозначность — нет совпадения. public sealed class FastRouter(IEnumerable<IFastRouteTemplate>, IEntityAllowList) : IFastRouter — первый непустой результат по порядку регистрации; конкретных типов шаблонов не упоминает. PhraseNormalizer, EntityResolver и шаблоны — internal sealed (InternalsVisibleTo в Core не нужен: тесты берут роутер из DI, а FastRouter — по публичному типу); шаблонов три, Name — стабильная строка: switch (включи/выключи/зажги/погаси/отключи … → turn_on/turn_off), read_value (какая температура/влажность в …, сколько градусов в …, открыто ли окно …, есть ли протечка … → read), set_value (поставь … градусов, сделай/убавь свет … на N процентов → set_temperature/set_brightness с Value — число из фразы как есть, границы проверяет слой Ha). Шаблонов media и vacuum нет: их фразы — NotMatched, уходят в LLM-путь. Формулировки вне двух названных в критерии параметрических шаблонов («включи/выключи <устройство> в <комната>», «какая температура в <комната>»; подстановка другого устройства или комнаты в них формулировкой не считается), каждая — другой глагол или другая конструкция, действие есть у сущности примера: 1 переключи свет на кухне (toggle), 2 зажги свет на кухне, 3 погаси свет в гостиной, 4 отключи свет на кухне, 5 вруби свет в гостиной, 6 выруби кондиционер в спальне, 7 какая влажность в спальне, 8 сколько градусов в спальне, 9 открыто ли окно на кухне, 10 есть ли протечка на кухне, 11 поставь 22 градуса в спальне, 12 сделай свет на кухне на 40 процентов, 13 убавь свет в гостиной до 30 процентов. Шаблон возвращает совпадение, только если действие есть в AllowedActions сущности (разрешение имени, не проверка безопасности). public sealed class FastPathRunner(IFastRouter, IHaClient) : IFastPath — нет совпадения → FastPathOutcome.NotMatched без вызова IHaClient; Action «read» → GetStatesAsync(area: null, domain: descriptor.Domain) и выбор по EntityId, HaUnavailableException → Result { ToolCallId=ToolResult.DirectCallId, Success=false, ErrorCode=ha_unavailable }; иначе CallServiceAsync(descriptor.Domain, action: Action, EntityId, Value), результат — как есть (ToolCallId уже DirectCallId). Зависимостей от ILlmProvider нет. CoreServiceCollectionExtensions.AddDomovoyCore: AddSingleton<IFastRouter, FastRouter>, AddSingleton<IFastRouteTemplate, …> по строке на шаблон, AddSingleton<IFastPath, FastPathRunner>. fast-router-control-set.json: массив { phrase, expected: { entity_id, action, value } | null }, не меньше 30 фраз по вымышленной квартире из config/entities.example.yaml, в том числе не меньше 8 правдоподобных фраз с expected=null. ExampleApartment — тестовый IEntityAllowList с теми же сущностями и комнатами, что пример.",
         "after": [
           "foundation"
         ]
@@ -281,7 +322,7 @@
           "src/Domovoy.Ha/HaRestClient.cs",
           "tests/Domovoy.Tests/Ha/HaRestClientTests.cs"
         ],
-        "contract": "HaRestClient(HttpClient, IEntityAllowList, HaStateCache, HaConnectionState, IOptions<HaOptions>, ILogger) : IHaClient. GetStatesAsync(area, domain): Status == Connected — Snapshot кэша с фильтром по descriptor.Area/Domain; любой другой статус — GET api/states с Bearer, ответ отфильтрован по allow-list, каждое состояние разобрано HaWebSocketProtocol.ParseState; сетевая ошибка, таймаут или не-2xx — HaUnavailableException; в обоих случаях сущностей вне списка нет. CallServiceAsync(domain, action, entityId, value) — до любого HTTP: allowList.Find(entityId) = null → { Success=false, ErrorCode=entity_not_allowed }; domain ≠ descriptor.Domain или !IsActionAllowed → action_not_allowed; действие «read» — action_not_allowed (чтение идёт через GetStatesAsync); HaDomainCatalog.TryBuildPayload отказал → invalid_value; descriptor.RequiresConfirmation → { Success=false, RequiresConfirmation=true, ErrorCode=confirmation_required }; иначе POST api/services/{domain}/{spec.Service} с собранным телом; сетевая ошибка или не-2xx → ha_unavailable. Сообщения Error — без адресов, токена и текста исключения. GetHistoryAsync и RunScriptAsync остаются заглушками этапа 2.",
+        "contract": "HaRestClient(HttpClient, IEntityAllowList, HaStateCache, HaConnectionState, IOptions<HaOptions>, ILogger) : IHaClient. GetStatesAsync(area, domain): Status == Connected — Snapshot кэша с фильтром по descriptor.Area/Domain; любой другой статус — GET api/states с Bearer, ответ отфильтрован по allow-list, каждое состояние разобрано HaWebSocketProtocol.ParseState; сетевая ошибка, таймаут или не-2xx — HaUnavailableException; в обоих случаях сущностей вне списка нет. CallServiceAsync(domain, action, entityId, value) — до любого HTTP: allowList.Find(entityId) = null → { Success=false, ErrorCode=entity_not_allowed }; domain ≠ descriptor.Domain или !IsActionAllowed → action_not_allowed; действие «read» — action_not_allowed (чтение идёт через GetStatesAsync); HaDomainCatalog.TryBuildPayload отказал → invalid_value; spec.RequiresConfirmation (каталог, независимо от реестра) || descriptor.RequiresConfirmation → { Success=false, RequiresConfirmation=true, ErrorCode=confirmation_required } — флаг реестра подтверждение только добавляет; иначе POST api/services/{domain}/{spec.Service} с собранным телом; сетевая ошибка или не-2xx → ha_unavailable. Каждый ToolResult — ToolCallId = ToolResult.DirectCallId. Сообщения Error — без адресов, токена и текста исключения. GetHistoryAsync и RunScriptAsync остаются заглушками этапа 2.",
         "after": [
           "foundation",
           "ha-state"
@@ -337,7 +378,7 @@
     {
       "path": "src/Domovoy.Core/Models/ToolResult.cs",
       "action": "modify",
-      "why": "Необязательный ErrorCode — машиночитаемый код отказа единого формата."
+      "why": "Необязательный ErrorCode — машиночитаемый код отказа единого формата; константа DirectCallId — ToolCallId результата без ToolCall модели."
     },
     {
       "path": "src/Domovoy.Core/Models/HaErrorCodes.cs",
@@ -372,7 +413,7 @@
     {
       "path": "src/Domovoy.Ha/WebSocket/HaWebSocketTimings.cs",
       "action": "create",
-      "why": "Внутренние сроки рукопожатия, ping/pong и опроса готовности: бюджет 60 с и полуоткрытое соединение; тесты подменяют их без новых параметров HaOptions."
+      "why": "Внутренние сроки рукопожатия, ping/pong и опроса REST во время паузы: бюджет 60 с и полуоткрытое соединение; тесты подменяют их без новых параметров HaOptions."
     },
     {
       "path": "src/Domovoy.Core/Models/FastRouteMatch.cs",
@@ -402,7 +443,7 @@
     {
       "path": "src/Domovoy.Ha/Registry/HaDomainCatalog.cs",
       "action": "create",
-      "why": "Закрытый перечень доменов HA и действий по домену — решение владельца по #10."
+      "why": "Закрытый перечень доменов HA и действий по домену — решение владельца по #10; пометка действий, требующих подтверждения (правило 6 раздела «Безопасность»)."
     },
     {
       "path": "src/Domovoy.Ha/Registry/EntityRegistryOptions.cs",
@@ -520,6 +561,11 @@
       "why": "Загрузка примера и отказы валидатора."
     },
     {
+      "path": "tests/Domovoy.Tests/Ha/HaDomainCatalogTests.cs",
+      "action": "create",
+      "why": "Пометка подтверждения у чувствительных доменов и полнота описания значений — инварианты каталога."
+    },
+    {
       "path": "tests/Domovoy.Tests/Ha/FakeHomeAssistant.cs",
       "action": "create",
       "why": "Фейковый HA на Kestrel loopback: WebSocket и REST."
@@ -543,6 +589,11 @@
       "path": "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs",
       "action": "create",
       "why": "Подписка, кэш, реконнект, перечитка, токен в логах."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Ha/HaWebSocketProbeTests.cs",
+      "action": "create",
+      "why": "Отображение статуса соединения в состояние пробы ha_websocket по 0010."
     },
     {
       "path": "tests/Domovoy.Tests/Ha/HaRestClientTests.cs",
@@ -654,7 +705,7 @@
         "9-backoff",
         "9-outage"
       ],
-      "behavior": "Фейковый HA рвёт соединение несколько раз подряд, его REST отвечает всё время (пауза не прерывается); записывающий IReconnectDelay получает последовательность 1, 2, 4 … с, не больше ReconnectMaxDelaySeconds; после Connected и нового обрыва последовательность начинается снова с 1 с."
+      "behavior": "Фейковый HA рвёт соединение несколько раз подряд, его REST выключен (рост паузы — только при недоступном REST); записывающий IReconnectDelay получает последовательность 1, 2, 4 … с, не больше ReconnectMaxDelaySeconds; после Connected и нового обрыва последовательность начинается снова с 1 с."
     },
     {
       "name": "WorkerTreatsSilentConnectionAsBreak",
@@ -676,13 +727,31 @@
       "behavior": "Фейк принимает WebSocket, но не шлёт auth_required (второй случай — не отвечает на get_states): попытка обрывается по HandshakeTimeout, статус не Connected, пауза записана, следующая попытка идёт."
     },
     {
+      "name": "RejectedTokenPauseIgnoresLiveRest",
+      "file": "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs",
+      "new": true,
+      "covers": [
+        "9-backoff"
+      ],
+      "behavior": "REST фейка отвечает, WebSocket отвечает auth_invalid, IReconnectDelay записывает паузу и ждёт только отмены: статус AuthRejected, записана пауза Delay(0) = 1 с, и за 3×(ReadinessPollInterval + ReadinessPollTimeout) фейк не получил второго auth. Реализация, обрывающая опросом и паузу после auth_invalid, шлёт второй auth — тест падает."
+    },
+    {
       "name": "PauseIsCutShortWhenHaComesBack",
       "file": "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs",
       "new": true,
       "covers": [
         "9-outage"
       ],
-      "behavior": "IReconnectDelay, который сам не завершается, а ждёт только отмены (пауза «бесконечна»). Фейк лежит целиком (REST и WebSocket), затем поднимается: воркер достигает Connected не позже ReadinessPollInterval + ReadinessPollTimeout + HandshakeTimeout + запас. Без прерывания паузы тест висит до таймаута и падает. Второй случай: REST отвечает с начала паузы — пауза не прерывается, опросов не больше расписания."
+      "behavior": "IReconnectDelay, который сам не завершается, а ждёт только отмены (пауза «бесконечна»). Фейк лежит целиком (REST и WebSocket), затем поднимается: воркер достигает Connected не позже ReadinessPollInterval + ReadinessPollTimeout + HandshakeTimeout + запас. Без прерывания паузы тест висит до таймаута и падает. Второй случай: REST отвечает с начала паузы, WebSocket рвётся — каждая пауза кончается первым опросом, не раньше ReadinessPollInterval и не позже ReadinessPollInterval + ReadinessPollTimeout + запас; опросы не чаще ReadinessPollInterval."
+    },
+    {
+      "name": "RestUpBeforeWebSocketStillConnectsWithinBudget",
+      "file": "tests/Domovoy.Tests/Ha/HaWebSocketWorkerTests.cs",
+      "new": true,
+      "covers": [
+        "9-outage"
+      ],
+      "behavior": "Сроки HaWebSocketTimings в миллисекундах, IReconnectDelay ждёт только отмены. REST фейка отвечает с начала, WebSocket отказывает в апгрейде ещё 6×ReadinessPollInterval (аналог 25–30 с при интервале 5 с), затем принимает: воркер успел сделать не меньше трёх попыток за окно отказа и достиг Connected не позже 2×HandshakeTimeout + ReadinessPollInterval + ReadinessPollTimeout + запас после готовности WebSocket. На старом правиле (живой с начала паузы REST паузу не обрывает, пауза растёт 8, 16, 32 …) первая же пауза не кончается и бюджет превышен — тест падает."
     },
     {
       "name": "WorkerSubscribesToStateChangedAndPrimesCache",
@@ -784,6 +853,15 @@
       "behavior": "GET /api/v1/health под тестовой аутентификацией: components.ha_websocket есть отдельно от ha, на конфигурации примера state = not_configured, description непуст."
     },
     {
+      "name": "WebSocketProbeMapsConnectionStatus",
+      "file": "tests/Domovoy.Tests/Ha/HaWebSocketProbeTests.cs",
+      "new": true,
+      "covers": [
+        "9-health"
+      ],
+      "behavior": "Theory по HaConnectionStatus: Connected → Ok, NotConfigured → NotConfigured, Connecting и Reconnecting → Unreachable, AuthRejected → Error; описание без адреса и токена. Отображение Reconnecting в NotConfigured или Ok (тихий 200 при упавшем WebSocket вопреки 0010) роняет тест."
+    },
+    {
       "name": "LivenessDoesNotExposeComponents",
       "file": "tests/Domovoy.Tests/HealthEndpointTests.cs",
       "new": false,
@@ -808,7 +886,25 @@
       "covers": [
         "10-validate"
       ],
-      "behavior": "Theory по испорченным копиям примера: неизвестный домен, действие чужого домена, пропущенные name/area/domain/actions, префикс entity_id не равен domain, комната без записи в areas, повтор entity_id, отсутствующий файл. Каждый случай — Fail с entity_id и полем в сообщении."
+      "behavior": "Theory по испорченным копиям примера: неизвестный домен — cover (вне каталога до #47) и alarm_control_panel, действие чужого домена, пропущенные name/area/domain/actions, префикс entity_id не равен domain, комната без записи в areas, повтор entity_id, отсутствующий файл. Каждый случай — Fail с entity_id и полем в сообщении."
+    },
+    {
+      "name": "SensitiveDomainActionsRequireConfirmation",
+      "file": "tests/Domovoy.Tests/Ha/HaDomainCatalogTests.cs",
+      "new": true,
+      "covers": [
+        "10-filter"
+      ],
+      "behavior": "Theory по доменам lock, alarm_control_panel, valve, cover: домена нет в каталоге, или каждое его действие, кроме read, — RequiresConfirmation = true. Сейчас lock — lock и unlock с пометкой, остальных трёх нет. Снятая с unlock пометка или домен alarm_control_panel либо cover, добавленный без пометки, роняют тест."
+    },
+    {
+      "name": "CatalogValueActionsAreFullyDescribed",
+      "file": "tests/Domovoy.Tests/Ha/HaDomainCatalogTests.cs",
+      "new": true,
+      "covers": [
+        "11-template"
+      ],
+      "behavior": "Для каждого действия каталога: с ValueField — Kind задан, у числового Min и Max, у строки MaxLength; без ValueField — Kind None и границ нет. Действие со значением без описания роняет тест."
     },
     {
       "name": "HostRefusesToStartOnInvalidRegistry",
@@ -856,13 +952,22 @@
       "behavior": "Действие вне actions сущности — action_not_allowed; домен аргумента не равен домену сущности — action_not_allowed; сущность с requires_confirmation (замок примера) — RequiresConfirmation=true и confirmation_required. Ни одного запроса к фейку."
     },
     {
+      "name": "LockActionRequiresConfirmationWithoutRegistryFlag",
+      "file": "tests/Domovoy.Tests/Ha/HaRestClientTests.cs",
+      "new": true,
+      "covers": [
+        "10-filter"
+      ],
+      "behavior": "Тестовый allow-list: сущность lock с actions [lock, unlock] без requires_confirmation. CallServiceAsync unlock и lock: Success=false, RequiresConfirmation=true, ErrorCode=confirmation_required, ToolCallId = ToolResult.DirectCallId; фейк HA не получил ни одного запроса. Реализация, читающая только флаг реестра, отправляет POST — тест падает."
+    },
+    {
       "name": "CallServiceSendsMappedServiceForAllowedAction",
       "file": "tests/Domovoy.Tests/Ha/HaRestClientTests.cs",
       "new": true,
       "covers": [
         "11-template"
       ],
-      "behavior": "Theory по всей таблице action → сервис HaDomainCatalog, строка на каждое действие с сервисом каждого домена (тестовый allow-list содержит сущность на домен): путь POST api/services/{domain}/{service}, Bearer и типизированное тело — например set_brightness 40 → light/turn_on с brightness_pct числом 40, volume_set 30 → volume_level 0.3, volume_mute true → is_volume_muted булевым, select_source → source строкой, set_temperature 22.5 → temperature 22.5. Не-2xx фейка — ha_unavailable."
+      "behavior": "Theory по всей таблице action → сервис HaDomainCatalog, строка на каждое действие каталога без RequiresConfirmation (тестовый allow-list содержит сущность на домен): путь POST api/services/{domain}/{service}, Bearer и типизированное тело — например set_brightness 40 → light/turn_on с brightness_pct числом 40, volume_set 30 → volume_level 0.3, volume_mute true → is_volume_muted булевым, select_source → source строкой, set_temperature 22.5 → temperature 22.5. ToolCallId = ToolResult.DirectCallId. Не-2xx фейка — ha_unavailable."
     },
     {
       "name": "CallServiceRejectsInvalidValueWithoutCallingHa",
@@ -881,7 +986,7 @@
         "11-template",
         "9-outage"
       ],
-      "behavior": "Реальная регистрация DI с фейковым HA: «поставь 400 градусов в спальне» — ErrorCode=invalid_value, фейк без запросов; «какая влажность в спальне» при статусе не Connected и выключенном REST фейка — ErrorCode=ha_unavailable без исключения наружу."
+      "behavior": "Реальная регистрация DI с фейковым HA: «поставь 400 градусов в спальне» — ErrorCode=invalid_value, фейк без запросов; «какая влажность в спальне» при статусе не Connected и выключенном REST фейка — ErrorCode=ha_unavailable без исключения наружу; ToolCallId у обоих — ToolResult.DirectCallId."
     },
     {
       "name": "EveryExampleHasIgnoredCounterpart",
@@ -976,19 +1081,19 @@
     {
       "id": "9-backoff",
       "criterion": "#9: при обрыве переподключается с экспоненциальной задержкой с потолком 60 с.",
-      "method": "dotnet test --filter \"FullyQualifiedName~ReconnectBackoffTests|FullyQualifiedName~WorkerReconnectsWithBackoffAndResetsAfterSuccess|FullyQualifiedName~WorkerTreatsSilentConnectionAsBreak|FullyQualifiedName~WorkerAbortsHungHandshake\" — зелёный.",
-      "evidence": "Пройденные ReconnectDelayDoublesUpToCeiling, WorkerReconnectsWithBackoffAndResetsAfterSuccess, WorkerTreatsSilentConnectionAsBreak, WorkerAbortsHungHandshake в выводе; потолок паузы — HaOptions.ReconnectMaxDelaySeconds с [Range(1, 60)]; обрыв по сроку (рукопожатие, pong) — тот же обрыв с той же паузой."
+      "method": "dotnet test --filter \"FullyQualifiedName~ReconnectBackoffTests|FullyQualifiedName~WorkerReconnectsWithBackoffAndResetsAfterSuccess|FullyQualifiedName~WorkerTreatsSilentConnectionAsBreak|FullyQualifiedName~WorkerAbortsHungHandshake|FullyQualifiedName~RejectedTokenPauseIgnoresLiveRest\" — зелёный.",
+      "evidence": "Пройденные ReconnectDelayDoublesUpToCeiling, WorkerReconnectsWithBackoffAndResetsAfterSuccess, WorkerTreatsSilentConnectionAsBreak, WorkerAbortsHungHandshake, RejectedTokenPauseIgnoresLiveRest в выводе; потолок паузы — HaOptions.ReconnectMaxDelaySeconds с [Range(1, 60)]; обрыв по сроку (рукопожатие, pong) — тот же обрыв с той же паузой. Потолок 60 с действует, пока HA недоступен (REST не отвечает); при живом HTTP-сервере HA пауза короче — не больше ReadinessPollInterval + ReadinessPollTimeout, кроме AuthRejected с полным расписанием: потолок не нарушается, пауза обрывается раньше."
     },
     {
       "id": "9-outage",
       "criterion": "#9: проверено остановкой контейнера HA на 5 минут: после подъёма соединение восстанавливается не позже 60 с, кэш перечитывается полностью, потери событий не приводят к расхождению с HA. (Живую часть проверяет владелец на стеке.)",
-      "method": "Автоматически: dotnet test --filter \"FullyQualifiedName~HaWebSocketWorkerTests|FullyQualifiedName~HaStateCacheTests|FullyQualifiedName~GetStatesBypassesCacheWhenNotConnected|FullyQualifiedName~FastPathReportsRefusalsAsErrorCodes\" — зелёный (в том числе WorkerRereadsAllStatesAfterReconnect, PauseIsCutShortWhenHaComesBack, StaleEventDoesNotOverwriteFresherState, AttributeOnlyEventIsApplied). Владелец: Ha__BaseUrl/Ha__Token/Ha__EntityRegistryPath в окружении, dotnet run --project tests/Domovoy.Tests.LiveCheck -- reconnect; docker compose stop homeassistant, 5 минут, docker compose start homeassistant; параллельно — переходы components.ha_websocket в /api/v1/health развёрнутого api.",
-      "evidence": "Расчётный бюджет: ReadinessPollInterval 5 с + ReadinessPollTimeout 5 с + HandshakeTimeout 10 с = 20 с ≤ 60 с (HaWebSocketTimings), подтверждён PauseIsCutShortWhenHaComesBack. Вывод LiveCheck reconnect: интервал «REST ответил → Connected» ≤ 60 с, строка «расхождений: 0» после сверки Snapshot кэша с GET api/states; ответ /api/v1/health api с ha_websocket = ok не позже 60 с после ответа HA; вывод владельца приложен к #9."
+      "method": "Автоматически: dotnet test --filter \"FullyQualifiedName~HaWebSocketWorkerTests|FullyQualifiedName~HaStateCacheTests|FullyQualifiedName~GetStatesBypassesCacheWhenNotConnected|FullyQualifiedName~FastPathReportsRefusalsAsErrorCodes\" — зелёный (в том числе WorkerRereadsAllStatesAfterReconnect, PauseIsCutShortWhenHaComesBack, RestUpBeforeWebSocketStillConnectsWithinBudget, StaleEventDoesNotOverwriteFresherState, AttributeOnlyEventIsApplied). Владелец: Ha__BaseUrl/Ha__Token/Ha__EntityRegistryPath в окружении, dotnet run --project tests/Domovoy.Tests.LiveCheck -- reconnect; docker compose stop homeassistant, 5 минут, docker compose start homeassistant; параллельно — переходы components.ha_websocket в /api/v1/health развёрнутого api.",
+      "evidence": "Расчётный бюджет от готовности WebSocket HA: HandshakeTimeout 10 с (попытка в полёте) + ReadinessPollInterval 5 с + ReadinessPollTimeout 5 с + HandshakeTimeout 10 с = 30 с ≤ 60 с (HaWebSocketTimings), подтверждён PauseIsCutShortWhenHaComesBack и RestUpBeforeWebSocketStillConnectsWithinBudget. Вывод LiveCheck reconnect: интервал «REST ответил → Connected» ≤ 60 с, строка «расхождений: 0» после сверки Snapshot кэша с GET api/states; ответ /api/v1/health api с ha_websocket = ok не позже 60 с после ответа HA; вывод владельца приложен к #9."
     },
     {
       "id": "9-health",
       "criterion": "#9: статус соединения виден в GET /health отдельным полем — по решению владельца и записи 0002 это поле защищённого GET /api/v1/health, анонимный /health учитывает его только в общем слове.",
-      "method": "dotnet test --filter \"FullyQualifiedName~HaWebSocketStatusIsSeparateComponent|FullyQualifiedName~LivenessDoesNotExposeComponents\" — зелёный.",
+      "method": "dotnet test --filter \"FullyQualifiedName~HaWebSocketStatusIsSeparateComponent|FullyQualifiedName~LivenessDoesNotExposeComponents|FullyQualifiedName~WebSocketProbeMapsConnectionStatus\" — зелёный.",
       "evidence": "Пройденные тесты в выводе; поле components.ha_websocket в теле ответа, анонимный ответ — только status."
     },
     {
@@ -1012,7 +1117,7 @@
     {
       "id": "10-filter",
       "criterion": "#10: сущность вне списка не возвращается ни в GET /state, ни в срезе состояний для LLM, а попытка действия над ней отклоняется ошибкой единого формата — оба случая покрыты тестами. По решению владельца проверяется источник среза (кэш и GetStatesAsync); /state — #15 и читает тот же источник.",
-      "method": "dotnet test --filter \"FullyQualifiedName~CacheIgnoresEntitiesOutsideAllowList|FullyQualifiedName~GetStatesReturnsOnlyAllowListedEntities|FullyQualifiedName~CallServiceRejectsEntityOutsideAllowListWithoutCallingHa|FullyQualifiedName~CallServiceRejectsDisallowedActionAndConfirmation|FullyQualifiedName~OffListEventIsNotPublished\" — зелёный.",
+      "method": "dotnet test --filter \"FullyQualifiedName~CacheIgnoresEntitiesOutsideAllowList|FullyQualifiedName~GetStatesReturnsOnlyAllowListedEntities|FullyQualifiedName~CallServiceRejectsEntityOutsideAllowListWithoutCallingHa|FullyQualifiedName~CallServiceRejectsDisallowedActionAndConfirmation|FullyQualifiedName~OffListEventIsNotPublished|FullyQualifiedName~LockActionRequiresConfirmationWithoutRegistryFlag|FullyQualifiedName~SensitiveDomainActionsRequireConfirmation\" — зелёный.",
       "evidence": "Пройденные тесты; код отказа entity_not_allowed — HaErrorCodes, тот же, что ApiError.Code."
     },
     {
@@ -1024,7 +1129,7 @@
     {
       "id": "11-template",
       "criterion": "#11: шаблоны вида «включи/выключи <устройство> в <комната>», «какая температура в <комната>» и не менее десяти других формулировок приводят к прямому вызову HA, минуя LLM.",
-      "method": "dotnet test --filter \"FullyQualifiedName~TemplatePhrasesRouteToExpectedEntityAndAction|FullyQualifiedName~FastPathCallsHaRestWithoutLlm|FullyQualifiedName~CallServiceSendsMappedServiceForAllowedAction|FullyQualifiedName~CallServiceRejectsInvalidValueWithoutCallingHa\" — зелёный.",
+      "method": "dotnet test --filter \"FullyQualifiedName~TemplatePhrasesRouteToExpectedEntityAndAction|FullyQualifiedName~FastPathCallsHaRestWithoutLlm|FullyQualifiedName~CallServiceSendsMappedServiceForAllowedAction|FullyQualifiedName~CallServiceRejectsInvalidValueWithoutCallingHa|FullyQualifiedName~CatalogValueActionsAreFullyDescribed\" — зелёный.",
       "evidence": "Число случаев TemplatePhrasesRouteToExpectedEntityAndAction в выводе — не меньше 15: по экземпляру двух названных шаблонов и 13 формулировок вне них (перечень — контракт среза router), то есть не меньше 10 других с запасом 3; FastPathCallsHaRestWithoutLlm пройден (ILlmProvider без вызовов)."
     },
     {
@@ -1062,12 +1167,12 @@
       "mitigation": "DomovoyApiFactory указывает путь на пример; ci-heavy уже копирует config/entities.example.yaml (77–84); README называет реестр обязательным; HostRefusesToStartOnInvalidRegistry проверяет и положительный случай — старт на примере."
     },
     {
-      "risk": "Реальный реестр владельца на целевой машине содержит домен или действие вне HaDomainCatalog — после выката api не стартует.",
-      "mitigation": "Сообщение валидатора называет entity_id и поле; README описывает проверку реестра до выката: dotnet run --project tests/Domovoy.Tests.LiveCheck -- latency с Ha__EntityRegistryPath на реальный файл падает на той же валидации, не трогая рабочий стек. Резюме человеку называет это изменение поведения."
+      "risk": "Реальный реестр владельца на целевой машине содержит домен или действие вне HaDomainCatalog — в том числе cover (шторы, ворота), убранный из каталога до #47 — после выката api не стартует.",
+      "mitigation": "Сообщение валидатора называет entity_id и поле; README описывает проверку реестра до выката: dotnet run --project tests/Domovoy.Tests.LiveCheck -- latency с Ha__EntityRegistryPath на реальный файл падает на той же валидации, не трогая рабочий стек. Резюме человеку и README называют это изменение поведения, cover — явно."
     },
     {
-      "risk": "Новая проба меняет общий статус анонимного /health: на примере ha_websocket = not_configured → degraded.",
-      "mitigation": "Degraded отдаёт 200 — ci-heavy (curl --fail) остаётся зелёным; поведение при настроенном, но недоступном HA уже unhealthy через пробу ha (запись 0010); тесты HealthEndpointTests остаются без изменений и должны пройти."
+      "risk": "Новая проба меняет общий статус анонимного /health: на примере ha_websocket = not_configured → degraded; у настроенного HA с живым REST и упавшим WebSocket (Connecting, Reconnecting, AuthRejected) — unhealthy и 503, хотя чтение идёт через REST-фолбэк.",
+      "mitigation": "Degraded отдаёт 200 — ci-heavy (curl --fail) остаётся зелёным; тесты HealthEndpointTests остаются без изменений и должны пройти. 503 при упавшем одном WebSocket — решение по 0010, а не недосмотр: «| `unreachable`, `rejected_by_geography`, `error` | `unhealthy` |» (0010:13), «Различия между компонентами нет» (0010:15), «При настроенном, но недоступном Home Assistant `/health` отдаёт 503.» (0010:32); degraded при живом фолбэке — тонкое правило, которое 0010 откладывает до NFR-COST-2 (0010:36), пересмотр агрегации — вне задачи. Последствия ограничены: depends_on на api в compose нет, рестарта по healthcheck нет (0010, «Следствия»); отображение статусов закреплено WebSocketProbeMapsConnectionStatus."
     },
     {
       "risk": "Токен утекает через кадр auth, текст исключения ClientWebSocket или логирование сообщения целиком; RedactLoggedHeaders из Program.cs:33 WebSocket не покрывает.",
@@ -1090,16 +1195,24 @@
       "mitigation": "Прикладной ping HA с PongTimeout: тишина — обрыв; WorkerTreatsSilentConnectionAsBreak. Что KeepAliveInterval не ждёт pong, проверяется при реализации по документации .NET 8, а не по памяти; на это проверка не опирается."
     },
     {
-      "risk": "Восстановление после подъёма HA дольше 60 с: пауза до 60 с плюс попытка.",
-      "mitigation": "Прерывание паузы переходом REST «недоступен → отвечает» и HandshakeTimeout: бюджет 20 с; PauseIsCutShortWhenHaComesBack, живой замер LiveCheck reconnect. Допущение: WebSocket HA готов, когда отвечает REST api/ (один HTTP-сервер HA); не так — следующая попытка по расписанию от сброшенного счётчика, живой замер это покажет."
+      "risk": "Восстановление после подъёма HA дольше 60 с: пауза до 60 с плюс попытка, или REST HA отвечает раньше WebSocket и преждевременные попытки проваливаются.",
+      "mitigation": "Пока REST отвечает, паузу обрывает первый ответивший опрос — не больше ReadinessPollInterval + ReadinessPollTimeout, рост до потолка — только при недоступном REST; бюджет от готовности WebSocket — 30 с (попытка в полёте, пауза, рукопожатие). Допущения о порядке готовности REST и WebSocket нет. PauseIsCutShortWhenHaComesBack, RestUpBeforeWebSocketStillConnectsWithinBudget, живой замер LiveCheck reconnect."
+    },
+    {
+      "risk": "При живом REST и упавшем WebSocket попытки идут каждые ~5 с и нагружают HA; при отклонённом токене частые попытки могут привести к блокировке адреса (ip_ban HA).",
+      "mitigation": "Одна попытка не чаще раза в ReadinessPollInterval и только при отвечающем HTTP-сервере; AuthRejected — полное расписание ReconnectBackoff без опроса, RejectedTokenPauseIgnoresLiveRest. Учёт неудачных входов WebSocket в ip_ban сверяется с исходником HA при реализации."
     },
     {
       "risk": "Границы set_temperature 7..35 °C не совпадают с min_temp/max_temp конкретного устройства.",
       "mitigation": "Граница — умолчания HA, источник назван в контракте foundation и сверяется с исходником HA при реализации; HA сам отклонит значение вне диапазона устройства, ответ — ha_unavailable по не-2xx. Подстройка под атрибуты устройства — вне задачи."
     },
     {
-      "risk": "Роутер выполняет чувствительное действие (замок) без подтверждения.",
-      "mitigation": "HaRestClient отказывает requires_confirmation-сущностям кодом confirmation_required до HTTP; CallServiceRejectsDisallowedActionAndConfirmation."
+      "risk": "Чувствительное действие (замок, сигнализация, ворота, газ) выполняется без подтверждения — роутером или call_service из #20, если владелец не поставил requires_confirmation.",
+      "mitigation": "Инвариант кода, а не настройка: HaDomainCatalog помечает все изменяющие действия lock, HaRestClient.CallServiceAsync отказывает confirmation_required по каталогу до HTTP, флаг реестра только добавляет; alarm_control_panel и valve в каталоге нет, cover убран — неизвестный домен, отказ старта. LockActionRequiresConfirmationWithoutRegistryFlag; SensitiveDomainActionsRequireConfirmation падает на чувствительном домене без пометки."
+    },
+    {
+      "risk": "Домен switch: реле может управлять воротами или газовым краном, по реестру его не отличить от розетки, а действия switch в каталоге подтверждения не требуют — тот же класс, что cover.",
+      "mitigation": "Открытый вопрос оркестратору (отчёт плана, совет круг 2): убрать switch из каталога, как cover (в примере реестра switch нет, реестр со switch не стартует до #47), или пометить его изменяющие действия RequiresConfirmation. Решение — до начала среза foundation; при выборе владельцем — развилка в карточке."
     },
     {
       "risk": "Новый проект LiveCheck в Domovoy.sln ломает dotnet restore в Dockerfile.",
@@ -1133,7 +1246,8 @@
     "Текст ответа пользователю по шаблонам FR-CORE-7 — #23; быстрый путь возвращает ToolResult.",
     "Шаблоны фраз для media_player и vacuum — следующим PR одним классом каждый; здесь их фразы уходят в LLM-путь, каталог и таблица action → сервис для этих доменов есть.",
     "Границы значения по атрибутам конкретного устройства (min_temp, max_temp, source_list) — здесь границы таблицы каталога.",
-    "Двухфазное подтверждение (/confirm) — #47; до него чувствительные действия отклоняются.",
+    "Двухфазное подтверждение (/confirm) — #47; до него изменяющие действия lock (пометка каталога) и сущности с requires_confirmation отклоняются кодом confirmation_required.",
+    "Домен cover (шторы и ворота) — до #47: ворота от штор без описания устройства не отличить, в примере реестра cover нет; реестр с cover не проходит валидацию как неизвестный домен (случай ValidatorRejectsInvalidRegistry). alarm_control_panel и valve в каталоге тоже нет.",
     "Фильтрация контекста и потолок 4000 токенов — #22.",
     "Правила проактивности и включение ProactivityWorker — #31.",
     "Метрики латентности и режим деградации по бюджету — #27, #26; пересмотр агрегации /health (0010).",
