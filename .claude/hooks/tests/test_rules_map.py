@@ -99,9 +99,13 @@ PROBES = {
     "merge-wait": (
         [bash("gh pr checks 150 --watch"), bash("gh pr checks --watch 150", "PowerShell"),
          bash("gh -R o/r pr checks 1 --watch --interval 30"),
-         bash("git push && gh pr checks 1 --watch"), bash("cd x; gh pr checks 1 --watch")],
+         bash("git push && gh pr checks 1 --watch"), bash("cd x; gh pr checks 1 --watch"),
+         bash("bash scripts/merge-wait.sh 154"),
+         bash("MERGE_WAIT_INTERVAL=0 bash scripts/merge-wait.sh 1"),
+         bash("bash scripts/merge-wait.sh 154", "PowerShell")],
         [bash("gh pr checks 150"), bash("echo 'gh pr checks 1 --watch'"),
-         bash("gh pr view 150 --json state")]),
+         bash("gh pr view 150 --json state"), bash("bash scripts/merge-wait.test.sh"),
+         bash("echo 'bash scripts/merge-wait.sh 1'")]),
     "ceremony-card": (
         [edit("src/Domovoy.Api/Program.cs"), edit("tests\\Domovoy.Tests\\A.cs", tool="MultiEdit"),
          edit("src/Domovoy.Api/Domovoy.Api.csproj", tool="Write")],
@@ -163,6 +167,15 @@ class TableShape(unittest.TestCase):
         for r in TABLE:
             text = r.get("note", "") + r.get("subagent_note", "")
             self.assertRegex(text, r"(\.md|\.claude/CLAUDE\.md)", r["name"])
+
+    def test_merge_wait_note_names_handoff_and_behind(self):
+        """Исход сценария, о котором промолчит напоминание в момент отдачи, — тот же
+        дефект, что #155: о сверке с main оркестратор узнаёт от владельца."""
+        note = BY_NAME["merge-wait"]["note"]
+        self.assertIn(".claude/CLAUDE.md", note)
+        self.assertRegex(note, r"п\. 10[–-]11")
+        self.assertIn("BEHIND", note)
+        self.assertIn("DIRTY", note)
 
     def test_for_subagents_and_note_go_together(self):
         half = [r["name"] for r in TABLE if bool(r.get("for_subagents")) != bool(r.get("subagent_note"))]
