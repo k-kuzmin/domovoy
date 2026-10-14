@@ -47,6 +47,12 @@ internal sealed class HaWebSocketWorker : BackgroundService
     /// <summary>Предел одного сообщения: ответ get_states большого дома — мегабайты, не сотни.</summary>
     private const int MaxMessageBytes = 64 * 1024 * 1024;
 
+    /// <summary>
+    /// Предел буфера событий, пришедших до ответа get_states. Переполнение
+    /// рвёт попытку: следующая перечитает состояния целиком.
+    /// </summary>
+    internal const int MaxEarlyEvents = 10_000;
+
     private const int ReceiveBufferBytes = 16 * 1024;
 
     private readonly HaOptions _options;
@@ -376,6 +382,14 @@ internal sealed class HaWebSocketWorker : BackgroundService
             if (session.Connected)
             {
                 HandleEvent(@event);
+            }
+            else if (early.Count >= MaxEarlyEvents)
+            {
+                // Содержимое событий в лог не идёт: только предел.
+                _logger.LogWarning(
+                    "Буфер ранних событий до ответа get_states переполнен (предел {Limit}): попытка прервана",
+                    MaxEarlyEvents);
+                return false;
             }
             else
             {

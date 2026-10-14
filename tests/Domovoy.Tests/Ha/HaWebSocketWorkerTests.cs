@@ -176,6 +176,38 @@ public sealed class HaWebSocketWorkerTests
         harness.Cache.Find(Bedroom).Should().NotBeNull();
     }
 
+    [Fact(DisplayName = "Переполнение буфера ранних событий рвёт попытку, следующая перечитывает состояния; содержимое не логируется")]
+    public async Task EarlyEventOverflowBreaksAttempt()
+    {
+        string marker = "light.example_marker_" + Guid.NewGuid().ToString("N");
+        await using Harness harness = await Harness.StartAsync(Fast, new RecordingDelay(), fake =>
+        {
+            fake.SetState(Kitchen, "on");
+            fake.GetStatesDelay = Slack;
+        });
+
+        await WaitUntilAsync(() => harness.Fake.GetStatesCount >= 1, WaitLimit);
+
+        // Одним кадром-массивом: на предел больше, чем буфер вмещает.
+        var frame = new System.Text.StringBuilder("[");
+        for (int i = 0; i <= HaWebSocketWorker.MaxEarlyEvents; i++)
+        {
+            frame.Append(i == 0 ? string.Empty : ",")
+                .Append("""{"id":1,"type":"event","event":{"event_type":"state_changed","data":{"entity_id":""")
+                .Append('"').Append(marker).Append("\"}}}");
+        }
+
+        await harness.Fake.PushRawAsync(frame.Append(']').ToString());
+        harness.State.Status.Should().NotBe(HaConnectionStatus.Connected, "события должны прийти до ответа get_states");
+
+        await WaitUntilAsync(() => harness.Fake.AuthCount >= 2, WaitLimit);
+        await harness.WaitForStatusAsync(HaConnectionStatus.Connected);
+
+        harness.Cache.Find(Kitchen).Should().NotBeNull("следующая попытка перечитала состояния целиком");
+        harness.Logs.Entries.Should().Contain(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("ранних событий"));
+        harness.Logs.EntriesContaining(marker).Should().BeEmpty();
+    }
+
     [Fact(DisplayName = "Нечитаемый кадр и незнакомый тип не роняют воркер, следующее событие применяется")]
     public async Task WorkerSurvivesMalformedMessages()
     {
