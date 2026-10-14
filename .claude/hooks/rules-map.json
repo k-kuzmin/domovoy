@@ -138,9 +138,9 @@
         "Bash",
         "PowerShell"
       ],
-      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*gh(?:\\.exe)?\\s+(?:(?:-R|--repo)[\\s=]\\S+\\s+)*pr\\s+checks\\b[^|;&\\n]*\\s--watch\\b",
+      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*(?:gh(?:\\.exe)?\\s+(?:(?:-R|--repo)[\\s=]\\S+\\s+)*pr\\s+checks\\b[^|;&\\n]*\\s--watch\\b|(?:(?:ba|z|da)?sh(?:\\.exe)?\\s+)?(?:[^\\s|;&'\\\"]*[/\\\\])?merge-wait\\.sh(?=[\\s|;&)]|$))",
       "repeat": true,
-      "note": "Команда ждёт CI по PR — если CI зелёный и замечаний нет, PR уходит человеку на мердж. Открой .claude/CLAUDE.md, «Рекомендованный порядок», п. 11: как ждать мерджа и что делать на MERGED и CLOSED."
+      "note": "Команда ждёт CI по PR или мерджа — PR уходит или уже ушёл человеку. Открой .claude/CLAUDE.md, «Рекомендованный порядок», п. 10–11: сверка ветки с main до отдачи и что делать на исходах MERGED, CLOSED, BEHIND и DIRTY."
     },
     {
       "name": "issue-create",
