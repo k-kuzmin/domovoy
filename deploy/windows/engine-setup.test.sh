@@ -1682,6 +1682,31 @@ test_readme_points_to_logs() {
   ok "$name"
 }
 
+# Смена схемы сети записана решением (#151): README описывает установку с
+# networkingMode=nat и portproxy и не держит строки настройки mirrored
+# (упоминания mirrored в прозе, в том числе в откате, не в счёт); в индексе
+# 0028 частично заменена 0030; у 0030 — шапка «Частично заменяет:» со
+# ссылкой на 0028 и раздел «Откат», где названо правило Hyper-V.
+test_network_decision_recorded() {
+  local name=network_decision_recorded pattern
+  local readme="$root/README.md" index="$root/docs/decisions/README.md" record="$root/docs/decisions/0030-wsl-nat-portproxy.md"
+  for pattern in 'networkingMode=nat' 'portproxy'; do
+    grep -qF -- "$pattern" "$readme" || { fail "$name" "в README нет «$pattern»"; return; }
+  done
+  if tr -d '\r' <"$readme" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qx 'networkingMode=mirrored'; then
+    fail "$name" "в README строка настройки networkingMode=mirrored"; return
+  fi
+  grep -F '| [0028](0028-docker-engine-in-wsl.md) |' "$index" | grep -qF 'частично заменено [0030](0030-wsl-nat-portproxy.md)' \
+    || { fail "$name" "в индексе решений 0028 не помечена частично заменённой 0030"; return; }
+  grep -qF '| [0030](0030-wsl-nat-portproxy.md) |' "$index" || { fail "$name" "в индексе решений нет строки 0030"; return; }
+  [ -f "$record" ] || { fail "$name" "нет записи 0030"; return; }
+  grep -E '^\*\*Частично заменяет:\*\*' "$record" | grep -qF '[0028](0028-docker-engine-in-wsl.md)' \
+    || { fail "$name" "у 0030 нет шапки «Частично заменяет:» со ссылкой на 0028"; return; }
+  tr -d '\r' <"$record" | sed -n '/^## Откат/,/^## [^О]/p' | grep -qF 'Hyper-V' \
+    || { fail "$name" "в 0030 нет раздела «Откат» с правилом Hyper-V"; return; }
+  ok "$name"
+}
+
 test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
@@ -1717,6 +1742,7 @@ test_measure_boot_records_container_restart
 test_measure_boot_names_stopped_container
 test_measure_boot_repeats_probe_error_after_recovery
 test_readme_points_to_logs
+test_network_decision_recorded
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]
