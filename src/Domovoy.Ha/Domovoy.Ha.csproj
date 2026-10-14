@@ -4,10 +4,19 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <!-- Разбор реестра сущностей config/entities.yaml — запись 0031. -->
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Domovoy.Core\Domovoy.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Тесты собирают каталог, реестр и кэш напрямую, без хоста. -->
+    <InternalsVisibleTo Include="Domovoy.Tests" />
+    <InternalsVisibleTo Include="Domovoy.Tests.LiveCheck" />
   </ItemGroup>
 
 </Project>
