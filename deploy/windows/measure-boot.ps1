@@ -276,8 +276,9 @@ $handler.UseProxy = $false
 $client = New-Object System.Net.Http.HttpClient($handler)
 # Отказ соединения на закрытый порт Windows ждёт около 2 с — запас.
 $client.Timeout = [TimeSpan]::FromSeconds(10)
-# 127.0.0.1, не localhost: IPv6-петля ::1 до движка WSL не проходит
-# (правило Hyper-V её не принимает), и запрос висел бы до тайм-аута.
+# 127.0.0.1, не localhost: адрес однозначен. localhost Windows разрешает
+# сначала в ::1, и замер мерил бы не тот путь, что строка -Check
+# «/health на 127.0.0.1»; ::1 -Check проверяет отдельным звеном.
 $url = 'http://127.0.0.1:{0}/health' -f $Port
 $probeArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'bash', 'deploy/windows/boot-probe.sh', $Project)
 
