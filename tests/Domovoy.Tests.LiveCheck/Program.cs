@@ -96,6 +96,8 @@ internal static class Program
                   Остановка — Ctrl+C.
 
             Окружение: Ha__BaseUrl, Ha__Token, Ha__EntityRegistryPath.
+            Реестр проверяется в любом режиме до соединения; без Ha__Token
+            программа проверяет конфигурацию и реестр и выходит.
             """);
         return 2;
     }
@@ -104,23 +106,25 @@ internal static class Program
     {
         using IHost host = BuildHost();
 
+        // Проверка конфигурации — до проверки токена: реестр проверяется без
+        // соединения с HA, и владелец сверяет реальный реестр до выката, даже
+        // не задав Ha__Token.
+        // Та же проверка, что старт хоста делает сам (ValidateOnStart), —
+        // здесь раньше, чтобы отказ печатался без текста ошибок.
+        if (!TryValidateConfiguration(host))
+        {
+            return 1;
+        }
+
+        Print("конфигурация и реестр сущностей прошли проверку");
+
         if (!host.Services.GetRequiredService<IOptions<HaOptions>>().Value.IsConfigured)
         {
             Print("Ha__Token не задан: соединяться не с чем");
             return 1;
         }
 
-        try
-        {
-            await host.StartAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OptionsValidationException exception)
-        {
-            // Сообщение проверки называет записи реестра, то есть entity_id:
-            // в вывод для issue оно не идёт. Подробности печатает старт api.
-            Print($"конфигурация не прошла проверку ({exception.OptionsType.Name}, ошибок: {exception.Failures.Count()}); подробности — при старте api");
-            return 1;
-        }
+        await host.StartAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -129,6 +133,39 @@ internal static class Program
         finally
         {
             await host.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Проверка всех опций с ValidateOnStart, реестр сущностей в их числе.
+    /// Отказ печатается типом опций и числом ошибок, без текста: вывод
+    /// прикладывается к issue, а запись и поле называет старт api.
+    /// </summary>
+    private static bool TryValidateConfiguration(IHost host)
+    {
+        try
+        {
+            host.Services.GetRequiredService<IStartupValidator>().Validate();
+            return true;
+        }
+        catch (OptionsValidationException exception)
+        {
+            PrintRefusal([exception]);
+            return false;
+        }
+        catch (AggregateException exception) when (exception.InnerExceptions.All(inner => inner is OptionsValidationException))
+        {
+            // Несколько опций не прошли проверку — по исключению на каждую.
+            PrintRefusal(exception.InnerExceptions.Cast<OptionsValidationException>());
+            return false;
+        }
+    }
+
+    private static void PrintRefusal(IEnumerable<OptionsValidationException> exceptions)
+    {
+        foreach (OptionsValidationException exception in exceptions)
+        {
+            Print($"конфигурация не прошла проверку ({exception.OptionsType.Name}, ошибок: {exception.Failures.Count()}); подробности — при старте api");
         }
     }
 
