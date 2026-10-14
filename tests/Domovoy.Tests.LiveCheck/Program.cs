@@ -44,6 +44,9 @@ internal static class Program
     private const int MaxMessageBytes = 64 * 1024 * 1024;
     private const int CompareAttempts = 3;
 
+    // Ожидание события с новым состоянием после call: до 10 с.
+    private const int CallSettleAttempts = 20;
+
     // UserSecretsId из src/Domovoy.Api/Domovoy.Api.csproj.
     private const string ApiUserSecretsId = "domovoy-api";
 
@@ -74,6 +77,13 @@ internal static class Program
                 return await RunAsync(host => ReconnectAsync(host, stop.Token), stop.Token).ConfigureAwait(false);
             }
 
+            if (mode == "call" && args.Length == 3
+                && int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out int record))
+            {
+                string action = args[2];
+                return await RunAsync(host => CallAsync(host, record, action, stop.Token), stop.Token).ConfigureAwait(false);
+            }
+
             return Usage();
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -97,6 +107,11 @@ internal static class Program
                   после каждого Connected — интервал «REST ответил → Connected»,
                   время ответа get_states и сверка кэша с GET api/states.
                   Остановка — Ctrl+C.
+              call <номер записи> <действие>
+                  Одно действие над сущностью entities[номер] реестра через тот
+                  же клиент HA, что у быстрого пути (allow-list, каталог,
+                  подтверждение); печатает состояние до и после. Устройство
+                  реально меняет состояние.
 
             Окружение (поверх user-secrets api): Ha__BaseUrl, Ha__Token, Ha__EntityRegistryPath.
             Реестр проверяется в любом режиме до соединения; без Ha__Token
@@ -246,6 +261,60 @@ internal static class Program
         PrintStatistics("действия", await MeasureAsync(host, actions, arguments.Iterations, cancellationToken).ConfigureAwait(false));
 
         return 0;
+    }
+
+    private static async Task<int> CallAsync(IHost host, int record, string action, CancellationToken cancellationToken)
+    {
+        HaConnectionState state = host.Services.GetRequiredService<HaConnectionState>();
+        if (!await WaitForConnectedAsync(state, ConnectWait, cancellationToken).ConfigureAwait(false))
+        {
+            Print($"за {ConnectWait.TotalSeconds:F0} с соединение не установлено, статус {state.Status}");
+            return 1;
+        }
+
+        IReadOnlyList<HaEntityDescriptor> entities = host.Services.GetRequiredService<IEntityAllowList>().All;
+        if (record >= entities.Count)
+        {
+            Print($"записи entities[{record}] нет: в реестре {entities.Count}");
+            return 2;
+        }
+
+        // В выводе — номер записи и домен, не entity_id: вывод идёт в issue.
+        HaEntityDescriptor entity = entities[record];
+        IHaClient client = host.Services.GetRequiredService<IHaClient>();
+        Print($"entities[{record}], домен {entity.Domain}, действие {action}");
+        Print($"состояние до: {await ReadStateAsync(client, entity, cancellationToken).ConfigureAwait(false)}");
+
+        long started = Stopwatch.GetTimestamp();
+        ToolResult result = await client
+            .CallServiceAsync(entity.Domain, action, entity.EntityId, null, cancellationToken)
+            .ConfigureAwait(false);
+        Print($"вызов: {(result.Success ? "успех" : "отказ " + result.ErrorCode)}, " +
+              $"{Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} мс");
+
+        // Новое состояние приходит событием state_changed в кэш.
+        string before = await ReadStateAsync(client, entity, cancellationToken).ConfigureAwait(false);
+        for (int attempt = 0; attempt < CallSettleAttempts; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            string current = await ReadStateAsync(client, entity, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(current, before, StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        Print($"состояние после: {await ReadStateAsync(client, entity, cancellationToken).ConfigureAwait(false)}");
+        return result.Success ? 0 : 1;
+    }
+
+    private static async Task<string> ReadStateAsync(IHaClient client, HaEntityDescriptor entity, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<HaEntityState> states = await client
+            .GetStatesAsync(area: null, domain: entity.Domain, cancellationToken)
+            .ConfigureAwait(false);
+        return states.FirstOrDefault(s => string.Equals(s.EntityId, entity.EntityId, StringComparison.Ordinal))?.State
+            ?? "нет в кэше";
     }
 
     private static async Task<Samples> MeasureAsync(
