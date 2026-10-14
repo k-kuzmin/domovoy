@@ -330,9 +330,13 @@ internal static class Program
                         $"интервал «REST ответил → Connected»: {(connectedAt - answeredAt).TotalSeconds:F1} с"));
                 }
 
+                // Замер идёт после Connected, на уже поднявшемся HA: T здесь —
+                // оценка снизу. Основной показатель — интервал выше.
                 TimeSpan? getStates = await MeasureGetStatesAsync(options, cancellationToken).ConfigureAwait(false);
                 Print(getStates is TimeSpan elapsed
-                    ? string.Create(CultureInfo.InvariantCulture, $"время ответа get_states: {elapsed.TotalSeconds:F2} с")
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"время ответа get_states (после подъёма, HA прогрет; основной показатель — интервал «REST ответил → Connected»): {elapsed.TotalSeconds:F2} с")
                     : "время ответа get_states: не измерено (отдельная сессия не получила ответ)");
 
                 await CompareAsync(cache, allowList, clients, options, cancellationToken).ConfigureAwait(false);
