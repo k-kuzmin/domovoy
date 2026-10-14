@@ -13,10 +13,11 @@
 #     получает DPkg::Lock::Timeout, в install_docker нет вызовов мимо обёртки;
 #   - -Check и замер стучатся на 127.0.0.1, а не localhost;
 #   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1); профиль
-#     правила firewall, само правило, профили Domain, Private и Public
-#     firewall Windows, выбор адреса прослушивания, записи portproxy,
-#     снятие прежнего правила Hyper-V (командлеты подменены функциями) и
-#     звено .wslconfig в -Check — функциями сценария, извлечёнными из AST;
+#     правила firewall, само правило (с программой и службой слушателя
+#     portproxy), профили Domain, Private и Public firewall Windows, выбор
+#     адреса прослушивания, записи portproxy, снятие прежнего правила
+#     Hyper-V (командлеты подменены функциями) и звено .wslconfig в -Check —
+#     функциями сценария, извлечёнными из AST;
 #   - docker-wsl.sh передаёт аргументы wsl.exe как есть (подделки wsl.exe и
 #     cygpath первыми в PATH);
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
@@ -517,7 +518,7 @@ test_engine_setup_dry_run() {
       'firewall.name: domovoy-engine-ports' 'firewall.direction: Inbound' 'firewall.protocol: TCP' \
       "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet' \
       'firewall.profiles: Private' 'firewall.action: Allow' 'firewall.profiles.private_only: True' \
-      'firewall.hyperv.remove: domovoy-engine-ports' \
+      'firewall.hyperv.remove: domovoy-engine-ports' 'firewall.service: iphlpsvc' \
       'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' \
       'iphlpsvc.starttype: Automatic' \
       'listen.address: assumed (-AssumeListenAddress, not printed)' \
@@ -531,6 +532,8 @@ test_engine_setup_dry_run() {
     done
     # Правило — firewall Windows, а не Hyper-V: VMCreatorId у него нет.
     if grep -qi '^firewall\.vmcreatorid' "$work/out.$shell"; then fail "$name/$shell" "правило собрано для Hyper-V"; show_out; return; fi
+    # Правило сужено до слушателя portproxy: svchost.exe службы iphlpsvc.
+    grep -qix 'firewall.program: .*\\system32\\svchost\.exe' "$work/out.$shell" || { fail "$name/$shell" "правило не сужено до svchost.exe"; show_out; return; }
     # Прежнее правило Hyper-V снимается до записи правила Windows с тем же
     # именем — так и печатается.
     before "$shell" 'firewall.hyperv.remove: domovoy-engine-ports' 'firewall.name: domovoy-engine-ports' \
@@ -1119,18 +1122,25 @@ test_host_rule_problems() {
     # shellcheck disable=SC2016
     ps_functions "$shell" "$here/engine-setup.ps1" '
       function rule([hashtable]$Change) {
-        $r = [ordered]@{ Enabled = "True"; Direction = "Inbound"; Action = "Allow"; Protocol = "TCP"; LocalPorts = @("28081", "28123"); RemoteAddresses = @("LocalSubnet"); Profiles = "Private" }
+        $r = [ordered]@{ Enabled = "True"; Direction = "Inbound"; Action = "Allow"; Protocol = "TCP"; LocalPorts = @("28081", "28123"); RemoteAddresses = @("LocalSubnet"); Profiles = "Private"
+          Program = "$env:SystemRoot\System32\svchost.exe"; Service = "iphlpsvc" }
         foreach ($k in $Change.Keys) { $r[$k] = $Change[$k] }
         [pscustomobject]$r
       }
       $ports = @(28081, 28123)
       if (@(Get-HostRuleProblems (rule @{}) $ports).Count) { "исправное правило: $(Get-HostRuleProblems (rule @{}) $ports)"; exit 1 }
       if (@(Get-HostRuleProblems (rule @{ Profiles = 2; LocalPorts = @("28123", "28081") }) $ports).Count) { "Profiles 2 и порты в другом порядке не приняты"; exit 1 }
+      # Путь программы правило хранит как задан: с %SystemRoot% или в другом регистре.
+      foreach ($program in "%SystemRoot%\System32\svchost.exe", "$($env:SystemRoot.ToUpperInvariant())\SYSTEM32\SVCHOST.EXE") {
+        if (@(Get-HostRuleProblems (rule @{ Program = $program; Service = "IpHlpSvc" }) $ports).Count) { "не принят путь ${program}: $(Get-HostRuleProblems (rule @{ Program = $program }) $ports)"; exit 1 }
+      }
       $bad = @(
         @{ Enabled = "False" }, @{ Direction = "Outbound" }, @{ Action = "Block" }, @{ Protocol = "UDP" }, @{ Protocol = "Any" },
         @{ RemoteAddresses = @("Any") }, @{ RemoteAddresses = @("LocalSubnet", "192.0.2.0/24") }, @{ RemoteAddresses = @("Internet") }, @{ RemoteAddresses = @() },
         @{ Profiles = "Any" }, @{ Profiles = "Public" }, @{ Profiles = "Private, Public" }, @{ Profiles = 0 },
-        @{ LocalPorts = @("28081") }, @{ LocalPorts = @("28081", "28123", "28500") }, @{ LocalPorts = @("Any") }
+        @{ LocalPorts = @("28081") }, @{ LocalPorts = @("28081", "28123", "28500") }, @{ LocalPorts = @("Any") },
+        @{ Program = "Any" }, @{ Program = "$env:SystemRoot\System32\wslservice.exe" }, @{ Program = "" },
+        @{ Service = "Any" }, @{ Service = "Dnscache" }, @{ Service = "" }
       )
       foreach ($c in $bad) {
         if (-not @(Get-HostRuleProblems (rule $c) $ports).Count) { "принято: $(($c.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value -join ",")" }) -join "; ")"; exit 1 }

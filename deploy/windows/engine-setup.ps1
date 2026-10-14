@@ -54,11 +54,12 @@
        все дистрибутивы пользователя), выполняет владелец (README);
     6. правило firewall Windows domovoy-engine-ports: входящие TCP на порты
        API и Home Assistant, только с локальной подсети, только в профиле
-       Private. Сеть хоста должна быть частной. Закрытость портов шире
-       правила держат профили firewall Windows: все три (Domain, Private,
-       Public) должны быть включены и по умолчанию блокировать входящие —
-       иначе отказ до первого изменения. Прежнее правило Hyper-V firewall
-       с тем же именем (0028) снимается до записи правила Windows;
+       Private и только к svchost.exe службы IP Helper — слушателю portproxy.
+       Сеть хоста должна быть частной. Закрытость портов шире правила держат
+       профили firewall Windows: все три (Domain, Private, Public) должны
+       быть включены и по умолчанию блокировать входящие — иначе отказ до
+       первого изменения. Прежнее правило Hyper-V firewall с тем же именем
+       (0028) снимается до записи правила Windows;
     7. portproxy v4tov4 с адреса хоста в ЛВС на 127.0.0.1 того же порта —
        по записи на порт API и Home Assistant: доступ из ЛВС. Адрес —
        IPv4 интерфейса с маршрутом по умолчанию в частной сети, с наименьшим
@@ -520,11 +521,18 @@ function Get-PortProxyProblems($Entries, [string]$Address, $Ports) {
 
 # Правило firewall Windows по свойствам Get-NetFirewallRule и его фильтров
 # (поля Enabled, Direction, Action, Protocol, LocalPorts, RemoteAddresses,
-# Profiles): включено, входящие, Allow, TCP, источники — только
-# LocalSubnet, профиль — только Private, порты — ровно порты стека.
-# Пустой список — замечаний нет.
+# Profiles, Program, Service): включено, входящие, Allow, TCP, источники —
+# только LocalSubnet, профиль — только Private, порты — ровно порты стека,
+# программа и служба — слушатель portproxy: svchost.exe службы iphlpsvc
+# ($IpHelperService). Путь программы правило хранит как задан — с
+# %SystemRoot% или в другом регистре. Пустой список — замечаний нет.
 function Get-HostRuleProblems($Rule, $Ports) {
     $found = @()
+    $svchost = Join-Path $env:SystemRoot 'System32\svchost.exe'
+    if ([Environment]::ExpandEnvironmentVariables([string]$Rule.Program) -ine $svchost) {
+        $found += "программа $($Rule.Program), нужна svchost.exe: правило шире слушателя portproxy"
+    }
+    if ([string]$Rule.Service -ine 'iphlpsvc') { $found += "служба $($Rule.Service), нужна iphlpsvc: правило шире слушателя portproxy" }
     if ([string]$Rule.Enabled -ne 'True') { $found += 'правило выключено' }
     if ([string]$Rule.Direction -ne 'Inbound') { $found += "направление $($Rule.Direction), нужно Inbound" }
     if ([string]$Rule.Action -ne 'Allow') { $found += "действие $($Rule.Action), нужно Allow" }
@@ -895,7 +903,8 @@ if ($Install) {
         -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
     # Правило firewall Windows: входящие на порты стека, которые слушает
-    # portproxy на адресе хоста в ЛВС.
+    # portproxy на адресе хоста в ЛВС, — только к его слушателю:
+    # svchost.exe службы IP Helper.
     $ruleParams = @{
         Name          = $RuleName
         DisplayName   = 'Домовой: порты стека из локальной сети (portproxy на движок в WSL)'
@@ -904,6 +913,8 @@ if ($Install) {
         LocalPort     = @([string]$apiPort, [string]$haPort)
         RemoteAddress = $RemoteAddresses
         Profile       = $RuleProfile
+        Program       = (Join-Path $env:SystemRoot 'System32\svchost.exe')
+        Service       = $IpHelperService
         Action        = 'Allow'
     }
 
@@ -1023,7 +1034,7 @@ if ($Install) {
         # Порядок — как у исполнения: прежнее правило Hyper-V снимается до
         # записи правила Windows с тем же именем.
         Write-Output "firewall.hyperv.remove: $RuleName"
-        foreach ($key in 'Name', 'Direction', 'Protocol', 'Action') {
+        foreach ($key in 'Name', 'Direction', 'Protocol', 'Action', 'Program', 'Service') {
             Write-Output ('firewall.{0}: {1}' -f $key.ToLowerInvariant(), $ruleParams[$key])
         }
         Write-Output ('firewall.profiles: {0}' -f $ruleParams.Profile)
@@ -1177,7 +1188,7 @@ if ($Install) {
         Remove-NetFirewallRule -Name $RuleName
     }
     $null = New-NetFirewallRule @ruleParams
-    Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}' -f $RuleName, ($ruleParams.LocalPort -join ','), ($RemoteAddresses -join ','), $RuleProfile)
+    Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}, служба {4}' -f $RuleName, ($ruleParams.LocalPort -join ','), ($RemoteAddresses -join ','), $RuleProfile, $IpHelperService)
 
     # 7. portproxy: свои записи на прежнем адресе снимаются, на нынешнем
     # пишутся заново (add заменяет запись того же адреса и порта). Адрес в
@@ -1293,11 +1304,14 @@ try {
     $rule = Get-NetFirewallRule -Name $RuleName -ErrorAction Stop
     $portFilter = $rule | Get-NetFirewallPortFilter
     $addressFilter = $rule | Get-NetFirewallAddressFilter
+    $applicationFilter = $rule | Get-NetFirewallApplicationFilter
+    $serviceFilter = $rule | Get-NetFirewallServiceFilter
     $ruleView = [pscustomobject]@{ Enabled = $rule.Enabled; Direction = $rule.Direction; Action = $rule.Action; Protocol = $portFilter.Protocol
-        LocalPorts = @($portFilter.LocalPort); RemoteAddresses = @($addressFilter.RemoteAddress); Profiles = $rule.Profile }
+        LocalPorts = @($portFilter.LocalPort); RemoteAddresses = @($addressFilter.RemoteAddress); Profiles = $rule.Profile
+        Program = $applicationFilter.Program; Service = $serviceFilter.Service }
     $ruleProblems = @(Get-HostRuleProblems $ruleView $stackPorts)
     if ($ruleProblems.Count) { Add-Result 'FAIL' $ruleLink (($ruleProblems -join '; ') + ' — engine-setup.ps1 -Install') }
-    else { Add-Result 'OK' $ruleLink ('TCP {0} с LocalSubnet, профиль Private' -f ($stackPorts -join ',')) }
+    else { Add-Result 'OK' $ruleLink ('TCP {0} с LocalSubnet, профиль Private, svchost.exe службы {1}' -f ($stackPorts -join ','), $IpHelperService) }
 }
 catch {
     if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { Add-Result 'FAIL' $ruleLink "нет правила $RuleName — engine-setup.ps1 -Install" }
