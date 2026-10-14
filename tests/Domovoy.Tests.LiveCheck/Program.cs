@@ -23,9 +23,9 @@ namespace Domovoy.Tests.LiveCheck;
 /// <summary>
 /// Живые замеры против настоящего Home Assistant — запускает владелец.
 ///
-/// Конфигурация — только переменные окружения: <c>Ha__BaseUrl</c>,
-/// <c>Ha__Token</c>, <c>Ha__EntityRegistryPath</c> (относительный путь — от
-/// текущего каталога). Воркер, кэш и быстрый путь поднимаются той же
+/// Конфигурация — user-secrets api и переменные окружения поверх них:
+/// <c>Ha__BaseUrl</c>, <c>Ha__Token</c>, <c>Ha__EntityRegistryPath</c>
+/// (относительный путь — от текущего каталога). Воркер, кэш и быстрый путь поднимаются той же
 /// регистрацией, что у api (<c>AddDomovoyCore</c> и <c>AddHomeAssistant</c>);
 /// контейнер api программа не наблюдает.
 ///
@@ -43,6 +43,9 @@ internal static class Program
     private static readonly TimeSpan GetStatesWait = TimeSpan.FromSeconds(120);
     private const int MaxMessageBytes = 64 * 1024 * 1024;
     private const int CompareAttempts = 3;
+
+    // UserSecretsId из src/Domovoy.Api/Domovoy.Api.csproj.
+    private const string ApiUserSecretsId = "domovoy-api";
 
     public static async Task<int> Main(string[] args)
     {
@@ -95,7 +98,7 @@ internal static class Program
                   время ответа get_states и сверка кэша с GET api/states.
                   Остановка — Ctrl+C.
 
-            Окружение: Ha__BaseUrl, Ha__Token, Ha__EntityRegistryPath.
+            Окружение (поверх user-secrets api): Ha__BaseUrl, Ha__Token, Ha__EntityRegistryPath.
             Реестр проверяется в любом режиме до соединения; без Ha__Token
             программа проверяет конфигурацию и реестр и выходит.
             """);
@@ -171,13 +174,15 @@ internal static class Program
 
     private static IHost BuildHost()
     {
-        // Построитель без источников по умолчанию: ни appsettings, ни
-        // user-secrets — только окружение, как сказано в справке.
+        // Построитель без источников по умолчанию: без appsettings. Токен —
+        // из user-secrets api (тот же, что у dotnet run в Development), чтобы
+        // его не приходилось выставлять в окружение; окружение перекрывает.
         HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
         {
             ContentRootPath = Directory.GetCurrentDirectory(),
         });
 
+        builder.Configuration.AddUserSecrets(ApiUserSecretsId);
         builder.Configuration.AddEnvironmentVariables();
 
         // Без провайдеров: логи хоста не печатаются (адреса запросов).

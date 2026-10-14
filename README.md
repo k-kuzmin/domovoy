@@ -613,11 +613,13 @@ dotnet user-secrets list
 `tests/Domovoy.Tests.LiveCheck` — консольная программа для замеров против
 настоящего Home Assistant: `dotnet test` её не запускает, сборка решения
 собирает. Воркер, кэш и быстрый путь она поднимает той же регистрацией, что
-api. Конфигурация — только переменные окружения:
+api. Конфигурация — user-secrets api (`dotnet user-secrets` в
+`src/Domovoy.Api`) и переменные окружения поверх них. Токен, заданный в
+user-secrets для `dotnet run`, LiveCheck берёт оттуда же — выставлять его в
+окружение не нужно:
 
 ```bash
 export Ha__BaseUrl=http://homeassistant:8123        # адрес HA в локальной сети
-export Ha__Token=<токен служебного пользователя>
 export Ha__EntityRegistryPath=config/entities.yaml   # от текущего каталога
 
 # p50, p95 и max быстрого пути отдельно для чтения и действий.
@@ -650,8 +652,9 @@ export Ha__EntityRegistryPath=config/entities.yaml
 dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- reconnect
 ```
 
-Строка «конфигурация и реестр сущностей прошли проверку» — реестр годен,
-следом программа выходит с «Ha__Token не задан». Отказ печатается типом опций
+Строка «конфигурация и реестр сущностей прошли проверку» — реестр годен.
+Если токена нет ни в окружении, ни в user-secrets, следом программа выходит с
+«Ha__Token не задан»; иначе продолжает выбранный режим. Отказ печатается типом опций
 и числом ошибок, без текста; какие записи (по номеру) и какие поля не
 прошли, называет старт api на том же файле — `dotnet run --project
 src/Domovoy.Api`: профиль запуска указывает на `config/entities.yaml`.
