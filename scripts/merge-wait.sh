@@ -53,8 +53,6 @@ while :; do
         printf 'gh pr view: код %s\n' "$RC" >&2
         exit 1
     fi
-    # gh под Windows может закончить строку возвратом каретки.
-    STATE="${STATE%$'\r'}"
     case "$STATE" in
         OPEN)
             sleep "$INTERVAL"
