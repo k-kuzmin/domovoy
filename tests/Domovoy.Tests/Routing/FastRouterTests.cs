@@ -59,6 +59,9 @@ public sealed class FastRouterTests
         // Комната решает, какая сущность: тот же глагол, другая комната.
         { "Выключи свет в гостиной", "switch", LivingRoomLight, "turn_off", null },
 
+        // Комната родительным падежом реестра.
+        { "Какая температура спальни", "read_value", "sensor.example_bedroom_temperature", "read", null },
+
         // Границы значения проверяет слой Ha, а не роутер: число уходит как есть.
         { "Поставь 400 градусов в спальне", "set_value", BedroomAc, "set_temperature", "400" },
     };
@@ -85,6 +88,7 @@ public sealed class FastRouterTests
 
     [Theory(DisplayName = "Неверная комната, двусмысленность или чужое действие — нет совпадения")]
     [InlineData("Включи свет в спальне")]
+    [InlineData("Включи свет на кухню")]
     [InlineData("Какая температура на кухне")]
     [InlineData("Какая влажность в гостиной")]
     [InlineData("Выключи свет")]
