@@ -1054,6 +1054,47 @@ test_host_rule_problems() {
   ok "$name"
 }
 
+# Прежнее правило Hyper-V (Remove-LegacyHyperVRule): Get-NetFirewallHyperVRule
+# -Name отдаёт под тем же именем и правило firewall Windows (VMCreatorId Any),
+# а снимать можно только правило WSL — его VMCreatorId. Командлеты Hyper-V
+# подменены функциями до первого вызова: функция по имени берёт верх над
+# командлетом, хост не трогается. $RuleName и $WslVmCreatorId — из AST
+# сценария, а VMCreatorId WSL в объектах — свой: ошибка в постоянной
+# сценария видна.
+test_remove_legacy_hyperv_rule() {
+  local name=remove_legacy_hyperv_rule shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function Get-NetFirewallHyperVRule { [CmdletBinding()] param([string[]]$Name) @($global:rules | Where-Object { $Name -contains $_.Name }) }
+      function Remove-NetFirewallHyperVRule { [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)]$InputObject) process { $global:removed += @($InputObject) } }
+      $script = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+      foreach ($var in "RuleName", "WslVmCreatorId") {
+        $assign = $script.Find({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text -eq "`$$var" }, $false)
+        if (-not $assign) { "нет присваивания `$$var"; exit 1 }
+        . ([scriptblock]::Create($assign.Extent.Text))
+      }
+      $wsl = "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}"
+      function hv($id) { [pscustomobject]@{ Name = $RuleName; VMCreatorId = $id } }
+      foreach ($id in $wsl, $wsl.ToLowerInvariant()) {
+        $global:rules = @((hv "Any"), (hv $id))
+        $global:removed = @()
+        $said = Remove-LegacyHyperVRule
+        if ($global:removed.Count -ne 1 -or $global:removed[0].VMCreatorId -ne $id) { "VMCreatorId ${id}: снято $($global:removed.Count): $(@($global:removed | ForEach-Object { $_.VMCreatorId }) -join ", ")"; exit 1 }
+        if ($said -notmatch "удалено") { "VMCreatorId ${id}: ответ «$said»"; exit 1 }
+      }
+      $global:rules = @((hv "Any"))
+      $global:removed = @()
+      $said = Remove-LegacyHyperVRule
+      if ($global:removed.Count) { "без правила WSL снято $($global:removed.Count)"; exit 1 }
+      if ($said -notmatch "нет") { "без правила WSL ответ «$said»"; exit 1 }' \
+      Remove-LegacyHyperVRule
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 # Звено -Check «журнал systemd на диске, сброс ≤ 10 с»: вывод
 # systemd-analyze cat-config systemd/journald.conf, действует последнее
 # присваивание; без SyncIntervalSec — 5 мин по умолчанию.
@@ -1726,6 +1767,7 @@ test_firewall_profile_problems
 test_select_listen_address
 test_portproxy_problems
 test_host_rule_problems
+test_remove_legacy_hyperv_rule
 test_journald_config_problems
 test_container_log_problems
 test_native_output_encoding
