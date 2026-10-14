@@ -13,14 +13,18 @@
 #     получает DPkg::Lock::Timeout, в install_docker нет вызовов мимо обёртки;
 #   - -Check и замер стучатся на 127.0.0.1, а не localhost;
 #   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1); профиль
-#     правила firewall, само правило, профиль Private firewall Windows,
-#     выбор адреса прослушивания и записи portproxy — функциями сценария,
-#     извлечёнными из AST;
+#     правила firewall, само правило, профили Domain, Private и Public
+#     firewall Windows, выбор адреса прослушивания, записи portproxy,
+#     снятие прежнего правила Hyper-V (командлеты подменены функциями) и
+#     звено .wslconfig в -Check — функциями сценария, извлечёнными из AST;
 #   - docker-wsl.sh передаёт аргументы wsl.exe как есть (подделки wsl.exe и
 #     cygpath первыми в PATH);
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
 #     pwsh 7; engine-setup.ps1 -Install -DryRun печатает собранные задачи,
-#     правило, portproxy и .wslconfig и ничего не создаёт; -Uninstall -DryRun печатает
+#     правило, portproxy и .wslconfig и ничего не создаёт (адрес, служба
+#     IP Helper и профили firewall подменены — от машины вывод не зависит),
+#     отказывает при IP Helper без автозапуска и открытом профиле
+#     firewall; -Uninstall -DryRun печатает
 #     план сноса движка без отката и не трогает .wslconfig, копию и
 #     отметку; measure-boot.ps1 против локальной заглушки /health на python
 #     (порт на 127.0.0.1, журнал во временном каталоге);
@@ -451,11 +455,15 @@ engine_setup() {
 
 # Адрес прослушивания portproxy подменяется адресом документации RFC 5737:
 # выбор по маршрутам хоста проверяет test_select_listen_address, а вывод
-# сухого прогона от сети машины не зависит.
+# сухого прогона от сети машины не зависит. Так же подменяются запуск
+# службы IP Helper и профили firewall Windows — исправными по умолчанию;
+# сценарий отказа задаёт свои: ip_helper=Manual dry_run …,
+# open_profile=Public dry_run …
 dry_run() {
   local shell="$1"
   shift
-  engine_setup "$shell" -Install -DryRun -AssumeListenAddress 192.0.2.10 "$@"
+  engine_setup "$shell" -Install -DryRun -AssumeListenAddress 192.0.2.10 \
+    -AssumeIpHelperStartType "${ip_helper:-Automatic}" -AssumeOpenFirewallProfile "${open_profile:-None}" "$@"
 }
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
@@ -498,6 +506,8 @@ test_engine_setup_dry_run() {
       "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet' \
       'firewall.profiles: Private' 'firewall.action: Allow' 'firewall.profiles.private_only: True' \
       'firewall.hyperv.remove: domovoy-engine-ports' \
+      'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' \
+      'iphlpsvc.starttype: Automatic' \
       'listen.address: assumed (-AssumeListenAddress, not printed)' \
       'portproxy.add: v4tov4 listenport=28081 connectaddress=127.0.0.1 connectport=28081' \
       "portproxy.add: v4tov4 listenport=$ha_default connectaddress=127.0.0.1 connectport=$ha_default" \
@@ -659,6 +669,24 @@ test_engine_setup_dry_run() {
   rm -f "$work/wslconfig"*
   ok "$name"
 
+  # Состояние хоста, при котором порты стека не закрыты или portproxy не
+  # переживёт загрузку, — отказ до первого изменения: IP Helper без
+  # автозапуска; профиль firewall Windows, который по умолчанию пропускает
+  # входящие (правило Private закрывает порты, только пока профили их
+  # блокируют). Любой из трёх профилей.
+  name=engine_setup_refuses_host_state
+  ip_helper=Manual dry_run "${shells[0]}"
+  [ "$rc" -eq 1 ] || { fail "$name" "IP Helper Manual: код $rc, ожидался 1"; show_out; return; }
+  grep -q '^iphlpsvc\.conflict: .*Automatic' "$work/out.${shells[0]}" || { fail "$name" "IP Helper Manual: конфликт не назван"; show_out; return; }
+  local open
+  for open in Domain Private Public; do
+    open_profile="$open" dry_run "${shells[0]}"
+    [ "$rc" -eq 1 ] || { fail "$name" "профиль $open открыт: код $rc, ожидался 1"; show_out; return; }
+    grep -q "^firewall\.hostprofiles\.conflict: .*$open" "$work/out.${shells[0]}" || { fail "$name" "профиль $open открыт: конфликт не назван"; show_out; return; }
+    if grep -q '^firewall\.hostprofiles: ok' "$work/out.${shells[0]}"; then fail "$name" "профиль $open открыт, а напечатано ok"; show_out; return; fi
+  done
+  ok "$name"
+
   name=engine_setup_requires_mode
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")"
   [ "$rc" -eq 2 ] || { fail "$name" "без режима код $rc, ожидался 2"; show_out; return; }
@@ -673,6 +701,10 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeEngineState без -DryRun код $rc, ожидался 2"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeListenAddress 192.0.2.10
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeListenAddress без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeIpHelperStartType Automatic
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeIpHelperStartType без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeOpenFirewallProfile None
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeOpenFirewallProfile без -DryRun код $rc, ожидался 2"; show_out; return; }
   # Подменённый адрес — только IPv4 одного узла: петля и подстановочный
   # адрес дали бы петлю portproxy.
   local bad_address
@@ -916,6 +948,38 @@ test_firewall_profile_problems() {
         if (-not @(Get-FirewallProfileProblems $bad).Count) { "принято $($bad.Enabled)/$($bad.DefaultInboundAction)"; exit 1 }
       }' \
       Get-FirewallProfileProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Профили firewall Windows целиком (Get-FirewallProfileStates): закрытость
+# портов стека держат все три — Private, где действует правило, и Public с
+# Domain, где правила нет и порты закрывает только блокировка входящих по
+# умолчанию. Каждый профиль — своя запись с именем; профиль, которого нет
+# среди прочитанных, — замечание, а не OK.
+test_firewall_profile_states() {
+  local name=firewall_profile_states shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function p($n, $e, $d) { [pscustomobject]@{ Name = $n; Enabled = $e; DefaultInboundAction = $d } }
+      function bad($states) { @($states | Where-Object { $_.Problems.Count } | ForEach-Object { $_.Name }) -join "," }
+      $good = @((p "Domain" "True" "Block"), (p "Private" "True" "Block"), (p "Public" "True" "Block"))
+      $states = @(Get-FirewallProfileStates $good)
+      if ((@($states | ForEach-Object { $_.Name }) -join ",") -ne "Domain,Private,Public") { "профили: $(@($states | ForEach-Object { $_.Name }) -join ",")"; exit 1 }
+      if (bad $states) { "исправные профили с замечаниями: $(bad $states)"; exit 1 }
+      foreach ($open in "Domain", "Private", "Public") {
+        $set = @($good | ForEach-Object { if ($_.Name -eq $open) { p $open "True" "Allow" } else { $_ } })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "открыт $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+        $set = @($good | ForEach-Object { if ($_.Name -eq $open) { p $open "False" "Block" } else { $_ } })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "выключен $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+        $set = @($good | Where-Object { $_.Name -ne $open })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "не прочитан $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+      }
+      if ((bad (Get-FirewallProfileStates @())) -ne "Domain,Private,Public") { "пустой список принят"; exit 1 }' \
+      Get-FirewallProfileStates Get-FirewallProfileProblems
     [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
   done
   ok "$name"
@@ -1795,6 +1859,7 @@ test_engine_setup_dry_run
 test_uninstall_dry_run_without_rollback
 test_rule_profile_private_only
 test_firewall_profile_problems
+test_firewall_profile_states
 test_select_listen_address
 test_portproxy_problems
 test_host_rule_problems

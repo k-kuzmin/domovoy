@@ -54,15 +54,19 @@
        все дистрибутивы пользователя), выполняет владелец (README);
     6. правило firewall Windows domovoy-engine-ports: входящие TCP на порты
        API и Home Assistant, только с локальной подсети, только в профиле
-       Private — сеть хоста должна быть частной, в общественной порты закрыты.
-       Прежнее правило Hyper-V firewall с тем же именем (0028) снимается;
+       Private. Сеть хоста должна быть частной. Закрытость портов шире
+       правила держат профили firewall Windows: все три (Domain, Private,
+       Public) должны быть включены и по умолчанию блокировать входящие —
+       иначе отказ до первого изменения. Прежнее правило Hyper-V firewall
+       с тем же именем (0028) снимается;
     7. portproxy v4tov4 с адреса хоста в ЛВС на 127.0.0.1 того же порта —
        по записи на порт API и Home Assistant: доступ из ЛВС. Адрес —
        IPv4 интерфейса с маршрутом по умолчанию в частной сети, с наименьшим
        весом (метрика маршрута + метрика интерфейса); два адреса с равным
        весом или ни одного — отказ. Свои записи на прежнем адресе снимаются,
        чужие не трогаются. Служба IP Helper (iphlpsvc), без которой portproxy
-       не работает, должна запускаться автоматически — иначе отказ. Адрес в
+       не работает, должна запускаться автоматически — иначе отказ до
+       первого изменения. Адрес в
        вывод не попадает. Сменился адрес (DHCP, другая сеть) — повторный
        -Install;
     8. последним шагом — расписание бэкапа:
@@ -81,8 +85,9 @@
   docker journald (docker info), restart: unless-stopped и драйвер логов
   journald у контейнеров проекта (созданные до смены драйвера — FAIL с
   подсказкой --force-recreate), порт замера. Сеть: .wslconfig с nat,
-  правило firewall Windows, профиль Private firewall (включён, входящие
-  по умолчанию блокируются), адрес в ЛВС, записи portproxy на нём,
+  правило firewall Windows, профили firewall Domain, Private и Public —
+  каждый звеном (включён, входящие по умолчанию блокируются), адрес в ЛВС,
+  записи portproxy на нём,
   IP Helper, слушатель portproxy на адресе и /health на 127.0.0.1, [::1] и
   адресе в ЛВС — все в итоге. Адрес в ЛВС в вывод не попадает.
 
@@ -125,7 +130,16 @@ param(
     # Только с -DryRun: подмена адреса прослушивания portproxy для теста —
     # вывод сухого прогона не зависит от сети машины. Без него адрес
     # выбирается по маршрутам хоста (Select-ListenAddress).
-    [string]$AssumeListenAddress = ''
+    [string]$AssumeListenAddress = '',
+    # Только с -DryRun: подмена типа запуска службы IP Helper для теста —
+    # вывод и код сухого прогона не зависят от службы машины.
+    [ValidateSet('', 'Automatic', 'Manual', 'Disabled')]
+    [string]$AssumeIpHelperStartType = '',
+    # Только с -DryRun: подмена профилей firewall Windows для теста. None —
+    # все три включены и блокируют входящие; имя профиля — этот пропускает
+    # входящие по умолчанию.
+    [ValidateSet('', 'None', 'Domain', 'Private', 'Public')]
+    [string]$AssumeOpenFirewallProfile = ''
 )
 
 Set-StrictMode -Version Latest
@@ -169,6 +183,8 @@ if ($modeCount -gt 1) { Stop-WithError 'укажите один режим: -Ins
 if ($modeCount -eq 0) { Stop-WithError 'укажите режим: -Install, -Check или -Uninstall' 2 }
 if ($DryRun -and $Check) { Stop-WithError '-DryRun — только с -Install или -Uninstall' 2 }
 if ($AssumeEngineState -and -not $DryRun) { Stop-WithError '-AssumeEngineState — только с -DryRun' 2 }
+if ($AssumeIpHelperStartType -and -not $DryRun) { Stop-WithError '-AssumeIpHelperStartType — только с -DryRun' 2 }
+if ($AssumeOpenFirewallProfile -and -not $DryRun) { Stop-WithError '-AssumeOpenFirewallProfile — только с -DryRun' 2 }
 if ($AssumeListenAddress) {
     if (-not $DryRun) { Stop-WithError '-AssumeListenAddress — только с -DryRun' 2 }
     # IPv4 одного узла: петля и подстановочный адрес дали бы петлю portproxy.
@@ -383,16 +399,32 @@ function Test-PrivateProfileOnly($Value) {
     return ($text -eq 'Private' -or $text -eq '2')
 }
 
-# Профиль Private firewall Windows (Get-NetFirewallProfile, ActiveStore):
-# правило сужает доступ к портам стека, только пока профиль включён и по
-# умолчанию блокирует входящие. Значения — перечисления; сравнивается их
-# текст. В хранилище по умолчанию без явной настройки стоит NotConfigured —
-# не OK. Пустой список — замечаний нет.
+# Профиль firewall Windows (Get-NetFirewallProfile, ActiveStore): закрыт,
+# только пока включён и по умолчанию блокирует входящие. Значения —
+# перечисления; сравнивается их текст. В хранилище по умолчанию без явной
+# настройки стоит NotConfigured — не OK. Пустой список — замечаний нет.
 function Get-FirewallProfileProblems($Setting) {
     $found = @()
     if ([string]$Setting.Enabled -ne 'True') { $found += "Enabled $($Setting.Enabled), нужен True" }
     if ([string]$Setting.DefaultInboundAction -ne 'Block') { $found += "DefaultInboundAction $($Setting.DefaultInboundAction), нужен Block" }
     return $found
+}
+
+# Все три профиля firewall Windows — закрытость портов стека держат они
+# вместе. В Private правило пропускает только локальную подсеть, и то, пока
+# профиль блокирует остальное. В Public и Domain правила нет: слушатель
+# portproxy привязан к адресу, а не к сети, и сеть того же адреса с другим
+# профилем (сеть сменила профиль, чужая сеть с тем же адресом) закрывает
+# только блокировка входящих по умолчанию. Запись на профиль — Name и
+# Problems; профиль, которого нет среди прочитанных, — замечание.
+function Get-FirewallProfileStates($Settings) {
+    $states = @()
+    foreach ($name in 'Domain', 'Private', 'Public') {
+        $setting = @($Settings | Where-Object { $null -ne $_ -and [string]$_.Name -eq $name })
+        if (-not $setting.Count) { $states += [pscustomobject]@{ Name = $name; Problems = @('профиль не прочитан') }; continue }
+        $states += [pscustomobject]@{ Name = $name; Problems = @(Get-FirewallProfileProblems $setting[0]) }
+    }
+    return $states
 }
 
 # Адрес прослушивания portproxy. Кандидат — IPv4-адрес интерфейса с
@@ -879,12 +911,32 @@ if ($Install) {
     if ($AssumeListenAddress) { $listen = [pscustomobject]@{ Address = $AssumeListenAddress; Reason = '' } }
     else { $listen = Get-HostListenAddress }
     $ipHelper = Get-Service -Name $IpHelperService -ErrorAction SilentlyContinue
-    $ipHelperStart = if ($ipHelper) { [string]$ipHelper.StartType } else { 'не найдена' }
+    if ($AssumeIpHelperStartType) { $ipHelperStart = $AssumeIpHelperStartType }
+    else { $ipHelperStart = if ($ipHelper) { [string]$ipHelper.StartType } else { 'не найдена' } }
     # portproxy держит служба IP Helper: без автозапуска записи после
     # загрузки не слушают.
     $ipHelperProblem = if ($ipHelperStart -ne 'Automatic') {
         "служба IP Helper ($IpHelperService): запуск $ipHelperStart, нужен Automatic — без неё portproxy не работает; Set-Service $IpHelperService -StartupType Automatic"
     } else { '' }
+    # Профили firewall Windows (Get-FirewallProfileStates): правило и
+    # portproxy открывают порты стека на адресе хоста, и закрытыми шире
+    # правила их держат только профили, блокирующие входящие по умолчанию.
+    # Открытый профиль — отказ до первого изменения.
+    if ($AssumeOpenFirewallProfile) {
+        $profileSettings = foreach ($name in 'Domain', 'Private', 'Public') {
+            [pscustomobject]@{ Name = $name; Enabled = 'True'; DefaultInboundAction = $(if ($name -eq $AssumeOpenFirewallProfile) { 'Allow' } else { 'Block' }) }
+        }
+    }
+    else {
+        try { $profileSettings = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop) }
+        catch { $profileSettings = @() }
+    }
+    $openProfiles = @(Get-FirewallProfileStates $profileSettings | Where-Object { $_.Problems.Count })
+    $firewallProfileProblem = ''
+    if ($openProfiles.Count) {
+        $firewallProfileProblem = 'firewall Windows: {0} — порты стека были бы открыты шире правила; Set-NetFirewallProfile -Profile {1} -Enabled True -DefaultInboundAction Block' -f `
+        ((@($openProfiles | ForEach-Object { "профиль $($_.Name): $($_.Problems -join ', ')" }) -join '; '), (@($openProfiles | ForEach-Object { $_.Name }) -join ','))
+    }
 
     $wslConfig = Get-WslConfigPlan $WslConfigPath
     $wslSave = Get-WslConfigSave $WslConfigPath $wslConfig.Exists
@@ -965,6 +1017,8 @@ if ($Install) {
                 if ($line) { Write-Output "wslconfig.line: $line" }
             }
         }
+        if ($firewallProfileProblem) { Write-Output "firewall.hostprofiles.conflict: $firewallProfileProblem" }
+        else { Write-Output 'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' }
         foreach ($key in 'Name', 'Direction', 'Protocol', 'Action') {
             Write-Output ('firewall.{0}: {1}' -f $key.ToLowerInvariant(), $ruleParams[$key])
         }
@@ -989,7 +1043,7 @@ if ($Install) {
         foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
         foreach ($line in $schedule.ErrLines) { Write-Output "backup.stderr: $line" }
         Write-Output "backup.exitcode: $scheduleCode"
-        if ($wslConfig.Conflict -or $listen.Reason -or $ipHelperProblem -or $scheduleCode -ne 0) {
+        if ($wslConfig.Conflict -or $listen.Reason -or $ipHelperProblem -or $firewallProfileProblem -or $scheduleCode -ne 0) {
             Write-Output 'DryRun: nothing changed'
             exit 1
         }
@@ -1005,6 +1059,7 @@ if ($Install) {
     }
     if ($listen.Reason) { Stop-WithError "адрес хоста в ЛВС для portproxy: $($listen.Reason)" }
     if ($ipHelperProblem) { Stop-WithError $ipHelperProblem }
+    if ($firewallProfileProblem) { Stop-WithError $firewallProfileProblem }
     if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
         Stop-WithError 'wsl.exe не найден — включите WSL2 (wsl --install) и повторите'
     }
@@ -1246,18 +1301,22 @@ catch {
     else { Add-Result 'SKIP' $ruleLink "не проверено: $($_.Exception.Message)" }
 }
 
-# Профиль Private firewall Windows: правило выше сужает доступ, только пока
-# профиль включён и по умолчанию блокирует входящие. ActiveStore — действующие
-# значения: в хранилище по умолчанию без явной настройки стоит NotConfigured.
-$profileLink = 'firewall Windows: профиль Private'
+# Профили firewall Windows (Get-FirewallProfileStates), каждый своим звеном:
+# Private — правило выше сужает доступ, только пока профиль блокирует
+# остальное; Public и Domain — слушатель portproxy привязан к адресу, а не к
+# сети, и в сети этих профилей порты стека закрывает только блокировка
+# входящих по умолчанию. ActiveStore — действующие значения: в хранилище по
+# умолчанию без явной настройки стоит NotConfigured.
 try {
-    $privateProfile = Get-NetFirewallProfile -PolicyStore ActiveStore -Name Private -ErrorAction Stop
-    $profileProblems = @(Get-FirewallProfileProblems $privateProfile)
-    if ($profileProblems.Count) { Add-Result 'FAIL' $profileLink (($profileProblems -join '; ') + ' — входящие на порты стека открыты шире правила') }
-    else { Add-Result 'OK' $profileLink 'Enabled True, DefaultInboundAction Block' }
+    $profileStates = @(Get-FirewallProfileStates @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop))
+    foreach ($state in $profileStates) {
+        $profileLink = "firewall Windows: профиль $($state.Name)"
+        if ($state.Problems.Count) { Add-Result 'FAIL' $profileLink (($state.Problems -join '; ') + " — в сети профиля $($state.Name) порты стека открыты шире правила; Set-NetFirewallProfile -Profile $($state.Name) -Enabled True -DefaultInboundAction Block") }
+        else { Add-Result 'OK' $profileLink 'Enabled True, DefaultInboundAction Block' }
+    }
 }
 catch {
-    Add-Result 'SKIP' $profileLink "не проверено: $($_.Exception.Message)"
+    foreach ($name in 'Domain', 'Private', 'Public') { Add-Result 'SKIP' "firewall Windows: профиль $name" "не проверено: $($_.Exception.Message)" }
 }
 
 # Адрес хоста в ЛВС — тем же выбором, что у -Install: смена адреса (DHCP,
