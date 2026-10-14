@@ -57,7 +57,7 @@
     ]
   },
   "approach": {
-    "summary": "По выбору владельца (журнал, «Ответ владельца»). 1) `merge-wait.sh` одним запросом читает `gh pr view <N> --json state,mergeStateStatus --jq '.state + \" \" + .mergeStateStatus'`. Исходы: `MERGED`/`CLOSED` — как раньше, mergeStateStatus для них не смотрится (у смердженного PR он `UNKNOWN`); `OPEN` + `BEHIND` — новый исход: код 0, ровно `BEHIND` в stdout, ожидание кончается на том опросе, где BEHIND появился; `OPEN` с любым другим mergeStateStatus (`UNKNOWN`, `BLOCKED`, `CLEAN`, `UNSTABLE`, `DRAFT`, `DIRTY`, пусто, будущие значения) — ожидание продолжается, закрытого перечня значений нет; незнакомый `state` и пустой ответ — код 1, как раньше. Фоновая задача, кончившись, будит оркестратора — так он узнаёт об отставании сам. 2) `.claude/CLAUDE.md`: п. 10 — до отдачи PR `git fetch`, затем `git log HEAD..origin/main`; непустой вывод — `git merge origin/main` (без force-push), пуш, ожидание CI последнего коммита, и только потом отдача; п. 11 — исход `BEHIND`: то же подтягивание, пуш, ожидание CI, перезапуск ожидания мерджа; возобновлённая сессия начинает с `gh pr view <N> --json state,mergeStateStatus`. Сверка как правило живёт только в п. 10–11. 3) note правила `merge-wait` отсылает к п. 10–11 (сверка с main до отдачи и исходы MERGED, CLOSED, BEHIND) — условие и путь, без команд. 4) Шапка сценария и строка docs/pipeline.md называют исход BEHIND.",
+    "summary": "По выбору владельца (журнал, «Ответ владельца»). 1) `merge-wait.sh` одним запросом читает `gh pr view <N> --json state,mergeStateStatus --jq '.state + \" \" + .mergeStateStatus'`. Исходы: `MERGED`/`CLOSED` — как раньше, mergeStateStatus для них не смотрится (у смердженного PR он `UNKNOWN`); `OPEN` + `BEHIND` — новый исход: код 0, ровно `BEHIND` в stdout, ожидание кончается на том опросе, где BEHIND появился; `OPEN` + `DIRTY` (main ушёл вперёд с конфликтом — GitHub отдаёт DIRTY вместо BEHIND, и мердж так же невозможен) — исход `DIRTY` тем же кодом 0; `OPEN` с любым другим mergeStateStatus (`UNKNOWN`, `BLOCKED`, `CLEAN`, `UNSTABLE`, `DRAFT`, пусто, будущие значения) — ожидание продолжается, закрытого перечня значений нет; незнакомый `state` и пустой ответ — код 1, как раньше. Фоновая задача, кончившись, будит оркестратора — так он узнаёт об отставании сам. 2) `.claude/CLAUDE.md`: п. 10 — до отдачи PR `git fetch`, затем `git log HEAD..origin/main`; непустой вывод — `git merge origin/main` (без force-push), пуш, ожидание CI последнего коммита, и только потом отдача; п. 11 — исход `BEHIND`: то же подтягивание, пуш, ожидание CI, перезапуск ожидания мерджа; исход `DIRTY`: тот же `git merge origin/main`, а конфликт слияния — вопрос человеку; возобновлённая сессия начинает с `gh pr view <N> --json state,mergeStateStatus`. Сверка как правило живёт только в п. 10–11. 3) note правила `merge-wait` отсылает к п. 10–11 (сверка с main до отдачи и исходы MERGED, CLOSED, BEHIND) — условие и путь, без команд. 4) Шапка сценария и строка docs/pipeline.md называют исход BEHIND.",
     "rejected": [
       {
         "option": "Только шаг правила п. 10 без исхода в сценарии",
@@ -72,13 +72,17 @@
         "reason": "Код 0 уже значит «ожидание кончилось исходом, исход в stdout»; оркестратор ветвится по stdout, а коды 1 и 2 оставлены за сбоем и ошибкой вызова. Наблюдаемый результат для владельца тот же."
       },
       {
+        "option": "DIRTY оставить ожиданием (буквально «BEHIND» из ответа владельца)",
+        "reason": "Пункт 2 issue буквально — «main ушёл вперёд, пока PR ждёт мерджа, оркестратор узнаёт это сам»; с конфликтом GitHub отдаёт DIRTY, и без исхода это повтор #154. Ответ владельца выбирал механизм (mergeStateStatus против compare-API), а не перечень значений; тот же класс дефекта в том же case доводится на месте. Расширение сверх слова «BEHIND» оркестратор подтверждает до совета."
+      },
+      {
         "option": "Закрытый перечень mergeStateStatus с кодом 1 на незнакомом",
         "reason": "UNKNOWN у открытого PR — обычное значение (GitHub вычисляет его лениво); ложный «сбой» на нём или на значении, которое GitHub добавит позже, обрывал бы ожидание."
       }
     ]
   },
   "fork_card": {
-    "matches_request": "Да: пункт 1 issue — сверка в п. 10, пункт 2 — исход BEHIND сценария (вариант, названный в issue и выбранный владельцем), пункт 3 — правило в одном месте (.claude/CLAUDE.md), note впрыска на него указывает.",
+    "matches_request": "Да: пункт 1 issue — сверка в п. 10, пункт 2 — исход BEHIND сценария (вариант, названный в issue и выбранный владельцем) и тем же механизмом исход DIRTY (main ушёл вперёд с конфликтом) — расширение сверх слова «BEHIND» в ответе владельца, требует подтверждения оркестратора; пункт 3 — правило в одном месте (.claude/CLAUDE.md), note впрыска на него указывает.",
     "alternative": "Нет реалистичного второго: compare-API и «только правило» отвергнуты владельцем; код 0 против нового кода и закрытый перечень значений — внутреннее устройство при том же наблюдаемом результате.",
     "ripple": "Греп `merge-wait` по .claude, docs, scripts: вызов и исходы — .claude/CLAUDE.md:105–116 и :341 (строка команд, не меняется), note — .claude/hooks/rules-map.json:143, строка таблицы — docs/pipeline.md:104, тест — scripts/merge-wait.test.sh. Форма вызова gh в сценариях 1 и 2 (`expect_every_call`, строки 201 и 213) меняется на новую. Предфильтр rule-injector.sh:272 и пробы test_rules_map.py:99 не затрагиваются — command_regex прежний. Других вызывающих `merge-wait.sh` нет.",
     "workaround": "Нет: исход читает признак, которым GitHub сам запрещает мердж отставшей ветки; сверка до отдачи — шаг правила, а не обход.",
@@ -99,7 +103,7 @@
           ".claude/hooks/tests/test_rules_map.py",
           "docs/pipeline.md"
         ],
-        "contract": "Исход сценария: код 0 и ровно `BEHIND` в stdout при state=OPEN и mergeStateStatus=BEHIND; вызов `gh pr view <N> --json state,mergeStateStatus --jq '.state + \" \" + .mergeStateStatus'`. Текст п. 10–11, note и строка pipeline называют этот исход тем же словом."
+        "contract": "Исходы сценария: код 0 и ровно `BEHIND` в stdout при state=OPEN и mergeStateStatus=BEHIND, ровно `DIRTY` при OPEN и DIRTY; вызов `gh pr view <N> --json state,mergeStateStatus --jq '.state + \" \" + .mergeStateStatus'`. Текст п. 10–11, note и строка pipeline называют эти исходы теми же словами."
       ,
         "after": []
       }
@@ -110,7 +114,7 @@
     {
       "path": "scripts/merge-wait.sh",
       "action": "modify",
-      "why": "Запрос state и mergeStateStatus одним вызовом gh, исход BEHIND (код 0, stdout BEHIND) при OPEN+BEHIND, шапка с новым исходом. harness_quality."
+      "why": "Запрос state и mergeStateStatus одним вызовом gh, исходы BEHIND и DIRTY (код 0, слово в stdout) при OPEN, шапка с новыми исходами и их зависимостью от ruleset. harness_quality."
     },
     {
       "path": "scripts/merge-wait.test.sh",
@@ -120,22 +124,22 @@
     {
       "path": ".claude/CLAUDE.md",
       "action": "modify",
-      "why": "П. 10 — сверка с origin/main до отдачи (fetch, `git log HEAD..origin/main`, merge без force-push, ожидание CI последнего коммита); п. 11 — исход BEHIND и `--json state,mergeStateStatus` у возобновлённой сессии. harness_quality."
+      "why": "П. 10 — сверка с origin/main до отдачи (fetch, `git log HEAD..origin/main`, merge без force-push, ожидание CI последнего коммита); п. 11 — исходы BEHIND и DIRTY и `--json state,mergeStateStatus` у возобновлённой сессии. harness_quality."
     },
     {
       "path": ".claude/hooks/rules-map.json",
       "action": "modify",
-      "why": "note правила merge-wait: указание на п. 10–11 — сверка с main до отдачи и исходы MERGED, CLOSED, BEHIND; command_regex не меняется. harness_control (high) — заявлено явно."
+      "why": "note правила merge-wait: указание на п. 10–11 — сверка с main до отдачи и исходы MERGED, CLOSED, BEHIND, DIRTY; command_regex не меняется. harness_control (high) — заявлено явно."
     },
     {
       "path": ".claude/hooks/tests/test_rules_map.py",
       "action": "modify",
-      "why": "Тест, что note правила merge-wait указывает на п. 10–11 .claude/CLAUDE.md и называет исход BEHIND сценария. harness_control (high) — заявлено явно."
+      "why": "Тест, что note правила merge-wait указывает на п. 10–11 .claude/CLAUDE.md и называет BEHIND, а сам п. 10 содержит сверку `HEAD..origin/main`. harness_control (high) — заявлено явно."
     },
     {
       "path": "docs/pipeline.md",
       "action": "modify",
-      "why": "Строка 104 таблицы сценариев: `merge-wait.sh` печатает MERGED, CLOSED или BEHIND."
+      "why": "Строка 104 таблицы сценариев: `merge-wait.sh` печатает MERGED, CLOSED, BEHIND или DIRTY."
     }
   ],
   "boundaries": [
@@ -168,11 +172,18 @@
       "behavior": "PR уже отстал в момент постановки ожидания: исход BEHIND сразу, без паузы и второго опроса; форма каждого вызова — `pr view 150 --json state,mergeStateStatus --jq .state + \" \" + .mergeStateStatus`."
     },
     {
-      "name": "OPEN с UNKNOWN, BLOCKED, CLEAN, DIRTY — ожидание продолжается до MERGED",
+      "name": "OPEN с UNKNOWN, BLOCKED, CLEAN, UNSTABLE — ожидание продолжается до MERGED",
       "file": "scripts/merge-wait.test.sh",
       "new": true,
       "covers": ["A2"],
-      "behavior": "Любой mergeStateStatus, кроме BEHIND, при state=OPEN не кончает ожидание и не даёт код 1: последовательность OPEN/UNKNOWN OPEN/BLOCKED OPEN/CLEAN OPEN/DIRTY MERGED/UNKNOWN — код 0, ровно MERGED, пять опросов. Ломается, если реализация заведёт закрытый перечень значений."
+      "behavior": "Любой mergeStateStatus, кроме BEHIND и DIRTY, при state=OPEN не кончает ожидание и не даёт код 1: последовательность OPEN/UNKNOWN OPEN/BLOCKED OPEN/CLEAN OPEN/UNSTABLE MERGED/UNKNOWN — код 0, ровно MERGED, пять опросов. Ломается, если реализация заведёт закрытый перечень значений."
+    },
+    {
+      "name": "OPEN DIRTY — код 0, ровно DIRTY, ожидание кончается",
+      "file": "scripts/merge-wait.test.sh",
+      "new": true,
+      "covers": ["A2"],
+      "behavior": "main ушёл вперёд с конфликтом: OPEN/CLEAN OPEN/DIRTY MERGED/UNKNOWN даёт код 0, ровно DIRTY и два опроса — ожидание не молчит на PR, который владелец смерджить не может."
     },
     {
       "name": "CLOSED при BEHIND — исход CLOSED, а не BEHIND",
@@ -192,8 +203,8 @@
       "name": "test_merge_wait_note_names_handoff_and_behind",
       "file": ".claude/hooks/tests/test_rules_map.py",
       "new": true,
-      "covers": ["A3"],
-      "behavior": "note правила merge-wait указывает на .claude/CLAUDE.md и п. 10–11 и называет BEHIND; ломается, если сценарий получит исход, а напоминание в момент отдачи о нём промолчит. Общий test_note_points_to_file по-прежнему держит note указанием, а не пересказом."
+      "covers": ["A1", "A3"],
+      "behavior": "note правила merge-wait указывает на .claude/CLAUDE.md и п. 10–11 и называет BEHIND, а текст п. 10 `.claude/CLAUDE.md` содержит `git log HEAD..origin/main`; ломается, если сценарий получит исход, а напоминание в момент отдачи о нём промолчит, или сверка уйдёт из пункта, на который note указывает. Проверяет текст правила, а не то, что оркестратор его исполнит. Общий test_note_points_to_file по-прежнему держит note указанием, а не пересказом."
     },
     {
       "name": "merge-wait",
@@ -207,13 +218,13 @@
     {
       "id": "A1",
       "criterion": "Перед отдачей PR человеку оркестратор делает git fetch, затем git log HEAD..origin/main; отставшая ветка подтягивает origin/main (merge, без force-push), ждётся CI последнего коммита, и только потом PR отдаётся.",
-      "method": "непроверяем",
-      "evidence": "Поведение оркестратора тестом не воспроизводится: это исполнение текста правила, а не механика. Текст проверяется чтением на ревью — цитата п. 10 `.claude/CLAUDE.md:<строка>` с `git fetch`, `git log HEAD..origin/main`, merge без force-push и ожиданием CI последнего коммита до отдачи; живое подтверждение — первая отдача PR после мерджа этой задачи."
+      "method": "`python3 -m unittest discover -s .claude/hooks/tests -v` — зелёный, включая test_merge_wait_note_names_handoff_and_behind (п. 10 `.claude/CLAUDE.md` содержит `git log HEAD..origin/main`); чтение п. 10 на ревью — fetch, merge без force-push, ожидание CI последнего коммита до отдачи.",
+      "evidence": "Вывод unittest «OK»; цитата п. 10 `.claude/CLAUDE.md:<строка>`. Что оркестратор правило исполнит, тестом не проверяется — подтверждается первой отдачей PR после мерджа этой задачи."
     },
     {
       "id": "A2",
       "criterion": "Если main ушёл вперёд, пока PR ждёт мерджа, оркестратор узнаёт это сам: merge-wait.sh сообщает об отставании ветки отдельным исходом (mergeStateStatus BEHIND).",
-      "method": "`bash scripts/merge-wait.test.sh` — код 0, сценарии BEHIND, «OPEN с UNKNOWN…», «CLOSED при BEHIND» и прежние зелёные; плюс цитата п. 11 `.claude/CLAUDE.md`, что делать на BEHIND.",
+      "method": "`bash scripts/merge-wait.test.sh` — код 0, сценарии BEHIND, DIRTY, «OPEN с UNKNOWN…», «CLOSED при BEHIND» и прежние зелёные; плюс цитата п. 11 `.claude/CLAUDE.md`, что делать на BEHIND и DIRTY.",
       "evidence": "Вывод прогона: «Сценариев пройдено: N, провалено: 0» и строки `[ ok  ]` новых сценариев; до правки сценарий 2а красный с «stdout «MERGED», ожидался ровно «BEHIND»». Живая форма ответа gh для открытого PR в BEHIND не проверена — см. риски."
     },
     {
@@ -229,7 +240,7 @@
       "mitigation": "Сверка перед отдачей по п. 10 от ruleset не зависит; зависимость исхода от политики пишется в шапку merge-wait.sh, чтобы её видел тот, кто трогает ruleset."
     },
     {
-      "risk": "Подставной gh расходится с живым: форма вывода `--jq '.state + \" \" + .mergeStateStatus'` у открытого BEHIND-PR не наблюдалась (на смердженном #154 — «MERGED UNKNOWN»).",
+      "risk": "Подставной gh расходится с живым: форма вывода `--jq '.state + \" \" + .mergeStateStatus'` у открытого PR в BEHIND и DIRTY не наблюдалась (на смердженном #154 — «MERGED UNKNOWN»).",
       "mitigation": "Сценарий читает пару через `read`, лишние пробелы и пустой mergeStateStatus не ломают его; реализация до коммита прогоняет живой `gh pr view <открытый PR> --json state,mergeStateStatus --jq …` и сверяет форму с подставной; несовпадение — в журнал и в PR."
     },
     {
@@ -246,7 +257,7 @@
     }
   ],
   "out_of_scope": [
-    "mergeStateStatus DIRTY (конфликт с main) отдельным исходом не становится: владелец выбрал BEHIND; при DIRTY ожидание продолжается. Пробел — в «Попутно» тела PR.",
+    "Иные mergeStateStatus (BLOCKED, UNSTABLE, DRAFT, UNKNOWN) отдельными исходами не становятся: они не значат, что ветка отстала от main.",
     "Сверка через `gh api …/compare` (`behind_by`) — отвергнута владельцем.",
     "Изменение command_regex правила merge-wait, предфильтра rule-injector.sh:272 и проб PROBES[\"merge-wait\"] — момент срабатывания уже верный.",
     "Автоматическое подтягивание main сценарием: merge и пуш делает оркестратор по правилу, merge-wait.sh только сообщает исход.",
