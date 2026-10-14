@@ -96,6 +96,12 @@ PROBES = {
     "issue-create": (
         [bash("gh issue create --title x --body y"), bash("gh -R o/r issue create -t x", "PowerShell")],
         [bash("gh issue view 131"), bash("gh issue list"), bash("echo 'gh issue create'")]),
+    "merge-wait": (
+        [bash("gh pr checks 150 --watch"), bash("gh pr checks --watch 150", "PowerShell"),
+         bash("gh -R o/r pr checks 1 --watch --interval 30"),
+         bash("git push && gh pr checks 1 --watch"), bash("cd x; gh pr checks 1 --watch")],
+        [bash("gh pr checks 150"), bash("echo 'gh pr checks 1 --watch'"),
+         bash("gh pr view 150 --json state")]),
     "ceremony-card": (
         [edit("src/Domovoy.Api/Program.cs"), edit("tests\\Domovoy.Tests\\A.cs", tool="MultiEdit"),
          edit("src/Domovoy.Api/Domovoy.Api.csproj", tool="Write")],
