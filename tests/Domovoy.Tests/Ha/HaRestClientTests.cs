@@ -146,6 +146,19 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
 
         HaUnavailableException exception = (await act.Should().ThrowAsync<HaUnavailableException>()).Which;
         exception.Message.Should().NotContain(_fake.BaseUrl).And.NotContain(Token);
+        exception.InnerException.Should().BeNull("текст сетевого исключения содержит адрес HA");
+        AssertNothingSensitiveLogged();
+    }
+
+    [Fact(DisplayName = "Нечитаемый ответ REST — HaUnavailableException без исходного исключения")]
+    public async Task GetStatesReportsMalformedResponseWithoutCause()
+    {
+        _fake.SetRawState(KitchenLight, $$"""{"entity_id":"{{KitchenLight}}","state":5}""");
+
+        Func<Task> act = () => CreateClient().GetStatesAsync(null, null, CancellationToken.None);
+
+        HaUnavailableException exception = (await act.Should().ThrowAsync<HaUnavailableException>()).Which;
+        exception.InnerException.Should().BeNull("текст исключения разбора может цитировать ответ HA");
         AssertNothingSensitiveLogged();
     }
 

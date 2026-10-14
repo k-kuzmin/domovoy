@@ -199,13 +199,15 @@ internal sealed class HaRestClient : IHaClient
         catch (JsonException ex)
         {
             // Текст исключения может цитировать ответ — в лог идёт только тип.
+            // По той же причине исключение не кладётся и в InnerException.
             _logger.LogWarning("Ответ Home Assistant на чтение состояний не разобран: {ExceptionType}", ex.GetType().Name);
-            throw new HaUnavailableException(ex);
+            throw new HaUnavailableException();
         }
         catch (Exception ex) when (IsTransportFailure(ex, cancellationToken))
         {
+            // Текст сетевого исключения содержит адрес HA — без причины.
             LogTransportFailure(ex);
-            throw new HaUnavailableException(ex);
+            throw new HaUnavailableException();
         }
     }
 

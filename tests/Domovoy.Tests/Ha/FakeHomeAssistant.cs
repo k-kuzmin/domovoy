@@ -204,6 +204,18 @@ internal sealed class FakeHomeAssistant : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Задать объект состояния как есть, без события: так в ответ get_states
+    /// и REST попадает и нечитаемый объект.
+    /// </summary>
+    public void SetRawState(string entityId, string json)
+    {
+        lock (_sync)
+        {
+            _states[entityId] = JsonNode.Parse(json)!.AsObject();
+        }
+    }
+
     /// <summary>Удалить сущность без события.</summary>
     public void RemoveState(string entityId)
     {
