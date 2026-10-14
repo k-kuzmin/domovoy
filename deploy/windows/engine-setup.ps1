@@ -308,21 +308,21 @@ function Get-WslNames([string[]]$Arguments) {
 # ключ=значение: networkingMode не nat или localhostForwarding=false.
 # Исключение — свой mirrored: его записал -Install по 0028, и рядом лежит
 # копия .domovoy-backup или отметка .domovoy-absent — он переписывается на
-# nat на месте. firewall=false не мешает: порты стека на адресе хоста
-# закрывает firewall Windows, а не firewall Hyper-V для VM WSL.
+# nat на месте, OwnMirrored = $true. firewall=false не мешает: порты стека
+# на адресе хоста закрывает firewall Windows, а не firewall Hyper-V для VM WSL.
 function Get-WslConfigPlan([string]$Path) {
     $exists = Test-Path -LiteralPath $Path -PathType Leaf
     $current = if ($exists) { [IO.File]::ReadAllText($Path) } else { '' }
     $owned = (Test-Path -LiteralPath "$Path.domovoy-backup" -PathType Leaf) -or (Test-Path -LiteralPath "$Path.domovoy-absent" -PathType Leaf)
     $forwarding = [regex]::Match($current, '(?im)^\s*localhostForwarding\s*=\s*(\S+)\s*$')
     if ($forwarding.Success -and $forwarding.Groups[1].Value -ieq 'false') {
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "localhostForwarding=$($forwarding.Groups[1].Value)"; Content = $current }
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "localhostForwarding=$($forwarding.Groups[1].Value)"; Content = $current; OwnMirrored = $false }
     }
     $mode = [regex]::Match($current, '(?im)^\s*networkingMode\s*=\s*(\S+)\s*$')
     if ($mode.Success) {
         $value = $mode.Groups[1].Value
         if ($value -ieq 'nat') {
-            return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current }
+            return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current; OwnMirrored = $false }
         }
         if ($value -ieq 'mirrored' -and $owned) {
             # Замена значения в той же строке: отступ, пробелы у «=» и
@@ -330,10 +330,10 @@ function Get-WslConfigPlan([string]$Path) {
             $line = '(?im)^([ \t]*networkingMode[ \t]*=[ \t]*)mirrored(?=[ \t]*\r?$)'
             $content = ([regex]$line).Replace($current, '${1}nat', 1)
             # Строка не той формы — не заменена: отказ, а не запись mirrored.
-            if ($content -ceq $current) { return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current } }
-            return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content }
+            if ($content -ceq $current) { return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false } }
+            return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $true }
         }
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current }
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false }
     }
     # Вставка — перед переводом строки после [wsl2] и тем же переводом, что
     # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
@@ -352,7 +352,17 @@ function Get-WslConfigPlan([string]$Path) {
     else {
         $content = "[wsl2]`r`nnetworkingMode=nat`r`n"
     }
-    return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content }
+    return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $false }
+}
+
+# Звено -Check «.wslconfig: networkingMode=nat» по плану Get-WslConfigPlan:
+# State OK или FAIL и деталь. Свой mirrored прежней установки — не «не
+# задан»: значение задано, и его переписывает -Install.
+function Get-WslConfigCheck($Plan) {
+    if ($Plan.Conflict) { return [pscustomobject]@{ State = 'FAIL'; Detail = "задан $($Plan.Conflict)" } }
+    if ($Plan.OwnMirrored) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'задан mirrored прежней установки — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    if ($Plan.Changed) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    return [pscustomobject]@{ State = 'OK'; Detail = '' }
 }
 
 # Как сохраняется прежнее состояние .wslconfig перед записью: копия или
@@ -1215,11 +1225,8 @@ else {
     else { Add-Result 'OK' 'задача замера' "порт $measurePort, проект $measureProject" }
 }
 
-$wslConfig = Get-WslConfigPlan $WslConfigPath
-$wslLink = '.wslconfig: networkingMode=nat'
-if (-not $wslConfig.Changed -and -not $wslConfig.Conflict) { Add-Result 'OK' $wslLink '' }
-elseif ($wslConfig.Conflict) { Add-Result 'FAIL' $wslLink "задан $($wslConfig.Conflict)" }
-else { Add-Result 'FAIL' $wslLink 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' }
+$wslCheck = Get-WslConfigCheck (Get-WslConfigPlan $WslConfigPath)
+Add-Result $wslCheck.State '.wslconfig: networkingMode=nat' $wslCheck.Detail
 
 # Правило firewall Windows: через него устройства в ЛВС доходят до
 # portproxy на адресе хоста.

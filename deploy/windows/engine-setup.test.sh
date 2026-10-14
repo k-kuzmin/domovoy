@@ -1095,6 +1095,37 @@ test_remove_legacy_hyperv_rule() {
   ok "$name"
 }
 
+# Звено -Check «.wslconfig: networkingMode=nat» (Get-WslConfigCheck по плану
+# Get-WslConfigPlan): nat — OK; файла нет — «не задан»; mirrored прежней
+# установки (рядом копия) — FAIL со своей подсказкой, а не «не задан»;
+# чужой mirrored — FAIL с заданным значением.
+test_wslconfig_check() {
+  local name=wslconfig_check shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  mkdir -p "$work/wslcheck"
+  for shell in "${shells[@]}"; do
+    rm -f "$work/wslcheck/"*
+    # shellcheck disable=SC2016
+    PS1_TMP="$(cygpath -w "$work/wslcheck")" ps_functions "$shell" "$here/engine-setup.ps1" '
+      $path = Join-Path $env:PS1_TMP "wslconfig"
+      function check { Get-WslConfigCheck (Get-WslConfigPlan $path) }
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "не задан") { "файла нет: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText($path, "[wsl2]`nnetworkingMode=nat`n")
+      $c = check
+      if ($c.State -ne "OK" -or $c.Detail) { "nat: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText($path, "[wsl2]`nnetworkingMode=mirrored`n")
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "networkingMode=mirrored") { "чужой mirrored: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText("$path.domovoy-backup", "[wsl2]`n")
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "mirrored прежней установки" -or $c.Detail -match "не задан") { "свой mirrored: $($c.State) «$($c.Detail)»"; exit 1 }' \
+      Get-WslConfigCheck Get-WslConfigPlan
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
 # Звено -Check «журнал systemd на диске, сброс ≤ 10 с»: вывод
 # systemd-analyze cat-config systemd/journald.conf, действует последнее
 # присваивание; без SyncIntervalSec — 5 мин по умолчанию.
@@ -1768,6 +1799,7 @@ test_select_listen_address
 test_portproxy_problems
 test_host_rule_problems
 test_remove_legacy_hyperv_rule
+test_wslconfig_check
 test_journald_config_problems
 test_container_log_problems
 test_native_output_encoding
