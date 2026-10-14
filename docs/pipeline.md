@@ -101,7 +101,7 @@ CLI. Основная сессия — **оркестратор**: выбира�
 | `plan.sh` + `plan-schema.json` | `bash scripts/plan.sh validate <файл>`, `bash scripts/plan.sh render <файл>` | форма плана; рендер — то, что читает человек |
 | `guard-lite.sh` | `bash scripts/guard-lite.sh origin/main HEAD` | гейт целостности: подавления, удалённые тесты, разрушительная миграция в `Up()`, мусор и подписи в диффе |
 | `review-comments.sh` | `bash scripts/review-comments.sh <номер PR>` | построчные замечания ревью — те, что `gh pr view --comments` не отдаёт |
-| `merge-wait.sh` | `bash scripts/merge-wait.sh <номер PR>` | ожидание мерджа: опрашивает состояние PR, пока оно `OPEN`, и печатает `MERGED` или `CLOSED` |
+| `merge-wait.sh` | `bash scripts/merge-wait.sh <номер PR>` | ожидание мерджа: опрашивает состояние PR, пока оно `OPEN`, и печатает `MERGED` или `CLOSED`, а у открытого PR, отставшего от main, — `BEHIND` или `DIRTY` |
 
 **Конфиг риска читается с `origin/main`,** а не из дерева: дифф не ослабляет
 правило, по которому его оценивают. Пока файла на `origin/main` нет, берётся

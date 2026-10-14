@@ -87,6 +87,11 @@ end_case() {
 # выходит с кодом `FAKE_GH_FAIL_CODE` (по умолчанию 1) и пустым stdout, как
 # `gh` на сетевом сбое или несуществующем PR. Номер вызова держится в файле:
 # каждый вызов — отдельный процесс.
+#
+# Состояние вида `OPEN/BEHIND` — пара `state` и `mergeStateStatus`. Вызов,
+# который просит `mergeStateStatus`, получает пару через пробел (`OPEN BEHIND`),
+# как от `--jq '.state + " " + .mergeStateStatus'`; вызов без него — только
+# часть до «/».
 # ------------------------------------------------------------------
 BIN="$SANDBOX/bin"
 mkdir -p "$BIN"
@@ -117,7 +122,10 @@ if [ "$state" = 'FAIL' ]; then
     printf 'подставной gh: сбой\n' >&2
     exit "${FAKE_GH_FAIL_CODE:-1}"
 fi
-printf '%s\n' "$state"
+case "$*" in
+    *mergeStateStatus*) printf '%s\n' "$state" | tr '/' ' ' ;;
+    *) printf '%s\n' "${state%%/*}" ;;
+esac
 FAKE
 chmod +x "$BIN/gh"
 
@@ -181,6 +189,10 @@ expect_every_call() {
     done < "$CALLS"
 }
 
+# Ожидаемая форма каждого вызова: подставной gh пишет аргументы через пробел,
+# поэтому выражение `--jq` в журнале без кавычек.
+CALL_FORM='pr view 150 --json state,mergeStateStatus --jq .state + " " + .mergeStateStatus'
+
 # ==================================================================
 # Сценарий 1. OPEN, OPEN, MERGED: ожидание не выходит на OPEN и повторяет
 # запрос, пока PR не смерджен.
@@ -190,7 +202,7 @@ run_script 'OPEN OPEN MERGED' 150
 expect_status 0
 expect_out_exact 'MERGED'
 expect_calls 3
-expect_every_call 'pr view 150 --json state --jq .state'
+expect_every_call "$CALL_FORM"
 end_case
 
 # ==================================================================
@@ -202,7 +214,68 @@ run_script 'CLOSED' 150
 expect_status 0
 expect_out_exact 'CLOSED'
 expect_calls 1
-expect_every_call 'pr view 150 --json state --jq .state'
+expect_every_call "$CALL_FORM"
+end_case
+
+# ==================================================================
+# Сценарий 2а. Ветка отстала от main, пока PR ждёт мерджа (#155): GitHub
+# отдаёт mergeStateStatus BEHIND, и смерджить PR владелец не может, пока
+# ветка не подтянет main. Ожидание обязано кончиться исходом BEHIND на том
+# опросе, где он появился, а не ждать мерджа, который не наступит сам.
+# ==================================================================
+begin_case 'OPEN BEHIND — код 0, ровно BEHIND, на том опросе, где появился'
+run_script 'OPEN/CLEAN OPEN/BEHIND MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'BEHIND'
+expect_calls 2
+end_case
+
+# PR отстал уже в момент постановки ожидания (отдача без сверки по п. 10):
+# исход сразу, без паузы и второго опроса.
+begin_case 'BEHIND на первом опросе — код 0, ровно BEHIND, один опрос'
+run_script 'OPEN/BEHIND MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'BEHIND'
+expect_calls 1
+expect_every_call "$CALL_FORM"
+end_case
+
+# main ушёл вперёд с конфликтом: GitHub отдаёт DIRTY вместо BEHIND, и
+# смерджить PR так же нельзя.
+begin_case 'OPEN DIRTY — код 0, ровно DIRTY, ожидание кончается'
+run_script 'OPEN/CLEAN OPEN/DIRTY MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'DIRTY'
+expect_calls 2
+end_case
+
+# Закрытого перечня mergeStateStatus нет: всё, кроме BEHIND и DIRTY, у
+# открытого PR — продолжение ожидания, а не сбой.
+begin_case 'OPEN с UNKNOWN, BLOCKED, CLEAN, UNSTABLE — ожидание продолжается до MERGED'
+run_script 'OPEN/UNKNOWN OPEN/BLOCKED OPEN/CLEAN OPEN/UNSTABLE MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'MERGED'
+expect_calls 5
+end_case
+
+# Ответ из одного слова и с хвостовым пробелом (jq при null mergeStateStatus
+# печатает «OPEN ») под `set -u` не роняет сценарий.
+begin_case 'OPEN без mergeStateStatus — ожидание продолжается, код не 1'
+run_script 'OPEN OPEN/ MERGED/UNKNOWN' 150
+expect_status 0
+expect_out_exact 'MERGED'
+expect_calls 3
+if [ -n "$ERR" ]; then
+    fail_case "stderr не пуст: $ERR"
+fi
+end_case
+
+# mergeStateStatus смотрится только у открытого PR.
+begin_case 'CLOSED при BEHIND — исход CLOSED, а не BEHIND'
+run_script 'CLOSED/BEHIND' 150
+expect_status 0
+expect_out_exact 'CLOSED'
+expect_calls 1
 end_case
 
 # ==================================================================
@@ -302,5 +375,5 @@ if [ "$FAILED" -ne 0 ]; then
     exit 1
 fi
 
-printf 'Ожидание мерджа различает MERGED, CLOSED, сбой gh и негодный аргумент.\n'
+printf 'Ожидание мерджа различает MERGED, CLOSED, BEHIND, DIRTY, сбой gh и негодный аргумент.\n'
 exit 0
