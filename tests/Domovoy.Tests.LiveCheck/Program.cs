@@ -118,7 +118,7 @@ internal static class Program
         {
             // Сообщение проверки называет записи реестра, то есть entity_id:
             // в вывод для issue оно не идёт. Подробности печатает старт api.
-            Print($"конфигурация не прошла проверку ({exception.OptionsName}, ошибок: {exception.Failures.Count()}); подробности — при старте api");
+            Print($"конфигурация не прошла проверку ({exception.OptionsType.Name}, ошибок: {exception.Failures.Count()}); подробности — при старте api");
             return 1;
         }
 
