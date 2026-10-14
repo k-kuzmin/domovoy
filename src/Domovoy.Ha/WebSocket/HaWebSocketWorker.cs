@@ -395,8 +395,12 @@ internal sealed class HaWebSocketWorker : BackgroundService
         if (!data.TryGetProperty("new_state", out JsonElement newState) || newState.ValueKind == JsonValueKind.Null)
         {
             // Сущность удалена в HA. HaStateChange без Current не строится,
-            // подписчикам ничего не уходит.
-            _cache.Remove(entityId);
+            // подписчикам ничего не уходит. Метка удаления сравнивается с
+            // записью, как у Apply: раннее событие из буфера применяется после
+            // снимка get_states и не должно стереть то, что в снимке новее.
+            DateTimeOffset? removedAt = TryParseTimestamp(@event, "time_fired")
+                ?? TryParseState(data, "old_state")?.LastUpdated;
+            _cache.Remove(entityId, removedAt);
             return;
         }
 

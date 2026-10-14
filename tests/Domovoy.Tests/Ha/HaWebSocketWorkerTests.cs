@@ -128,6 +128,33 @@ public sealed class HaWebSocketWorkerTests
         harness.State.Status.Should().Be(HaConnectionStatus.Connected);
     }
 
+    [Fact(DisplayName = "Раннее удаление до ответа get_states не стирает сущность, которая в снимке новее")]
+    public async Task EarlyRemovalDoesNotEraseFresherSnapshotEntity()
+    {
+        await using Harness harness = await Harness.StartAsync(Fast, new RecordingDelay(), fake =>
+        {
+            fake.SetState(Kitchen, "on");
+            fake.SetState(Bedroom, "21");
+            fake.GetStatesDelay = TimeSpan.FromMilliseconds(800);
+        });
+
+        // Подписка уже есть, ответ get_states ещё не ушёл: событие ляжет в
+        // буфер ранних событий воркера.
+        await WaitUntilAsync(() => harness.Fake.GetStatesCount >= 1, WaitLimit);
+        await harness.Fake.PushStateChangedAsync(Kitchen, state: null);
+        harness.State.Status.Should().NotBe(HaConnectionStatus.Connected, "событие должно прийти до ответа get_states");
+
+        // Сущность вернулась без события, которое воркер увидит: снимок
+        // get_states, собранный после задержки, несёт её с меткой новее удаления.
+        harness.Fake.SetState(Kitchen, "off");
+
+        await harness.WaitForStatusAsync(HaConnectionStatus.Connected);
+
+        harness.Cache.Find(Kitchen).Should().NotBeNull("в снимке сущность новее раннего удаления");
+        harness.Cache.Find(Kitchen)!.State.Should().Be("off");
+        harness.Cache.Find(Bedroom).Should().NotBeNull();
+    }
+
     [Fact(DisplayName = "Нечитаемый кадр и незнакомый тип не роняют воркер, следующее событие применяется")]
     public async Task WorkerSurvivesMalformedMessages()
     {

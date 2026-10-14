@@ -101,6 +101,22 @@ public sealed class HaStateCacheTests
         cache.Snapshot().Select(state => state.EntityId).Should().Equal(AllowedSecond);
     }
 
+    [Theory(DisplayName = "Удаление строго старше записи не применяется; равное, новее и без метки — применяется")]
+    [InlineData(-1, false)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(null, true)]
+    public void RemoveSkipsDeletionOlderThanRecord(int? offsetSeconds, bool removed)
+    {
+        var cache = new HaStateCache(AllowList(Allowed));
+        cache.ReplaceAll([State(Allowed, "on", T0)]);
+        DateTimeOffset? occurredAt = offsetSeconds is int seconds ? T0.AddSeconds(seconds) : null;
+
+        cache.Remove(Allowed, occurredAt).Should().Be(removed);
+
+        (cache.Find(Allowed) is null).Should().Be(removed);
+    }
+
     [Fact(DisplayName = "ParseState приводит атрибуты к строкам независимо от культуры потока")]
     public void StateAttributesAreConvertedToStrings()
     {

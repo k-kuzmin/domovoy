@@ -77,12 +77,25 @@ internal sealed class HaStateCache
         }
     }
 
-    /// <summary>Удалить запись, если она есть. Событий не порождает.</summary>
-    public void Remove(string entityId)
+    /// <summary>
+    /// Удалить запись, если она есть. Событий не порождает. <c>false</c> —
+    /// записи нет или удаление строго старше её <c>last_updated</c>: по тому
+    /// же правилу, что у <see cref="Apply"/>, равная метка применяется.
+    /// Без метки (<paramref name="occurredAt"/> = <c>null</c>) удаляет всегда —
+    /// сравнивать не с чем.
+    /// </summary>
+    public bool Remove(string entityId, DateTimeOffset? occurredAt = null)
     {
         lock (_sync)
         {
-            _states.Remove(entityId);
+            if (occurredAt is DateTimeOffset at
+                && _states.TryGetValue(entityId, out HaEntityState? existing)
+                && at < existing.LastUpdated)
+            {
+                return false;
+            }
+
+            return _states.Remove(entityId);
         }
     }
 
