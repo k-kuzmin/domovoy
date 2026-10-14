@@ -925,7 +925,7 @@ test_firewall_profile_problems() {
 # маршрутом по умолчанию и профилем сети Private, кроме петли, 0.0.0.0 и
 # APIPA; вес — RouteMetric маршрута плюс InterfaceMetric интерфейса;
 # наименьший вес у двух адресов и больше — отказ с причиной, а не выбор
-# наугад. Адреса — из RFC 5737 (192.0.2.0/24, 198.51.100.0/24).
+# наугад. Адреса — из RFC 5737 (192.0.2.0/24).
 test_select_listen_address() {
   local name=select_listen_address shell
   if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
@@ -943,23 +943,23 @@ test_select_listen_address() {
       # Перечисление NetworkCategory числом: Private — 1.
       $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 1) (mkaddr 7 "192.0.2.10")
       if ($x.Address -ne "192.0.2.10") { "NetworkCategory 1 не принят: «$($x.Reason)»"; exit 1 }
-      $x = pick @((mkroute 7 0), (mkroute 8 10)) @((mkif 7 25), (mkif 8 25)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "198.51.100.20"))
+      $x = pick @((mkroute 7 0), (mkroute 8 10)) @((mkif 7 25), (mkif 8 25)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
       if ($x.Address -ne "192.0.2.10") { "веса 25 и 35: «$($x.Address)»"; exit 1 }
-      $x = pick @((mkroute 7 10), (mkroute 8 0)) @((mkif 7 25), (mkif 8 35)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "198.51.100.20"))
+      $x = pick @((mkroute 7 10), (mkroute 8 0)) @((mkif 7 25), (mkif 8 35)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
       if ($x.Address -or -not $x.Reason) { "равный вес 35 принят: «$($x.Address)»"; exit 1 }
-      if ($x.Reason -match "192\.0\.2|198\.51\.100") { "адрес в причине отказа: $($x.Reason)"; exit 1 }
+      if ($x.Reason -match "192\.0\.2") { "адрес в причине отказа: $($x.Reason)"; exit 1 }
       # VPN: профиль Public с меньшим весом — не кандидат.
-      $x = pick @((mkroute 7 0), (mkroute 9 0)) @((mkif 7 25), (mkif 9 5)) @((mkprof 7 "Private"), (mkprof 9 "Public")) @((mkaddr 7 "192.0.2.10"), (mkaddr 9 "198.51.100.30"))
+      $x = pick @((mkroute 7 0), (mkroute 9 0)) @((mkif 7 25), (mkif 9 5)) @((mkprof 7 "Private"), (mkprof 9 "Public")) @((mkaddr 7 "192.0.2.10"), (mkaddr 9 "192.0.2.30"))
       if ($x.Address -ne "192.0.2.10") { "Public выбран вместо Private: «$($x.Address)»"; exit 1 }
       foreach ($cat in "DomainAuthenticated", 2, 0) {
-        $x = pick (mkroute 9 0) (mkif 9 5) (mkprof 9 $cat) (mkaddr 9 "198.51.100.30")
+        $x = pick (mkroute 9 0) (mkif 9 5) (mkprof 9 $cat) (mkaddr 9 "192.0.2.30")
         if ($x.Address) { "профиль $cat принят"; exit 1 }
       }
       # Два IPv4 одного интерфейса — равный вес, отказ.
       $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 "Private") @((mkaddr 7 "192.0.2.10"), (mkaddr 7 "192.0.2.11"))
       if ($x.Address -or -not $x.Reason) { "два адреса интерфейса: «$($x.Address)»"; exit 1 }
       # Интерфейс без маршрута по умолчанию — не кандидат.
-      $x = pick (mkroute 7 0) @((mkif 7 25), (mkif 8 5)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "198.51.100.20"))
+      $x = pick (mkroute 7 0) @((mkif 7 25), (mkif 8 5)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
       if ($x.Address -ne "192.0.2.10") { "интерфейс без маршрута выбран: «$($x.Address)»"; exit 1 }
       foreach ($bad in "169.254.10.20", "127.0.0.1", "0.0.0.0", "example") {
         $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 "Private") (mkaddr 7 $bad)
@@ -990,12 +990,12 @@ test_portproxy_problems() {
       $good = @((e "192.0.2.10/28081" "127.0.0.1/28081"), (e "192.0.2.10/28123" "127.0.0.1/28123"))
       $p = @(Get-PortProxyProblems $good "192.0.2.10" $ports)
       if ($p.Count) { "свои записи — замечания: $p"; exit 1 }
-      $p = @(Get-PortProxyProblems ($good + (e "192.0.2.10/28500" "198.51.100.5/80")) "192.0.2.10" $ports)
+      $p = @(Get-PortProxyProblems ($good + (e "192.0.2.10/28500" "192.0.2.5/80")) "192.0.2.10" $ports)
       if ($p.Count) { "чужая запись другого порта замечена: $p"; exit 1 }
       $cases = @(
         @{ Why = "нет записи порта"; Entries = @($good[1]) },
         @{ Why = "прежний адрес"; Entries = @((e "192.0.2.99/28081" "127.0.0.1/28081"), $good[1]) },
-        @{ Why = "цель не 127.0.0.1"; Entries = @((e "192.0.2.10/28081" "198.51.100.5/28081"), $good[1]) },
+        @{ Why = "цель не 127.0.0.1"; Entries = @((e "192.0.2.10/28081" "192.0.2.5/28081"), $good[1]) },
         @{ Why = "другой порт цели"; Entries = @((e "192.0.2.10/28081" "127.0.0.1/28082"), $good[1]) },
         @{ Why = "две записи порта"; Entries = @($good + (e "192.0.2.99/28081" "127.0.0.1/28081")) },
         @{ Why = "подстановочный адрес"; Entries = @((e "0.0.0.0/28081" "127.0.0.1/28081"), $good[1]) },
@@ -1006,10 +1006,10 @@ test_portproxy_problems() {
         $p = @(Get-PortProxyProblems $c.Entries "192.0.2.10" $ports)
         if (-not $p.Count) { "$($c.Why): замечаний нет"; exit 1 }
         if (($p -join " ") -notmatch "28081") { "$($c.Why): замечание без порта: $p"; exit 1 }
-        if (($p -join " ") -match "192\.0\.2|198\.51\.100|0\.0\.0\.0|127\.0\.0\.1/") { "$($c.Why): адрес в замечании: $p"; exit 1 }
+        if (($p -join " ") -match "192\.0\.2|0\.0\.0\.0|127\.0\.0\.1/") { "$($c.Why): адрес в замечании: $p"; exit 1 }
         if (($p -join " ") -match "28123") { "$($c.Why): замечен исправный порт: $p"; exit 1 }
       }
-      $all = @($good + (e "192.0.2.99/28081" "127.0.0.1/28081") + (e "192.0.2.10/28500" "127.0.0.1/28500") + (e "192.0.2.10/28123" "198.51.100.5/28123"))
+      $all = @($good + (e "192.0.2.99/28081" "127.0.0.1/28081") + (e "192.0.2.10/28500" "127.0.0.1/28500") + (e "192.0.2.10/28123" "192.0.2.5/28123"))
       $own = @(Select-OwnPortProxy $all $ports)
       $names = @($own | ForEach-Object { $_.Name } | Sort-Object)
       if (($names -join "|") -ne "192.0.2.10/28081|192.0.2.10/28123|192.0.2.99/28081") { "свои записи: $($names -join "|")"; exit 1 }
