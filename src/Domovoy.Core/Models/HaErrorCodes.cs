@@ -20,4 +20,10 @@ public static class HaErrorCodes
 
     /// <summary>Home Assistant недоступен.</summary>
     public const string HaUnavailable = "ha_unavailable";
+
+    /// <summary>
+    /// Home Assistant доступен, но отклонил действие (4xx): например,
+    /// устройство не поддерживает сервис.
+    /// </summary>
+    public const string HaRejected = "ha_rejected";
 }

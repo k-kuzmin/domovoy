@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -30,6 +31,7 @@ internal sealed class HaRestClient : IHaClient
 {
     private const string StatesPath = "api/states";
     private const string UnavailableMessage = "Home Assistant недоступен.";
+    private const string RejectedMessage = "Home Assistant отклонил действие.";
 
     private readonly HttpClient _httpClient;
     private readonly IEntityAllowList _allowList;
@@ -145,7 +147,12 @@ internal sealed class HaRestClient : IHaClient
                     (int)response.StatusCode,
                     domain,
                     spec.Service);
-                return Refusal(HaErrorCodes.HaUnavailable, UnavailableMessage);
+
+                // 4xx — HA доступен и отказал (устройство не поддерживает
+                // сервис); 401/403 и 5xx — работать с HA нельзя вообще.
+                return IsRejection(response.StatusCode)
+                    ? Refusal(HaErrorCodes.HaRejected, RejectedMessage)
+                    : Refusal(HaErrorCodes.HaUnavailable, UnavailableMessage);
             }
 
             return new ToolResult { ToolCallId = ToolResult.DirectCallId, Success = true };
@@ -257,6 +264,10 @@ internal sealed class HaRestClient : IHaClient
     /// Сетевая ошибка или таймаут клиента. Отмена вызывающей стороной сюда не
     /// относится и пробрасывается как есть.
     /// </summary>
+    private static bool IsRejection(HttpStatusCode status) =>
+        (int)status is >= 400 and < 500
+        && status is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden);
+
     private static bool IsTransportFailure(Exception exception, CancellationToken cancellationToken) =>
         exception is HttpRequestException
         || (exception is TaskCanceledException && !cancellationToken.IsCancellationRequested);

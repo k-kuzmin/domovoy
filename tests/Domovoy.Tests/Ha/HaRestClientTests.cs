@@ -371,6 +371,33 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
         AssertUnavailable(result);
     }
 
+    [Theory(DisplayName = "HA отклонил вызов сервиса (4xx) — ha_rejected, а не «недоступен»")]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task ServiceClientErrorIsRejected(HttpStatusCode status)
+    {
+        // Живой стек: media_player без поддержки turn_off — HA отвечает 400.
+        _fake.ServiceStatusCode = status;
+
+        ToolResult result = await CreateClient().CallServiceAsync("light", "turn_on", KitchenLight, null, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be(HaErrorCodes.HaRejected);
+        result.ToolCallId.Should().Be(ToolResult.DirectCallId);
+    }
+
+    [Theory(DisplayName = "HA не принял токен при вызове сервиса — ha_unavailable")]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ServiceAuthErrorIsUnavailable(HttpStatusCode status)
+    {
+        _fake.ServiceStatusCode = status;
+
+        ToolResult result = await CreateClient().CallServiceAsync("light", "turn_on", KitchenLight, null, CancellationToken.None);
+
+        AssertUnavailable(result);
+    }
+
     [Fact(DisplayName = "HA недоступен при вызове сервиса — ha_unavailable")]
     public async Task ServiceNetworkErrorIsUnavailable()
     {
