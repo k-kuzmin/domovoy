@@ -58,10 +58,14 @@ public sealed class HaHostStartupTests : IDisposable
         Func<Task> start = () => host.StartAsync();
 
         // Тип опций и запись в сообщении — иначе отказ любой другой опции
-        // на этой конфигурации выглядел бы так же.
+        // на этой конфигурации выглядел бы так же. Запись названа номером:
+        // сообщение уходит в лог старта, entity_id владельца в нём нет.
         OptionsValidationException exception = (await start.Should().ThrowAsync<OptionsValidationException>()).Which;
         exception.OptionsType.Should().Be<EntityRegistryOptions>();
-        exception.Message.Should().Contain(entityId).And.Contain(field);
+        exception.Message.Should()
+            .Contain($"entities[{EntityRegistryTests.CountInExample("entities")}]")
+            .And.Contain(field)
+            .And.NotContain(entityId);
     }
 
     [Fact(DisplayName = "На примере реестра хост стартует и останавливается")]

@@ -94,110 +94,134 @@ public sealed partial class EntityRegistryTests : IDisposable
         allowList.FindArea("attic").Should().BeNull();
     }
 
-    public static TheoryData<string, string, string, string> InvalidRegistries => new()
+    /// <summary>
+    /// Испорченная запись, поле, которое должно попасть в сообщение, и значения
+    /// из реестра владельца, которые в сообщение попадать не должны:
+    /// entity_id, id комнаты, script_id и значение area уходят в лог старта.
+    /// </summary>
+    public static TheoryData<string, string, string, string[]> InvalidRegistries => new()
     {
         {
             "entities",
             Entity("cover.example_hall_blinds", "Шторы", "living_room", "cover", "[open_cover]"),
-            "cover.example_hall_blinds",
-            "domain"
+            "domain",
+            ["cover.example_hall_blinds", "living_room"]
         },
         {
             "entities",
             Entity("alarm_control_panel.example_home", "Сигнализация", "living_room", "alarm_control_panel", "[alarm_arm_away]"),
-            "alarm_control_panel.example_home",
-            "domain"
+            "domain",
+            ["alarm_control_panel.example_home", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", "living_room", "light", "[turn_on, unlock]"),
-            "light.example_hall",
-            "actions"
+            "actions",
+            ["light.example_hall", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", null, "living_room", "light", "[turn_on]"),
-            "light.example_hall",
-            "name"
+            "name",
+            ["light.example_hall", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", null, "light", "[turn_on]"),
-            "light.example_hall",
-            "area"
+            "area",
+            ["light.example_hall"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", "living_room", null, "[turn_on]"),
-            "light.example_hall",
-            "domain"
+            "domain",
+            ["light.example_hall", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", "living_room", "light", null),
-            "light.example_hall",
-            "actions"
+            "actions",
+            ["light.example_hall", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", "living_room", "light", "[]"),
-            "light.example_hall",
-            "actions"
+            "actions",
+            ["light.example_hall", "living_room"]
         },
         {
             "entities",
             Entity("climate.example_hall_light", "Свет в прихожей", "living_room", "light", "[turn_on]"),
-            "climate.example_hall_light",
-            "entity_id"
+            "entity_id",
+            ["climate.example_hall_light", "living_room"]
         },
         {
             "entities",
             Entity("light.example_hall", "Свет в прихожей", "attic", "light", "[turn_on]"),
-            "light.example_hall",
-            "area"
+            "area",
+            ["light.example_hall", "attic"]
         },
         {
             "entities",
             Entity("light.example_kitchen_ceiling", "Ещё один свет", "kitchen", "light", "[turn_on]"),
-            "light.example_kitchen_ceiling",
-            "entity_id"
+            "entity_id",
+            ["light.example_kitchen_ceiling", "kitchen"]
         },
         {
             "entities",
             Entity(null, "Без идентификатора", "kitchen", "light", "[turn_on]"),
-            "entities[",
-            "entity_id"
+            "entity_id",
+            ["kitchen"]
         },
         {
             "areas",
             "  - id: hall\n    name: Прихожая\n    cases:\n      genitive: прихожей\n",
-            "hall",
-            "cases.prepositional"
+            "cases.prepositional",
+            ["hall"]
         },
         {
             "areas",
             "  - id: hall\n    cases:\n      prepositional: в прихожей\n",
-            "hall",
-            "name"
+            "name",
+            ["hall"]
+        },
+        {
+            "areas",
+            "  - id: kitchen\n    name: Ещё одна кухня\n    cases:\n      prepositional: на кухне\n",
+            "id",
+            ["kitchen"]
         },
         {
             "scripts",
             "  - name: Без идентификатора\n",
-            "scripts[",
-            "script_id"
+            "script_id",
+            []
+        },
+        {
+            "scripts",
+            "  - script_id: script.example_good_night\n    name: Ещё раз\n",
+            "script_id",
+            ["script.example_good_night"]
         },
     };
 
-    [Theory(DisplayName = "Испорченный реестр не проходит проверку, сообщение называет запись и поле")]
+    [Theory(DisplayName = "Испорченный реестр не проходит проверку, сообщение называет запись номером и поле, но не значения реестра")]
     [MemberData(nameof(InvalidRegistries))]
-    public void ValidatorRejectsInvalidRegistry(string section, string injected, string expectedRecord, string expectedField)
+    public void ValidatorRejectsInvalidRegistry(string section, string injected, string expectedField, string[] ownerValues)
     {
         string path = WriteExampleWith(section, injected);
 
         ValidateOptionsResult result = new EntityRegistryValidator().Validate(Options.DefaultName, Load(path));
 
+        // Вставка идёт в конец раздела: её номер — число записей раздела в примере.
+        string expectedRecord = $"{section}[{CountInExample(section)}]";
+
         result.Failed.Should().BeTrue();
         result.FailureMessage.Should().Contain(expectedRecord).And.Contain(expectedField);
+        foreach (string value in ownerValues)
+        {
+            result.FailureMessage.Should().NotContain(value, "сообщение проверки уходит в лог старта");
+        }
     }
 
     [Fact(DisplayName = "Отсутствующий файл реестра не проходит проверку, сообщение называет путь")]
@@ -240,6 +264,20 @@ public sealed partial class EntityRegistryTests : IDisposable
 
         registry.LoadError.Should().NotBe("подложено");
         registry.LoadError.Should().NotBeNull("load_error — незнакомый ключ файла");
+    }
+
+    /// <summary>Число записей раздела в примере — по тексту файла, а не по разбору.</summary>
+    internal static int CountInExample(string section)
+    {
+        string example = File.ReadAllText(ExamplePath);
+
+        return section switch
+        {
+            "areas" => AreaIdLine().Matches(example).Count,
+            "entities" => EntityIdLine().Matches(example).Count,
+            "scripts" => ScriptIdLine().Matches(example).Count,
+            _ => throw new ArgumentOutOfRangeException(nameof(section), section, null),
+        };
     }
 
     private static EntityRegistryOptions Load(string path, string? contentRoot = null)
@@ -306,4 +344,7 @@ public sealed partial class EntityRegistryTests : IDisposable
 
     [GeneratedRegex(@"^\s*-\s*id:", RegexOptions.Multiline)]
     private static partial Regex AreaIdLine();
+
+    [GeneratedRegex(@"^\s*-\s*script_id:", RegexOptions.Multiline)]
+    private static partial Regex ScriptIdLine();
 }

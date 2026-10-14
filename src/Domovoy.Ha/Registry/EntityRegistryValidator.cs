@@ -7,8 +7,10 @@ namespace Domovoy.Ha.Registry;
 /// не проходит проверку, не запускает сервис. Allow-list с дырой хуже
 /// отказа старта — дыру никто не заметит.
 ///
-/// Каждое сообщение называет запись (entity_id, id комнаты, script_id или
-/// номер записи без идентификатора) и поле.
+/// Каждое сообщение называет запись номером в разделе (<c>entities[3]</c>) и
+/// поле. Значений из реестра — entity_id, id комнаты, script_id, area — в
+/// сообщении нет: оно уходит в лог старта, а реестр — приватный профиль дома.
+/// Домен и действие цитируются: это значения закрытого каталога, а не владельца.
 /// </summary>
 internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryOptions>
 {
@@ -46,7 +48,7 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
                 continue;
             }
 
-            string label = IsBlank(area.Id) ? $"areas[{index}]" : $"комната {area.Id}";
+            string label = $"areas[{index}]";
 
             if (IsBlank(area.Id))
             {
@@ -85,7 +87,7 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
                 continue;
             }
 
-            string label = IsBlank(entity.EntityId) ? $"entities[{index}]" : $"сущность {entity.EntityId}";
+            string label = $"entities[{index}]";
 
             if (IsBlank(entity.EntityId))
             {
@@ -107,7 +109,7 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
             }
             else if (!areaIds.Contains(entity.Area!))
             {
-                failures.Add($"{label}: поле area — комнаты «{entity.Area}» нет в areas.");
+                failures.Add($"{label}: поле area — такой комнаты нет в areas.");
             }
 
             if (entity.Actions is null || entity.Actions.Count == 0)
@@ -164,7 +166,7 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
                 continue;
             }
 
-            string label = IsBlank(script.ScriptId) ? $"scripts[{index}]" : $"сценарий {script.ScriptId}";
+            string label = $"scripts[{index}]";
 
             if (IsBlank(script.ScriptId))
             {
