@@ -12,14 +12,20 @@
 #     systemctl (подменён), юнит во временном каталоге; apt-get (подменён)
 #     получает DPkg::Lock::Timeout, в install_docker нет вызовов мимо обёртки;
 #   - -Check и замер стучатся на 127.0.0.1, а не localhost;
-#   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1), профиль
-#     правила firewall и настройка firewall Hyper-V для VM WSL — функциями
-#     сценария, извлечёнными из AST;
+#   - вывод внешних программ — в UTF-8 (AST engine-setup.ps1); профиль
+#     правила firewall, само правило (с программой и службой слушателя
+#     portproxy), профили Domain, Private и Public firewall Windows, выбор
+#     адреса прослушивания, записи portproxy, снятие прежнего правила
+#     Hyper-V (командлеты подменены функциями) и звено .wslconfig в -Check —
+#     функциями сценария, извлечёнными из AST;
 #   - docker-wsl.sh передаёт аргументы wsl.exe как есть (подделки wsl.exe и
 #     cygpath первыми в PATH);
 #   - только Windows: BOM и разбор обоих .ps1 в Windows PowerShell 5.1 и
 #     pwsh 7; engine-setup.ps1 -Install -DryRun печатает собранные задачи,
-#     правило и .wslconfig и ничего не создаёт; -Uninstall -DryRun печатает
+#     правило, portproxy и .wslconfig и ничего не создаёт (адрес, служба
+#     IP Helper и профили firewall подменены — от машины вывод не зависит),
+#     отказывает при IP Helper без автозапуска и открытом профиле
+#     firewall; строки идут в порядке исполнения; -Uninstall -DryRun печатает
 #     план сноса движка без отката и не трогает .wslconfig, копию и
 #     отметку; measure-boot.ps1 против локальной заглушки /health на python
 #     (порт на 127.0.0.1, журнал во временном каталоге);
@@ -347,8 +353,9 @@ EOF
   ok "$name"
 }
 
-# -Check и замер стучатся на 127.0.0.1: localhost на хосте с движком висит —
-# Windows пробует сначала ::1, а ::1 правило Hyper-V не принимает.
+# -Check и замер стучатся на 127.0.0.1, а не localhost: адрес однозначен.
+# localhost Windows разрешает сначала в ::1 — его -Check проверяет отдельным
+# звеном, а строка «/health на 127.0.0.1» и замер меряют петлю IPv4.
 test_no_localhost_url() {
   local name=no_localhost_url
   if grep -n '//localhost' "$here/engine-setup.ps1" "$here/measure-boot.ps1" >"$work/out"; then
@@ -447,10 +454,29 @@ engine_setup() {
   tr -d '\r' <"$work/out" >"$work/out.$shell"
 }
 
+# Адрес прослушивания portproxy подменяется адресом документации RFC 5737:
+# выбор по маршрутам хоста проверяет test_select_listen_address, а вывод
+# сухого прогона от сети машины не зависит. Так же подменяются запуск
+# службы IP Helper и профили firewall Windows — исправными по умолчанию;
+# сценарий отказа задаёт свои: ip_helper=Manual dry_run …,
+# open_profile=Public dry_run …
 dry_run() {
   local shell="$1"
   shift
-  engine_setup "$shell" -Install -DryRun "$@"
+  engine_setup "$shell" -Install -DryRun -AssumeListenAddress 192.0.2.10 \
+    -AssumeIpHelperStartType "${ip_helper:-Automatic}" -AssumeOpenFirewallProfile "${open_profile:-None}" "$@"
+}
+
+# Номер первой строки вывода, равной $2; пусто — строки нет.
+line_no() { grep -nxF -- "$2" "$work/out.$1" | head -n 1 | cut -d: -f1; }
+
+# Строка $2 раньше строки $3 в выводе $1: порядок строк сухого прогона —
+# порядок исполнения.
+before() {
+  local a b
+  a="$(line_no "$1" "$2")"
+  b="$(line_no "$1" "$3")"
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
 }
 
 has() { grep -qxF -- "$2" "$work/out.$1"; }
@@ -490,13 +516,31 @@ test_engine_setup_dry_run() {
       'keeper.restartcount: 3' 'keeper.restartinterval: PT1M' \
       'measure.task: domovoy-measure-boot' 'measure.trigger: MSFT_TaskBootTrigger' \
       'firewall.name: domovoy-engine-ports' 'firewall.direction: Inbound' 'firewall.protocol: TCP' \
-      'firewall.vmcreatorid: {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' \
-      "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet,127.0.0.1' \
-      'firewall.profiles: Private' 'firewall.profiles.private_only: True' \
-      'wslconfig.exists: False' 'wslconfig.changed: True' 'wslconfig.line: [wsl2]' 'wslconfig.line: networkingMode=mirrored' \
+      "firewall.localports: 28081,$ha_default" 'firewall.remoteaddresses: LocalSubnet' \
+      'firewall.profiles: Private' 'firewall.action: Allow' 'firewall.profiles.private_only: True' \
+      'firewall.hyperv.remove: domovoy-engine-ports' 'firewall.service: iphlpsvc' \
+      'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' \
+      'iphlpsvc.starttype: Automatic' \
+      'listen.address: assumed (-AssumeListenAddress, not printed)' \
+      'portproxy.add: v4tov4 listenport=28081 connectaddress=127.0.0.1 connectport=28081' \
+      "portproxy.add: v4tov4 listenport=$ha_default connectaddress=127.0.0.1 connectport=$ha_default" \
+      "portproxy.remove: own v4tov4 entries on ports 28081,$ha_default (connect 127.0.0.1, same port) at other listen addresses" \
+      'wslconfig.exists: False' 'wslconfig.changed: True' 'wslconfig.save: absent marker' \
+      'wslconfig.line: [wsl2]' 'wslconfig.line: networkingMode=nat' \
       'backup.LogonType: S4U' 'backup.exitcode: 0' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name/$shell" "нет «$line»"; show_out; return; }
     done
+    # Правило — firewall Windows, а не Hyper-V: VMCreatorId у него нет.
+    if grep -qi '^firewall\.vmcreatorid' "$work/out.$shell"; then fail "$name/$shell" "правило собрано для Hyper-V"; show_out; return; fi
+    # Правило сужено до слушателя portproxy: svchost.exe службы iphlpsvc.
+    grep -qix 'firewall.program: .*\\system32\\svchost\.exe' "$work/out.$shell" || { fail "$name/$shell" "правило не сужено до svchost.exe"; show_out; return; }
+    # Прежнее правило Hyper-V снимается до записи правила Windows с тем же
+    # именем — так и печатается.
+    before "$shell" 'firewall.hyperv.remove: domovoy-engine-ports' 'firewall.name: domovoy-engine-ports' \
+      || { fail "$name/$shell" "firewall.hyperv.remove не раньше firewall.name — порядок не тот, что у исполнения"; show_out; return; }
+    # Адрес прослушивания в вывод не попадает — ни подменённый, ни выбранный.
+    if grep -qF '192.0.2.10' "$work/out.$shell"; then fail "$name/$shell" "адрес прослушивания в выводе"; show_out; return; fi
+    if grep -q 'networkingMode=mirrored' "$work/out.$shell"; then fail "$name/$shell" "mirrored в .wslconfig"; show_out; return; fi
     grep -qix 'keeper.execute: .*\\system32\\wsl\.exe' "$work/out.$shell" || { fail "$name/$shell" "держалка не wsl.exe"; show_out; return; }
     # Замер исполняет файл из клона, который пользователь может менять, —
     # поэтому тем же принципалом, что держалка: пользователь, S4U, Limited,
@@ -573,49 +617,93 @@ test_engine_setup_dry_run() {
   printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig"
   cp "$work/wslconfig" "$work/wslconfig.before"
   dry_run "${shells[0]}"
-  [ "$(grep '^wslconfig.line: ' "$work/out.${shells[0]}" | tr '\n' '|')" = 'wslconfig.line: [wsl2]|wslconfig.line: networkingMode=mirrored|wslconfig.line: memory=4GB|' ] \
+  [ "$(grep '^wslconfig.line: ' "$work/out.${shells[0]}" | tr '\n' '|')" = 'wslconfig.line: [wsl2]|wslconfig.line: networkingMode=nat|wslconfig.line: memory=4GB|' ] \
     || { fail "$name" "прежние строки .wslconfig не сохранены"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.save: backup copy' || { fail "$name" "прежний файл не сохраняется копией"; show_out; return; }
   # Байтовое сравнение: строки wslconfig.line делятся по \r?\n, а dry_run
   # срезает CR — лишний CR после [wsl2] виден только здесь.
-  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=mirrored\r\nmemory=4GB\r\n' || return
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n' || return
   cmp -s "$work/wslconfig" "$work/wslconfig.before" || { fail "$name" "сухой прогон изменил .wslconfig"; return; }
   # Файл с LF остаётся с LF: перевод строки берётся из самого файла.
   printf '[wsl2]\nmemory=4GB\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=mirrored\nmemory=4GB\n' || return
+  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=nat\nmemory=4GB\n' || return
   # Без секции [wsl2] она дописывается в конец — тоже переводом строки файла.
   printf '[boot]\nsystemd=true\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[boot]\nsystemd=true\n\n[wsl2]\nnetworkingMode=mirrored\n' || return
+  wslconfig_bytes_are "$name" $'[boot]\nsystemd=true\n\n[wsl2]\nnetworkingMode=nat\n' || return
   printf '[boot]\r\nsystemd=true\r\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[boot]\r\nsystemd=true\r\n\r\n[wsl2]\r\nnetworkingMode=mirrored\r\n' || return
-  printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
-  dry_run "${shells[0]}"
-  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "mirrored уже задан, а файл меняется"; show_out; return; }
-  ok "$name"
-
-  name=engine_setup_refuses_foreign_networking_mode
+  wslconfig_bytes_are "$name" $'[boot]\r\nsystemd=true\r\n\r\n[wsl2]\r\nnetworkingMode=nat\r\n' || return
   printf '[wsl2]\nnetworkingMode=nat\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  if [ "$rc" -eq 0 ]; then fail "$name" "networkingMode=nat принят"; show_out; return; fi
-  has "${shells[0]}" 'wslconfig.conflict: networkingMode=nat' || { fail "$name" "конфликт не назван"; show_out; return; }
+  [ "$rc" -eq 0 ] || { fail "$name" "nat уже задан — код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "nat уже задан, а файл меняется"; show_out; return; }
+  # firewall=false не отказ: правила Hyper-V больше нет, порты стека на
+  # адресе хоста закрывает firewall Windows.
+  printf '[wsl2]\nnetworkingMode=nat\nfirewall=false\n' >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "firewall=false — отказ, код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "firewall=false: файл меняется"; show_out; return; }
   ok "$name"
 
-  # firewall=false выключает firewall Hyper-V для VM WSL: правило ничего не
-  # сужало бы, порты стека видны всем в сети. Отказ — и рядом с mirrored.
-  name=engine_setup_refuses_wsl_firewall_off
+  # Хост по 0028: mirrored записан прежним -Install — рядом копия или
+  # отметка. Переписывается на nat на месте; отметка .domovoy-absent
+  # остаётся единственной записью о прежнем состоянии — копия из
+  # mirrored не создаётся, иначе -Uninstall вернул бы mirrored.
+  name=engine_setup_migrates_own_mirrored
+  rm -f "$work/wslconfig"*
+  printf '[wsl2]\r\nnetworkingMode=mirrored\r\nmemory=4GB\r\n' >"$work/wslconfig"
+  printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig.domovoy-backup"
+  dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "свой mirrored с копией: код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: True' || { fail "$name" "свой mirrored с копией не переписывается"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.save: none (backup copy or absent marker already there)' || { fail "$name" "копия перезаписывается"; show_out; return; }
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n' || return
+  rm -f "$work/wslconfig"*
+  printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+  : >"$work/wslconfig.domovoy-absent"
+  dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "свой mirrored с отметкой: код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: True' || { fail "$name" "свой mirrored с отметкой не переписывается"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.save: none (backup copy or absent marker already there)' || { fail "$name" "при отметке создаётся копия mirrored"; show_out; return; }
+  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=nat\n' || return
+  [ ! -e "$work/wslconfig.domovoy-backup" ] || { fail "$name" "сухой прогон создал копию"; return; }
+  rm -f "$work/wslconfig"*
+  ok "$name"
+
+  # Чужая настройка не переписывается: mirrored без копии и отметки,
+  # другие режимы и выключенный localhostForwarding (без него 127.0.0.1 и
+  # ::1 хоста до движка в NAT не доходят).
+  name=engine_setup_refuses_foreign_wslconfig
   local wsl_case
-  for wsl_case in $'[wsl2]\nfirewall=false\n|firewall=false' $'[wsl2]\nnetworkingMode=mirrored\nFirewall = False\n|firewall=False'; do
+  for wsl_case in $'[wsl2]\nnetworkingMode=mirrored\n|networkingMode=mirrored' $'[wsl2]\nnetworkingMode=bridged\n|networkingMode=bridged' \
+    $'[wsl2]\nlocalhostForwarding=false\n|localhostForwarding=false' $'[wsl2]\nnetworkingMode=nat\nLocalhostForwarding = False\n|localhostForwarding=False'; do
+    rm -f "$work/wslconfig"*
     printf '%s' "${wsl_case%|*}" >"$work/wslconfig"
     dry_run "${shells[0]}"
-    if [ "$rc" -eq 0 ]; then fail "$name" "${wsl_case#*|} принят"; show_out; return; fi
+    if [ "$rc" -ne 1 ]; then fail "$name" "${wsl_case#*|}: код $rc, ожидался 1"; show_out; return; fi
     has "${shells[0]}" "wslconfig.conflict: ${wsl_case#*|}" || { fail "$name" "конфликт ${wsl_case#*|} не назван"; show_out; return; }
   done
-  printf '[wsl2]\nnetworkingMode=mirrored\nfirewall=true\n' >"$work/wslconfig"
-  dry_run "${shells[0]}"
-  [ "$rc" -eq 0 ] || { fail "$name" "firewall=true — отказ, код $rc"; show_out; return; }
-  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "firewall=true: файл меняется"; show_out; return; }
+  rm -f "$work/wslconfig"*
+  ok "$name"
+
+  # Состояние хоста, при котором порты стека не закрыты или portproxy не
+  # переживёт загрузку, — отказ до первого изменения: IP Helper без
+  # автозапуска; профиль firewall Windows, который по умолчанию пропускает
+  # входящие (правило Private закрывает порты, только пока профили их
+  # блокируют). Любой из трёх профилей.
+  name=engine_setup_refuses_host_state
+  ip_helper=Manual dry_run "${shells[0]}"
+  [ "$rc" -eq 1 ] || { fail "$name" "IP Helper Manual: код $rc, ожидался 1"; show_out; return; }
+  grep -q '^iphlpsvc\.conflict: .*Automatic' "$work/out.${shells[0]}" || { fail "$name" "IP Helper Manual: конфликт не назван"; show_out; return; }
+  local open
+  for open in Domain Private Public; do
+    open_profile="$open" dry_run "${shells[0]}"
+    [ "$rc" -eq 1 ] || { fail "$name" "профиль $open открыт: код $rc, ожидался 1"; show_out; return; }
+    grep -q "^firewall\.hostprofiles\.conflict: .*$open" "$work/out.${shells[0]}" || { fail "$name" "профиль $open открыт: конфликт не назван"; show_out; return; }
+    if grep -q '^firewall\.hostprofiles: ok' "$work/out.${shells[0]}"; then fail "$name" "профиль $open открыт, а напечатано ok"; show_out; return; fi
+  done
   ok "$name"
 
   name=engine_setup_requires_mode
@@ -630,6 +718,19 @@ test_engine_setup_dry_run() {
   # не запускает.
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeEngineState Running
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeEngineState без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeListenAddress 192.0.2.10
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeListenAddress без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeIpHelperStartType Automatic
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeIpHelperStartType без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeOpenFirewallProfile None
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeOpenFirewallProfile без -DryRun код $rc, ожидался 2"; show_out; return; }
+  # Подменённый адрес — только IPv4 одного узла: петля и подстановочный
+  # адрес дали бы петлю portproxy.
+  local bad_address
+  for bad_address in 0.0.0.0 127.0.0.1 example 2001:db8::1; do
+    engine_setup "${shells[0]}" -Install -DryRun -AssumeListenAddress "$bad_address"
+    [ "$rc" -eq 2 ] || { fail "$name" "-AssumeListenAddress $bad_address: код $rc, ожидался 2"; show_out; return; }
+  done
   ok "$name"
 
   # stderr внешней программы — отдельным полем: в строках stdout его нет,
@@ -691,18 +792,30 @@ test_uninstall_dry_run_without_rollback() {
     name="uninstall_dry_run_without_rollback/$shell"
     # Движок работает, есть копия прежнего .wslconfig.
     rm -f "$work/wslconfig"*
-    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    printf '[wsl2]\nnetworkingMode=nat\n' >"$work/wslconfig"
     printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig.domovoy-backup"
     snapshot_wslconfig
     uninstall_dry_run "$shell" -AssumeEngineState Running
     [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+    # Снимается всё, что ставит -Install: свои записи portproxy (порты стека
+    # с целью 127.0.0.1 того же порта, на любом адресе — адрес не
+    # печатается), правило firewall Windows и прежнее правило Hyper-V.
     for line in 'uninstall.engine.running: True' \
       'uninstall.task.unregister: domovoy-engine' 'uninstall.task.unregister: domovoy-measure-boot' \
       'uninstall.backup: install-schedule.ps1 -Uninstall' \
-      'uninstall.terminate: wsl.exe --terminate domovoy-engine' 'uninstall.firewall.remove: domovoy-engine-ports' \
+      'uninstall.terminate: wsl.exe --terminate domovoy-engine' \
+      "uninstall.portproxy.remove: own v4tov4 entries on ports 28081,$(compose_default HA_HTTP_PORT) (connect 127.0.0.1, same port) at any listen address" \
+      'uninstall.firewall.remove: domovoy-engine-ports' 'uninstall.firewall.hyperv.remove: domovoy-engine-ports' \
       'uninstall.wslconfig: restore from wslconfig.domovoy-backup' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name" "нет «$line»"; show_out; return; }
     done
+    # Порядок строк — порядок исполнения: записи portproxy, прежнее правило
+    # Hyper-V, правило Windows.
+    if ! before "$shell" "uninstall.portproxy.remove: own v4tov4 entries on ports 28081,$(compose_default HA_HTTP_PORT) (connect 127.0.0.1, same port) at any listen address" \
+      'uninstall.firewall.hyperv.remove: domovoy-engine-ports' ||
+      ! before "$shell" 'uninstall.firewall.hyperv.remove: domovoy-engine-ports' 'uninstall.firewall.remove: domovoy-engine-ports'; then
+      fail "$name" "порядок portproxy → Hyper-V → правило Windows не тот, что у исполнения"; show_out; return
+    fi
     grep -q '^uninstall\.stack\.stop: wsl\.exe -d domovoy-engine -u root --cd .* --exec docker compose --profile ha stop$' "$work/out.$shell" \
       || { fail "$name" "стек не останавливается командой stop внутри движка"; show_out; return; }
     # stop, а не down: тома стека остаются.
@@ -721,7 +834,7 @@ test_uninstall_dry_run_without_rollback() {
 
     # Движок не работает, до -Install .wslconfig не было — отметка.
     rm -f "$work/wslconfig"*
-    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    printf '[wsl2]\nnetworkingMode=nat\n' >"$work/wslconfig"
     : >"$work/wslconfig.domovoy-absent"
     snapshot_wslconfig
     uninstall_dry_run "$shell" -AssumeEngineState Stopped
@@ -733,7 +846,7 @@ test_uninstall_dry_run_without_rollback() {
 
     # Ни копии, ни отметки — .wslconfig не трогается.
     rm -f "$work/wslconfig"*
-    printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
+    printf '[wsl2]\nnetworkingMode=nat\n' >"$work/wslconfig"
     snapshot_wslconfig
     uninstall_dry_run "$shell" -AssumeEngineState Stopped
     has "$shell" 'uninstall.wslconfig: keep (no .domovoy-backup copy and no .domovoy-absent marker)' || { fail "$name" "решение о .wslconfig не то"; show_out; return; }
@@ -846,20 +959,273 @@ test_native_output_encoding() {
   ok "$name"
 }
 
-# Звено -Check «firewall Hyper-V для VM WSL»: OK только при Enabled True и
-# DefaultInboundAction Block; NotConfigured хранилища по умолчанию — не OK.
-test_vm_firewall_problems() {
-  local name=vm_firewall_problems shell
+# Звено -Check «firewall Windows: профиль Private»: правило сужает доступ,
+# только пока профиль включён и по умолчанию блокирует входящие. OK только
+# при Enabled True и DefaultInboundAction Block; NotConfigured — не OK.
+test_firewall_profile_problems() {
+  local name=firewall_profile_problems shell
   if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
   for shell in "${shells[@]}"; do
     # shellcheck disable=SC2016
     ps_functions "$shell" "$here/engine-setup.ps1" '
       function s($e, $d) { [pscustomobject]@{ Enabled = $e; DefaultInboundAction = $d } }
-      if (@(Get-VmFirewallProblems (s "True" "Block")).Count) { "True/Block не OK"; exit 1 }
+      if (@(Get-FirewallProfileProblems (s "True" "Block")).Count) { "True/Block не OK"; exit 1 }
       foreach ($bad in (s "False" "Block"), (s "True" "Allow"), (s "NotConfigured" "NotConfigured"), (s "True" "NotConfigured")) {
-        if (-not @(Get-VmFirewallProblems $bad).Count) { "принято $($bad.Enabled)/$($bad.DefaultInboundAction)"; exit 1 }
+        if (-not @(Get-FirewallProfileProblems $bad).Count) { "принято $($bad.Enabled)/$($bad.DefaultInboundAction)"; exit 1 }
       }' \
-      Get-VmFirewallProblems
+      Get-FirewallProfileProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Профили firewall Windows целиком (Get-FirewallProfileStates): закрытость
+# портов стека держат все три — Private, где действует правило, и Public с
+# Domain, где правила нет и порты закрывает только блокировка входящих по
+# умолчанию. Каждый профиль — своя запись с именем; профиль, которого нет
+# среди прочитанных, — замечание, а не OK.
+test_firewall_profile_states() {
+  local name=firewall_profile_states shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function p($n, $e, $d) { [pscustomobject]@{ Name = $n; Enabled = $e; DefaultInboundAction = $d } }
+      function bad($states) { @($states | Where-Object { $_.Problems.Count } | ForEach-Object { $_.Name }) -join "," }
+      $good = @((p "Domain" "True" "Block"), (p "Private" "True" "Block"), (p "Public" "True" "Block"))
+      $states = @(Get-FirewallProfileStates $good)
+      if ((@($states | ForEach-Object { $_.Name }) -join ",") -ne "Domain,Private,Public") { "профили: $(@($states | ForEach-Object { $_.Name }) -join ",")"; exit 1 }
+      if (bad $states) { "исправные профили с замечаниями: $(bad $states)"; exit 1 }
+      foreach ($open in "Domain", "Private", "Public") {
+        $set = @($good | ForEach-Object { if ($_.Name -eq $open) { p $open "True" "Allow" } else { $_ } })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "открыт $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+        $set = @($good | ForEach-Object { if ($_.Name -eq $open) { p $open "False" "Block" } else { $_ } })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "выключен $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+        $set = @($good | Where-Object { $_.Name -ne $open })
+        if ((bad (Get-FirewallProfileStates $set)) -ne $open) { "не прочитан $open, замечания у «$(bad (Get-FirewallProfileStates $set))»"; exit 1 }
+      }
+      if ((bad (Get-FirewallProfileStates @())) -ne "Domain,Private,Public") { "пустой список принят"; exit 1 }' \
+      Get-FirewallProfileStates Get-FirewallProfileProblems
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Адрес прослушивания portproxy (Select-ListenAddress): IPv4 интерфейса с
+# маршрутом по умолчанию и профилем сети Private, кроме петли, 0.0.0.0 и
+# APIPA; вес — RouteMetric маршрута плюс InterfaceMetric интерфейса;
+# наименьший вес у двух адресов и больше — отказ с причиной, а не выбор
+# наугад. Адреса — из RFC 5737 (192.0.2.0/24).
+test_select_listen_address() {
+  local name=select_listen_address shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      # Не r, n, p, a: псевдонимы (r — Invoke-History) перекрывают функции.
+      function mkroute($i, $m) { [pscustomobject]@{ InterfaceIndex = $i; RouteMetric = $m } }
+      function mkif($i, $m) { [pscustomobject]@{ InterfaceIndex = $i; InterfaceMetric = $m } }
+      function mkprof($i, $c) { [pscustomobject]@{ InterfaceIndex = $i; NetworkCategory = $c } }
+      function mkaddr($i, $ip) { [pscustomobject]@{ InterfaceIndex = $i; IPAddress = $ip } }
+      function pick($routes, $ifs, $profiles, $addresses) { Select-ListenAddress @($routes) @($ifs) @($profiles) @($addresses) }
+      $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 "Private") (mkaddr 7 "192.0.2.10")
+      if ($x.Address -ne "192.0.2.10" -or $x.Reason) { "один кандидат: «$($x.Address)» «$($x.Reason)»"; exit 1 }
+      # Перечисление NetworkCategory числом: Private — 1.
+      $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 1) (mkaddr 7 "192.0.2.10")
+      if ($x.Address -ne "192.0.2.10") { "NetworkCategory 1 не принят: «$($x.Reason)»"; exit 1 }
+      $x = pick @((mkroute 7 0), (mkroute 8 10)) @((mkif 7 25), (mkif 8 25)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
+      if ($x.Address -ne "192.0.2.10") { "веса 25 и 35: «$($x.Address)»"; exit 1 }
+      $x = pick @((mkroute 7 10), (mkroute 8 0)) @((mkif 7 25), (mkif 8 35)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
+      if ($x.Address -or -not $x.Reason) { "равный вес 35 принят: «$($x.Address)»"; exit 1 }
+      if ($x.Reason -match "192\.0\.2") { "адрес в причине отказа: $($x.Reason)"; exit 1 }
+      # VPN: профиль Public с меньшим весом — не кандидат.
+      $x = pick @((mkroute 7 0), (mkroute 9 0)) @((mkif 7 25), (mkif 9 5)) @((mkprof 7 "Private"), (mkprof 9 "Public")) @((mkaddr 7 "192.0.2.10"), (mkaddr 9 "192.0.2.30"))
+      if ($x.Address -ne "192.0.2.10") { "Public выбран вместо Private: «$($x.Address)»"; exit 1 }
+      foreach ($cat in "DomainAuthenticated", 2, 0) {
+        $x = pick (mkroute 9 0) (mkif 9 5) (mkprof 9 $cat) (mkaddr 9 "192.0.2.30")
+        if ($x.Address) { "профиль $cat принят"; exit 1 }
+      }
+      # Два IPv4 одного интерфейса — равный вес, отказ.
+      $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 "Private") @((mkaddr 7 "192.0.2.10"), (mkaddr 7 "192.0.2.11"))
+      if ($x.Address -or -not $x.Reason) { "два адреса интерфейса: «$($x.Address)»"; exit 1 }
+      # Интерфейс без маршрута по умолчанию — не кандидат.
+      $x = pick (mkroute 7 0) @((mkif 7 25), (mkif 8 5)) @((mkprof 7 "Private"), (mkprof 8 "Private")) @((mkaddr 7 "192.0.2.10"), (mkaddr 8 "192.0.2.20"))
+      if ($x.Address -ne "192.0.2.10") { "интерфейс без маршрута выбран: «$($x.Address)»"; exit 1 }
+      foreach ($bad in "169.254.10.20", "127.0.0.1", "0.0.0.0", "example") {
+        $x = pick (mkroute 7 0) (mkif 7 25) (mkprof 7 "Private") (mkaddr 7 $bad)
+        if ($x.Address -or -not $x.Reason) { "$bad принят"; exit 1 }
+      }
+      $x = pick @() @() @() @()
+      if ($x.Address -or -not $x.Reason) { "без кандидатов нет причины"; exit 1 }' \
+      Select-ListenAddress
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Записи portproxy в форме реестра (PortProxy\v4tov4\tcp: имя
+# «адрес/порт» прослушивания, значение «адрес/порт» цели): на каждый порт
+# стека — одна запись с выбранного адреса на 127.0.0.1 того же порта.
+# Замечание называет порт, но не адрес. Чужие записи других портов не
+# замечаются. Своими (снимает -Uninstall) считаются записи портов стека с
+# целью 127.0.0.1 того же порта — на любом адресе.
+test_portproxy_problems() {
+  local name=portproxy_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function e($n, $v) { [pscustomobject]@{ Name = $n; Value = $v } }
+      $ports = @(28081, 28123)
+      $good = @((e "192.0.2.10/28081" "127.0.0.1/28081"), (e "192.0.2.10/28123" "127.0.0.1/28123"))
+      $p = @(Get-PortProxyProblems $good "192.0.2.10" $ports)
+      if ($p.Count) { "свои записи — замечания: $p"; exit 1 }
+      $p = @(Get-PortProxyProblems ($good + (e "192.0.2.10/28500" "192.0.2.5/80")) "192.0.2.10" $ports)
+      if ($p.Count) { "чужая запись другого порта замечена: $p"; exit 1 }
+      $cases = @(
+        @{ Why = "нет записи порта"; Entries = @($good[1]) },
+        @{ Why = "прежний адрес"; Entries = @((e "192.0.2.99/28081" "127.0.0.1/28081"), $good[1]) },
+        @{ Why = "цель не 127.0.0.1"; Entries = @((e "192.0.2.10/28081" "192.0.2.5/28081"), $good[1]) },
+        @{ Why = "другой порт цели"; Entries = @((e "192.0.2.10/28081" "127.0.0.1/28082"), $good[1]) },
+        @{ Why = "две записи порта"; Entries = @($good + (e "192.0.2.99/28081" "127.0.0.1/28081")) },
+        @{ Why = "подстановочный адрес"; Entries = @((e "0.0.0.0/28081" "127.0.0.1/28081"), $good[1]) },
+        @{ Why = "звёздочка"; Entries = @((e "*/28081" "127.0.0.1/28081"), $good[1]) },
+        @{ Why = "петля"; Entries = @((e "127.0.0.1/28081" "127.0.0.1/28081"), $good[1]) }
+      )
+      foreach ($c in $cases) {
+        $p = @(Get-PortProxyProblems $c.Entries "192.0.2.10" $ports)
+        if (-not $p.Count) { "$($c.Why): замечаний нет"; exit 1 }
+        if (($p -join " ") -notmatch "28081") { "$($c.Why): замечание без порта: $p"; exit 1 }
+        if (($p -join " ") -match "192\.0\.2|0\.0\.0\.0|127\.0\.0\.1/") { "$($c.Why): адрес в замечании: $p"; exit 1 }
+        if (($p -join " ") -match "28123") { "$($c.Why): замечен исправный порт: $p"; exit 1 }
+      }
+      $all = @($good + (e "192.0.2.99/28081" "127.0.0.1/28081") + (e "192.0.2.10/28500" "127.0.0.1/28500") + (e "192.0.2.10/28123" "192.0.2.5/28123"))
+      $own = @(Select-OwnPortProxy $all $ports)
+      $names = @($own | ForEach-Object { $_.Name } | Sort-Object)
+      if (($names -join "|") -ne "192.0.2.10/28081|192.0.2.10/28123|192.0.2.99/28081") { "свои записи: $($names -join "|")"; exit 1 }
+      # Своя запись на 0.0.0.0 тоже снимается, если её цель — своя.
+      $own = @(Select-OwnPortProxy @((e "*/28081" "127.0.0.1/28081")) $ports)
+      if ($own.Count -ne 1 -or $own[0].ListenPort -ne 28081 -or $own[0].ListenAddress -ne "*") { "запись на * не своя"; exit 1 }
+      # Чужая запись на выбранном адресе и порту стека — отказ -Install;
+      # своя, чужая на другом адресе и чужая на другом порту — нет.
+      $f = @(Select-ForeignPortProxyPorts $good "192.0.2.10" $ports)
+      if ($f.Count) { "свои записи названы чужими: $f"; exit 1 }
+      $f = @(Select-ForeignPortProxyPorts @((e "192.0.2.99/28081" "192.0.2.5/80"), (e "192.0.2.10/28500" "192.0.2.5/80")) "192.0.2.10" $ports)
+      if ($f.Count) { "чужая запись другого адреса или порта: $f"; exit 1 }
+      $f = @(Select-ForeignPortProxyPorts @((e "192.0.2.10/28081" "192.0.2.5/28081"), (e "192.0.2.10/28123" "127.0.0.1/28124")) "192.0.2.10" $ports)
+      if (($f -join ",") -ne "28081,28123") { "чужие записи на адресе: $($f -join ",")"; exit 1 }' \
+      ConvertFrom-PortProxyEntry Get-PortProxyProblems Select-OwnPortProxy Select-ForeignPortProxyPorts
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Правило firewall Windows domovoy-engine-ports (Get-HostRuleProblems) по
+# свойствам Get-NetFirewallRule и его фильтров: включено, входящие, Allow,
+# TCP, только LocalSubnet, только профиль Private, порты ровно API и HA.
+test_host_rule_problems() {
+  local name=host_rule_problems shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function rule([hashtable]$Change) {
+        $r = [ordered]@{ Enabled = "True"; Direction = "Inbound"; Action = "Allow"; Protocol = "TCP"; LocalPorts = @("28081", "28123"); RemoteAddresses = @("LocalSubnet"); Profiles = "Private"
+          Program = "$env:SystemRoot\System32\svchost.exe"; Service = "iphlpsvc" }
+        foreach ($k in $Change.Keys) { $r[$k] = $Change[$k] }
+        [pscustomobject]$r
+      }
+      $ports = @(28081, 28123)
+      if (@(Get-HostRuleProblems (rule @{}) $ports).Count) { "исправное правило: $(Get-HostRuleProblems (rule @{}) $ports)"; exit 1 }
+      if (@(Get-HostRuleProblems (rule @{ Profiles = 2; LocalPorts = @("28123", "28081") }) $ports).Count) { "Profiles 2 и порты в другом порядке не приняты"; exit 1 }
+      # Путь программы правило хранит как задан: с %SystemRoot% или в другом регистре.
+      foreach ($program in "%SystemRoot%\System32\svchost.exe", "$($env:SystemRoot.ToUpperInvariant())\SYSTEM32\SVCHOST.EXE") {
+        if (@(Get-HostRuleProblems (rule @{ Program = $program; Service = "IpHlpSvc" }) $ports).Count) { "не принят путь ${program}: $(Get-HostRuleProblems (rule @{ Program = $program }) $ports)"; exit 1 }
+      }
+      $bad = @(
+        @{ Enabled = "False" }, @{ Direction = "Outbound" }, @{ Action = "Block" }, @{ Protocol = "UDP" }, @{ Protocol = "Any" },
+        @{ RemoteAddresses = @("Any") }, @{ RemoteAddresses = @("LocalSubnet", "192.0.2.0/24") }, @{ RemoteAddresses = @("Internet") }, @{ RemoteAddresses = @() },
+        @{ Profiles = "Any" }, @{ Profiles = "Public" }, @{ Profiles = "Private, Public" }, @{ Profiles = 0 },
+        @{ LocalPorts = @("28081") }, @{ LocalPorts = @("28081", "28123", "28500") }, @{ LocalPorts = @("Any") },
+        @{ Program = "Any" }, @{ Program = "$env:SystemRoot\System32\wslservice.exe" }, @{ Program = "" },
+        @{ Service = "Any" }, @{ Service = "Dnscache" }, @{ Service = "" }
+      )
+      foreach ($c in $bad) {
+        if (-not @(Get-HostRuleProblems (rule $c) $ports).Count) { "принято: $(($c.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value -join ",")" }) -join "; ")"; exit 1 }
+      }' \
+      Get-HostRuleProblems Test-PrivateProfileOnly
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Прежнее правило Hyper-V (Remove-LegacyHyperVRule): Get-NetFirewallHyperVRule
+# -Name отдаёт под тем же именем и правило firewall Windows (VMCreatorId Any),
+# а снимать можно только правило WSL — его VMCreatorId. Командлеты Hyper-V
+# подменены функциями до первого вызова: функция по имени берёт верх над
+# командлетом, хост не трогается. $RuleName и $WslVmCreatorId — из AST
+# сценария, а VMCreatorId WSL в объектах — свой: ошибка в постоянной
+# сценария видна.
+test_remove_legacy_hyperv_rule() {
+  local name=remove_legacy_hyperv_rule shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      function Get-NetFirewallHyperVRule { [CmdletBinding()] param([string[]]$Name) @($global:rules | Where-Object { $Name -contains $_.Name }) }
+      function Remove-NetFirewallHyperVRule { [CmdletBinding()] param([Parameter(ValueFromPipeline = $true)]$InputObject) process { $global:removed += @($InputObject) } }
+      $script = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+      foreach ($var in "RuleName", "WslVmCreatorId") {
+        $assign = $script.Find({ param($a) $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and $a.Left.Extent.Text -eq "`$$var" }, $false)
+        if (-not $assign) { "нет присваивания `$$var"; exit 1 }
+        . ([scriptblock]::Create($assign.Extent.Text))
+      }
+      $wsl = "{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}"
+      function hv($id) { [pscustomobject]@{ Name = $RuleName; VMCreatorId = $id } }
+      foreach ($id in $wsl, $wsl.ToLowerInvariant()) {
+        $global:rules = @((hv "Any"), (hv $id))
+        $global:removed = @()
+        $said = Remove-LegacyHyperVRule
+        if ($global:removed.Count -ne 1 -or $global:removed[0].VMCreatorId -ne $id) { "VMCreatorId ${id}: снято $($global:removed.Count): $(@($global:removed | ForEach-Object { $_.VMCreatorId }) -join ", ")"; exit 1 }
+        if ($said -notmatch "удалено") { "VMCreatorId ${id}: ответ «$said»"; exit 1 }
+      }
+      $global:rules = @((hv "Any"))
+      $global:removed = @()
+      $said = Remove-LegacyHyperVRule
+      if ($global:removed.Count) { "без правила WSL снято $($global:removed.Count)"; exit 1 }
+      if ($said -notmatch "нет") { "без правила WSL ответ «$said»"; exit 1 }' \
+      Remove-LegacyHyperVRule
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Звено -Check «.wslconfig: networkingMode=nat» (Get-WslConfigCheck по плану
+# Get-WslConfigPlan): nat — OK; файла нет — «не задан»; mirrored прежней
+# установки (рядом копия) — FAIL со своей подсказкой, а не «не задан»;
+# чужой mirrored — FAIL с заданным значением.
+test_wslconfig_check() {
+  local name=wslconfig_check shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  mkdir -p "$work/wslcheck"
+  for shell in "${shells[@]}"; do
+    rm -f "$work/wslcheck/"*
+    # shellcheck disable=SC2016
+    PS1_TMP="$(cygpath -w "$work/wslcheck")" ps_functions "$shell" "$here/engine-setup.ps1" '
+      $path = Join-Path $env:PS1_TMP "wslconfig"
+      function check { Get-WslConfigCheck (Get-WslConfigPlan $path) }
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "не задан") { "файла нет: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText($path, "[wsl2]`nnetworkingMode=nat`n")
+      $c = check
+      if ($c.State -ne "OK" -or $c.Detail) { "nat: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText($path, "[wsl2]`nnetworkingMode=mirrored`n")
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "networkingMode=mirrored") { "чужой mirrored: $($c.State) «$($c.Detail)»"; exit 1 }
+      [IO.File]::WriteAllText("$path.domovoy-backup", "[wsl2]`n")
+      $c = check
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "mirrored прежней установки" -or $c.Detail -match "не задан") { "свой mirrored: $($c.State) «$($c.Detail)»"; exit 1 }' \
+      Get-WslConfigCheck Get-WslConfigPlan
     [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
   done
   ok "$name"
@@ -1493,6 +1859,31 @@ test_readme_points_to_logs() {
   ok "$name"
 }
 
+# Смена схемы сети записана решением (#151): README описывает установку с
+# networkingMode=nat и portproxy и не держит строки настройки mirrored
+# (упоминания mirrored в прозе, в том числе в откате, не в счёт); в индексе
+# 0028 частично заменена 0030; у 0030 — шапка «Частично заменяет:» со
+# ссылкой на 0028 и раздел «Откат», где названо правило Hyper-V.
+test_network_decision_recorded() {
+  local name=network_decision_recorded pattern
+  local readme="$root/README.md" index="$root/docs/decisions/README.md" record="$root/docs/decisions/0030-wsl-nat-portproxy.md"
+  for pattern in 'networkingMode=nat' 'portproxy'; do
+    grep -qF -- "$pattern" "$readme" || { fail "$name" "в README нет «$pattern»"; return; }
+  done
+  if tr -d '\r' <"$readme" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -qx 'networkingMode=mirrored'; then
+    fail "$name" "в README строка настройки networkingMode=mirrored"; return
+  fi
+  grep -F '| [0028](0028-docker-engine-in-wsl.md) |' "$index" | grep -qF 'частично заменено [0030](0030-wsl-nat-portproxy.md)' \
+    || { fail "$name" "в индексе решений 0028 не помечена частично заменённой 0030"; return; }
+  grep -qF '| [0030](0030-wsl-nat-portproxy.md) |' "$index" || { fail "$name" "в индексе решений нет строки 0030"; return; }
+  [ -f "$record" ] || { fail "$name" "нет записи 0030"; return; }
+  grep -E '^\*\*Частично заменяет:\*\*' "$record" | grep -qF '[0028](0028-docker-engine-in-wsl.md)' \
+    || { fail "$name" "у 0030 нет шапки «Частично заменяет:» со ссылкой на 0028"; return; }
+  tr -d '\r' <"$record" | sed -n '/^## Откат/,/^## [^О]/p' | grep -qF 'Hyper-V' \
+    || { fail "$name" "в 0030 нет раздела «Откат» с правилом Hyper-V"; return; }
+  ok "$name"
+}
+
 test_shell_scripts_parse
 test_no_hardcoded_api_port
 test_wsl_conf_is_merged
@@ -1508,7 +1899,13 @@ test_no_docker_desktop_paths
 test_engine_setup_dry_run
 test_uninstall_dry_run_without_rollback
 test_rule_profile_private_only
-test_vm_firewall_problems
+test_firewall_profile_problems
+test_firewall_profile_states
+test_select_listen_address
+test_portproxy_problems
+test_host_rule_problems
+test_remove_legacy_hyperv_rule
+test_wslconfig_check
 test_journald_config_problems
 test_container_log_problems
 test_native_output_encoding
@@ -1525,6 +1922,7 @@ test_measure_boot_records_container_restart
 test_measure_boot_names_stopped_container
 test_measure_boot_repeats_probe_error_after_recovery
 test_readme_points_to_logs
+test_network_decision_recorded
 
 echo "итог: пройдено $passed, упало $failed, пропущено $skipped"
 [ "$failed" -eq 0 ]

@@ -43,19 +43,35 @@
        -Distro domovoy-engine -Project <COMPOSE_PROJECT_NAME>
        -LogPath %LOCALAPPDATA%\domovoy-engine\measure-boot.log — хронология
        загрузки: дистрибутив, docker, контейнеры проекта, статус /health;
-    5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=mirrored — порты
-       дистрибутива видны на адресе хоста. Прежний файл сохраняется копией
-       .wslconfig.domovoy-backup, отсутствие — отметкой .wslconfig.domovoy-absent.
-       Другое значение networkingMode или firewall=false (firewall Hyper-V
-       для VM WSL выключен — правило ниже ничего не сужало бы) — отказ:
-       чужая настройка не переписывается.
+    5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=nat (запись 0030) —
+       127.0.0.1 и ::1 хоста доводит до движка wslrelay (localhostForwarding).
+       Прежний файл сохраняется копией .wslconfig.domovoy-backup, отсутствие —
+       отметкой .wslconfig.domovoy-absent; уже сохранённое не перезаписывается.
+       mirrored, записанный прежним -Install по 0028 (рядом копия или
+       отметка), переписывается на nat. Другое значение networkingMode или
+       localhostForwarding=false — отказ: чужая настройка не переписывается.
        Применяется после wsl --shutdown — его -Install не выполняет (гасит
        все дистрибутивы пользователя), выполняет владелец (README);
-    6. правило Hyper-V firewall domovoy-engine-ports: входящие TCP на порты
-       API и Home Assistant, только с локальной подсети и с адресов петли
-       хоста (127.0.0.1; ::1 правило Hyper-V не принимает), только в профиле
-       Private — сеть хоста должна быть частной, в общественной порты закрыты;
-    7. последним шагом — расписание бэкапа:
+    6. правило firewall Windows domovoy-engine-ports: входящие TCP на порты
+       API и Home Assistant, только с локальной подсети, только в профиле
+       Private и только к svchost.exe службы IP Helper — слушателю portproxy.
+       Сеть хоста должна быть частной. Закрытость портов шире правила держат
+       профили firewall Windows: все три (Domain, Private, Public) должны
+       быть включены и по умолчанию блокировать входящие — иначе отказ до
+       первого изменения. Прежнее правило Hyper-V firewall с тем же именем
+       (0028) снимается до записи правила Windows;
+    7. portproxy v4tov4 с адреса хоста в ЛВС на 127.0.0.1 того же порта —
+       по записи на порт API и Home Assistant: доступ из ЛВС. Адрес —
+       IPv4 интерфейса с маршрутом по умолчанию в частной сети, с наименьшим
+       весом (метрика маршрута + метрика интерфейса); два адреса с равным
+       весом или ни одного — отказ. Свои записи на прежнем адресе снимаются,
+       чужие не трогаются: чужая запись на выбранном адресе и порту стека —
+       отказ до первого изменения. Служба IP Helper (iphlpsvc), без которой portproxy
+       не работает, должна запускаться автоматически — иначе отказ до
+       первого изменения. Адрес в
+       вывод не попадает. Сменился адрес (DHCP, другая сеть) — повторный
+       -Install;
+    8. последним шагом — расписание бэкапа:
        ops/backup/install-schedule.ps1 -Install (S4U).
 
   Порты: API_HTTP_PORT и HA_HTTP_PORT из .env клона, без них — значения по
@@ -70,10 +86,12 @@
   диске со сбросом не реже 10 с (systemd-analyze cat-config), драйвер логов
   docker journald (docker info), restart: unless-stopped и драйвер логов
   journald у контейнеров проекта (созданные до смены драйвера — FAIL с
-  подсказкой --force-recreate), порт замера.
-  Исключение — звено «/health из ЛВС»: в mirrored хост не достаёт до
-  дистрибутива по своему адресу в ЛВС, поэтому оно всегда SKIP, в итог и
-  код не входит, а проверяется с устройства в домашней сети.
+  подсказкой --force-recreate), порт замера. Сеть: .wslconfig с nat,
+  правило firewall Windows, профили firewall Domain, Private и Public —
+  каждый звеном (включён, входящие по умолчанию блокируются), адрес в ЛВС,
+  записи portproxy на нём,
+  IP Helper, слушатель portproxy на адресе и /health на 127.0.0.1, [::1] и
+  адресе в ЛВС — все в итоге. Адрес в ЛВС в вывод не попадает.
 
   -Uninstall — снос движка (терминал администратора), без отката куда-либо:
     1. если дистрибутив работает — docker compose --profile ha stop внутри
@@ -84,9 +102,13 @@
     3. расписание бэкапа снимается — ops/backup/install-schedule.ps1
        -Uninstall: без движка задача ночью будила бы WSL;
     4. wsl --terminate domovoy-engine;
-    5. правило firewall domovoy-engine-ports удаляется;
+    5. свои записи portproxy (порты API и HA с целью 127.0.0.1 того же
+       порта, на любом адресе), правило firewall Windows domovoy-engine-ports
+       и прежнее правило Hyper-V с тем же именем удаляются;
     6. .wslconfig возвращается из .wslconfig.domovoy-backup или, при отметке
        .wslconfig.domovoy-absent, удаляется; копия и отметка расходуются.
+  Откат к 0028 (mirrored и правило Hyper-V) — этот -Uninstall, затем -Install
+  версии 0028 (запись 0030, «Откат»).
   Дистрибутив не удаляется: в нём тома стека. wsl --unregister domovoy-engine
   уничтожает их — только руками владельца. wsl --shutdown, без которого
   возврат .wslconfig не применится, -Uninstall не выполняет.
@@ -106,7 +128,20 @@ param(
     # (deploy/windows/engine-setup.test.sh). Без него состояние читается с хоста.
     # Absent — дистрибутив не зарегистрирован (движок не установлен).
     [ValidateSet('', 'Running', 'Stopped', 'Absent')]
-    [string]$AssumeEngineState = ''
+    [string]$AssumeEngineState = '',
+    # Только с -DryRun: подмена адреса прослушивания portproxy для теста —
+    # вывод сухого прогона не зависит от сети машины. Без него адрес
+    # выбирается по маршрутам хоста (Select-ListenAddress).
+    [string]$AssumeListenAddress = '',
+    # Только с -DryRun: подмена типа запуска службы IP Helper для теста —
+    # вывод и код сухого прогона не зависят от службы машины.
+    [ValidateSet('', 'Automatic', 'Manual', 'Disabled')]
+    [string]$AssumeIpHelperStartType = '',
+    # Только с -DryRun: подмена профилей firewall Windows для теста. None —
+    # все три включены и блокируют входящие; имя профиля — этот пропускает
+    # входящие по умолчанию.
+    [ValidateSet('', 'None', 'Domain', 'Private', 'Public')]
+    [string]$AssumeOpenFirewallProfile = ''
 )
 
 Set-StrictMode -Version Latest
@@ -116,20 +151,26 @@ $Distro = 'domovoy-engine'
 $KeeperTask = 'domovoy-engine'
 $MeasureTask = 'domovoy-measure-boot'
 $BackupTask = 'domovoy-backup'
+# Имя правила firewall Windows. Правило Hyper-V firewall с тем же именем
+# ставил -Install по 0028 — -Install и -Uninstall его снимают.
 $RuleName = 'domovoy-engine-ports'
-# VMCreatorId WSL для правил Hyper-V firewall (документация WSL, mirrored).
-$WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 $ImageBase = 'https://cloud-images.ubuntu.com/wsl/releases/24.04/current'
 $ImageFile = 'ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz'
-$RemoteAddresses = @('LocalSubnet', '127.0.0.1')
+# Источники правила — только локальная подсеть: с самого хоста стек идёт
+# через петлю (wslrelay), правило ей не нужно.
+$RemoteAddresses = @('LocalSubnet')
+# Цель portproxy: петля, которую в NAT слушает wslrelay. Не адрес ВМ — он
+# меняется на каждой загрузке (0028, «Отвергнутые варианты»).
+$ProxyTarget = '127.0.0.1'
+# Записи portproxy v4tov4 TCP — их хранит служба IP Helper (iphlpsvc).
+$PortProxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
+$IpHelperService = 'iphlpsvc'
 # Юниты автозапуска в systemd дистрибутива. domovoy-mss-clamp — MSS по PMTU
 # для трафика контейнеров (provision-engine.sh): без него HTTPS из сети моста
 # через интерфейс с MTU меньше 1500 (VPN хоста) висит.
 $EngineUnits = @('docker.service', 'containerd.service', 'domovoy-mss-clamp.service')
 # Oneshot с RemainAfterExit=yes: в -Check — и is-enabled, и is-active.
 $OneshotUnits = @('domovoy-mss-clamp.service')
-# ::1 New-NetFirewallHyperVRule отвергает («Параметр задан неверно», проба на
-# хосте 2026-10-12): IPv6-петля в правиле Hyper-V не задаётся.
 # Профиль сети правила: только частная — в общественной сети порты закрыты.
 # Хост — ноутбук: без профиля LocalSubnet чужой Wi-Fi видел бы порты стека.
 $RuleProfile = 'Private'
@@ -144,6 +185,18 @@ if ($modeCount -gt 1) { Stop-WithError 'укажите один режим: -Ins
 if ($modeCount -eq 0) { Stop-WithError 'укажите режим: -Install, -Check или -Uninstall' 2 }
 if ($DryRun -and $Check) { Stop-WithError '-DryRun — только с -Install или -Uninstall' 2 }
 if ($AssumeEngineState -and -not $DryRun) { Stop-WithError '-AssumeEngineState — только с -DryRun' 2 }
+if ($AssumeIpHelperStartType -and -not $DryRun) { Stop-WithError '-AssumeIpHelperStartType — только с -DryRun' 2 }
+if ($AssumeOpenFirewallProfile -and -not $DryRun) { Stop-WithError '-AssumeOpenFirewallProfile — только с -DryRun' 2 }
+if ($AssumeListenAddress) {
+    if (-not $DryRun) { Stop-WithError '-AssumeListenAddress — только с -DryRun' 2 }
+    # IPv4 одного узла: петля и подстановочный адрес дали бы петлю portproxy.
+    $assumed = $null
+    if (-not [Net.IPAddress]::TryParse($AssumeListenAddress, [ref]$assumed) -or
+        $assumed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+        @(0, 127) -contains [int]$assumed.GetAddressBytes()[0]) {
+        Stop-WithError '-AssumeListenAddress — IPv4-адрес узла (не петля и не 0.0.0.0)' 2
+    }
+}
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $envFile = Join-Path $root '.env'
@@ -266,24 +319,39 @@ function Get-WslNames([string[]]$Arguments) {
     return @($result.Text -split "`r?`n" | ForEach-Object { $_.Trim([char]0, ' ') } | Where-Object { $_ })
 }
 
-# Новое содержимое .wslconfig: mirrored в [wsl2], прочее не трогается.
+# Новое содержимое .wslconfig: nat в [wsl2], прочее не трогается (запись
+# 0030). В NAT 127.0.0.1 и ::1 хоста принимает wslrelay и доводит до
+# движка — для этого нужен localhostForwarding, он включён по умолчанию.
 # Changed = $false — файл уже такой; Conflict — чужая настройка парой
-# ключ=значение: другой networkingMode или firewall=false. Порты стека в
-# mirrored закрывает от всех, кроме правила, firewall Hyper-V для VM WSL —
-# с firewall=false правило ничего не сужало бы.
+# ключ=значение: networkingMode не nat или localhostForwarding=false.
+# Исключение — свой mirrored: его записал -Install по 0028, и рядом лежит
+# копия .domovoy-backup или отметка .domovoy-absent — он переписывается на
+# nat на месте, OwnMirrored = $true. firewall=false не мешает: порты стека
+# на адресе хоста закрывает firewall Windows, а не firewall Hyper-V для VM WSL.
 function Get-WslConfigPlan([string]$Path) {
     $exists = Test-Path -LiteralPath $Path -PathType Leaf
     $current = if ($exists) { [IO.File]::ReadAllText($Path) } else { '' }
-    $firewall = [regex]::Match($current, '(?im)^\s*firewall\s*=\s*(\S+)\s*$')
-    if ($firewall.Success -and $firewall.Groups[1].Value -ieq 'false') {
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "firewall=$($firewall.Groups[1].Value)"; Content = $current }
+    $owned = (Test-Path -LiteralPath "$Path.domovoy-backup" -PathType Leaf) -or (Test-Path -LiteralPath "$Path.domovoy-absent" -PathType Leaf)
+    $forwarding = [regex]::Match($current, '(?im)^\s*localhostForwarding\s*=\s*(\S+)\s*$')
+    if ($forwarding.Success -and $forwarding.Groups[1].Value -ieq 'false') {
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "localhostForwarding=$($forwarding.Groups[1].Value)"; Content = $current; OwnMirrored = $false }
     }
     $mode = [regex]::Match($current, '(?im)^\s*networkingMode\s*=\s*(\S+)\s*$')
     if ($mode.Success) {
-        if ($mode.Groups[1].Value -ieq 'mirrored') {
-            return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current }
+        $value = $mode.Groups[1].Value
+        if ($value -ieq 'nat') {
+            return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current; OwnMirrored = $false }
         }
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$($mode.Groups[1].Value)"; Content = $current }
+        if ($value -ieq 'mirrored' -and $owned) {
+            # Замена значения в той же строке: отступ, пробелы у «=» и
+            # перевод строки остаются как в файле.
+            $line = '(?im)^([ \t]*networkingMode[ \t]*=[ \t]*)mirrored(?=[ \t]*\r?$)'
+            $content = ([regex]$line).Replace($current, '${1}nat', 1)
+            # Строка не той формы — не заменена: отказ, а не запись mirrored.
+            if ($content -ceq $current) { return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false } }
+            return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $true }
+        }
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false }
     }
     # Вставка — перед переводом строки после [wsl2] и тем же переводом, что
     # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
@@ -294,15 +362,35 @@ function Get-WslConfigPlan([string]$Path) {
     if ($current -match $wsl2) {
         # Экземпляр, а не [regex]::Replace: у статического четвёртый аргумент —
         # RegexOptions, а не число замен.
-        $content = ([regex]$wsl2).Replace($current, "`$1${newline}networkingMode=mirrored", 1)
+        $content = ([regex]$wsl2).Replace($current, "`$1${newline}networkingMode=nat", 1)
     }
     elseif ($current.Trim()) {
-        $content = $current.TrimEnd() + "$newline$newline[wsl2]${newline}networkingMode=mirrored$newline"
+        $content = $current.TrimEnd() + "$newline$newline[wsl2]${newline}networkingMode=nat$newline"
     }
     else {
-        $content = "[wsl2]`r`nnetworkingMode=mirrored`r`n"
+        $content = "[wsl2]`r`nnetworkingMode=nat`r`n"
     }
-    return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content }
+    return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $false }
+}
+
+# Звено -Check «.wslconfig: networkingMode=nat» по плану Get-WslConfigPlan:
+# State OK или FAIL и деталь. Свой mirrored прежней установки — не «не
+# задан»: значение задано, и его переписывает -Install.
+function Get-WslConfigCheck($Plan) {
+    if ($Plan.Conflict) { return [pscustomobject]@{ State = 'FAIL'; Detail = "задан $($Plan.Conflict)" } }
+    if ($Plan.OwnMirrored) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'задан mirrored прежней установки — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    if ($Plan.Changed) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    return [pscustomobject]@{ State = 'OK'; Detail = '' }
+}
+
+# Как сохраняется прежнее состояние .wslconfig перед записью: копия или
+# отметка уже есть — ничего. Они описывают файл до первого -Install, и
+# копия своего mirrored поверх них вернула бы при -Uninstall mirrored.
+# backup — копия .domovoy-backup, absent — отметка .domovoy-absent.
+function Get-WslConfigSave([string]$Path, [bool]$Exists) {
+    if ((Test-Path -LiteralPath "$Path.domovoy-backup" -PathType Leaf) -or (Test-Path -LiteralPath "$Path.domovoy-absent" -PathType Leaf)) { return 'none' }
+    if ($Exists) { return 'backup' }
+    return 'absent'
 }
 
 # Профиль правила — только Private. Прочитанное правило отдаёт Profiles
@@ -313,13 +401,165 @@ function Test-PrivateProfileOnly($Value) {
     return ($text -eq 'Private' -or $text -eq '2')
 }
 
-# Настройка firewall Hyper-V для VM WSL (Get-NetFirewallHyperVVMSetting,
-# ActiveStore): нужны Enabled True и DefaultInboundAction Block. Значения —
-# перечисления; сравнивается их текст. Пустой список — замечаний нет.
-function Get-VmFirewallProblems($Setting) {
+# Профиль firewall Windows (Get-NetFirewallProfile, ActiveStore): закрыт,
+# только пока включён и по умолчанию блокирует входящие. Значения —
+# перечисления; сравнивается их текст. В хранилище по умолчанию без явной
+# настройки стоит NotConfigured — не OK. Пустой список — замечаний нет.
+function Get-FirewallProfileProblems($Setting) {
     $found = @()
     if ([string]$Setting.Enabled -ne 'True') { $found += "Enabled $($Setting.Enabled), нужен True" }
     if ([string]$Setting.DefaultInboundAction -ne 'Block') { $found += "DefaultInboundAction $($Setting.DefaultInboundAction), нужен Block" }
+    return $found
+}
+
+# Все три профиля firewall Windows — закрытость портов стека держат они
+# вместе. В Private правило пропускает только локальную подсеть, и то, пока
+# профиль блокирует остальное. В Public и Domain правила нет: слушатель
+# portproxy привязан к адресу, а не к сети, и сеть того же адреса с другим
+# профилем (сеть сменила профиль, чужая сеть с тем же адресом) закрывает
+# только блокировка входящих по умолчанию. Запись на профиль — Name и
+# Problems; профиль, которого нет среди прочитанных, — замечание.
+function Get-FirewallProfileStates($Settings) {
+    $states = @()
+    foreach ($name in 'Domain', 'Private', 'Public') {
+        $setting = @($Settings | Where-Object { $null -ne $_ -and [string]$_.Name -eq $name })
+        if (-not $setting.Count) { $states += [pscustomobject]@{ Name = $name; Problems = @('профиль не прочитан') }; continue }
+        $states += [pscustomobject]@{ Name = $name; Problems = @(Get-FirewallProfileProblems $setting[0]) }
+    }
+    return $states
+}
+
+# Адрес прослушивания portproxy. Кандидат — IPv4-адрес интерфейса с
+# маршрутом по умолчанию (0.0.0.0/0) и профилем сети Private (перечисление
+# NetworkCategory: Private — 1; DomainAuthenticated — 2 — не кандидат),
+# кроме петли, 0.0.0.0 и APIPA 169.254/16. Вес — наименьшая RouteMetric
+# маршрута по умолчанию интерфейса плюс его InterfaceMetric, как считает
+# Windows. Берётся кандидат с наименьшим весом; ни одного или два с равным
+# наименьшим (в том числе два адреса одного интерфейса) — отказ с причиной:
+# выбор наугад открыл бы стек не там. Входы — объекты с InterfaceIndex и
+# RouteMetric (Get-NetRoute), InterfaceMetric (Get-NetIPInterface),
+# NetworkCategory (Get-NetConnectionProfile), IPAddress (Get-NetIPAddress).
+# Причина адресов не называет: адрес хоста в вывод не попадает.
+function Select-ListenAddress($Routes, $Interfaces, $Profiles, $Addresses) {
+    $candidates = @()
+    foreach ($entry in @($Addresses)) {
+        if ($null -eq $entry) { continue }
+        $ip = $null
+        if (-not [Net.IPAddress]::TryParse([string]$entry.IPAddress, [ref]$ip)) { continue }
+        if ($ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) { continue }
+        $bytes = $ip.GetAddressBytes()
+        if ($bytes[0] -eq 0 -or $bytes[0] -eq 127 -or ($bytes[0] -eq 169 -and $bytes[1] -eq 254)) { continue }
+        $index = [int]$entry.InterfaceIndex
+        $categories = @($Profiles | Where-Object { $null -ne $_ -and [int]$_.InterfaceIndex -eq $index } | ForEach-Object { [string]$_.NetworkCategory })
+        if (-not $categories.Count -or @($categories | Where-Object { $_ -ne 'Private' -and $_ -ne '1' }).Count) { continue }
+        $routeMetrics = @($Routes | Where-Object { $null -ne $_ -and [int]$_.InterfaceIndex -eq $index } | ForEach-Object { [int]$_.RouteMetric })
+        $interfaceMetrics = @($Interfaces | Where-Object { $null -ne $_ -and [int]$_.InterfaceIndex -eq $index } | ForEach-Object { [int]$_.InterfaceMetric })
+        if (-not $routeMetrics.Count -or -not $interfaceMetrics.Count) { continue }
+        $weight = [int](($routeMetrics | Measure-Object -Minimum).Minimum + ($interfaceMetrics | Measure-Object -Minimum).Minimum)
+        $candidates += [pscustomobject]@{ Address = $ip.ToString(); Index = $index; Weight = $weight }
+    }
+    if (-not $candidates.Count) {
+        return [pscustomobject]@{ Address = ''; Reason = 'нет IPv4-адреса в частной сети с маршрутом по умолчанию (профиль сети Private; петля, 0.0.0.0 и APIPA не в счёт) — сеть хоста частная и подключена?' }
+    }
+    $least = [int](($candidates | Measure-Object -Property Weight -Minimum).Minimum)
+    $best = @($candidates | Where-Object { $_.Weight -eq $least })
+    if ($best.Count -gt 1) {
+        $indexes = (@($best | ForEach-Object { $_.Index } | Sort-Object -Unique) -join ', ')
+        return [pscustomobject]@{ Address = ''; Reason = "наименьший вес $least (метрика маршрута по умолчанию + метрика интерфейса) у $($best.Count) адресов, интерфейсы $indexes — выбор неоднозначен: оставьте один адрес в частной сети или задайте интерфейсам разные метрики" }
+    }
+    return [pscustomobject]@{ Address = $best[0].Address; Reason = '' }
+}
+
+# Запись portproxy в форме реестра (PortProxy\v4tov4\tcp): имя —
+# «адрес/порт» прослушивания, значение — «адрес/порт» цели. Порт, который не
+# разобран, — 0.
+function ConvertFrom-PortProxyEntry($Entry) {
+    $ends = foreach ($text in @([string]$Entry.Name, [string]$Entry.Value)) {
+        $slash = $text.LastIndexOf('/')
+        $port = 0
+        if ($slash -lt 0 -or -not [int]::TryParse($text.Substring($slash + 1), [ref]$port)) { $slash = $text.Length; $port = 0 }
+        [pscustomobject]@{ Address = $text.Substring(0, $slash); Port = $port }
+    }
+    return [pscustomobject]@{ Name = [string]$Entry.Name; ListenAddress = $ends[0].Address; ListenPort = $ends[0].Port; ConnectAddress = $ends[1].Address; ConnectPort = $ends[1].Port }
+}
+
+# Свои записи portproxy: порт стека с целью 127.0.0.1 того же порта — на
+# любом адресе прослушивания. Их снимает -Uninstall, а -Install — те, что на
+# прежнем адресе. Чужие (другой порт или другая цель) не трогаются.
+function Select-OwnPortProxy($Entries, $Ports) {
+    $wanted = @($Ports | ForEach-Object { [int]$_ })
+    return @($Entries | Where-Object { $null -ne $_ } | ForEach-Object { ConvertFrom-PortProxyEntry $_ } | Where-Object {
+            $wanted -contains $_.ListenPort -and $_.ConnectAddress -eq '127.0.0.1' -and $_.ConnectPort -eq $_.ListenPort })
+}
+
+# Порты стека, на которых по адресу $Address стоит чужая запись — та, что
+# Select-OwnPortProxy своей не считает. Адрес в ответе не возвращается.
+function Select-ForeignPortProxyPorts($Entries, [string]$Address, $Ports) {
+    $wanted = @($Ports | ForEach-Object { [int]$_ })
+    $own = @(Select-OwnPortProxy $Entries $Ports | ForEach-Object { $_.Name })
+    return @($Entries | Where-Object { $null -ne $_ } | ForEach-Object { ConvertFrom-PortProxyEntry $_ } | Where-Object {
+            $_.ListenAddress -eq $Address -and $wanted -contains $_.ListenPort -and $own -notcontains $_.Name } |
+        ForEach-Object { $_.ListenPort } | Sort-Object -Unique)
+}
+
+# Записи portproxy портов стека против нужного: на каждый порт ровно одна
+# запись — с адреса $Address на 127.0.0.1 того же порта. Подстановочный
+# адрес или петля в прослушивании — петля portproxy → 127.0.0.1 →
+# portproxy. Замечание называет порт, но не адрес. Записи других портов не
+# проверяются. Пустой список — замечаний нет.
+function Get-PortProxyProblems($Entries, [string]$Address, $Ports) {
+    $parsed = @($Entries | Where-Object { $null -ne $_ } | ForEach-Object { ConvertFrom-PortProxyEntry $_ })
+    $found = @()
+    foreach ($port in @($Ports | ForEach-Object { [int]$_ })) {
+        $mine = @($parsed | Where-Object { $_.ListenPort -eq $port })
+        if (-not $mine.Count) { $found += "порт ${port}: записи portproxy нет — engine-setup.ps1 -Install"; continue }
+        if ($mine.Count -gt 1) { $found += "порт ${port}: записей portproxy $($mine.Count), нужна одна — engine-setup.ps1 -Install" }
+        foreach ($e in $mine) {
+            $listen = $e.ListenAddress
+            if (-not $listen -or $listen -eq '*' -or $listen -eq '0.0.0.0' -or $listen -like '127.*' -or $listen -ieq 'localhost') {
+                $found += "порт ${port}: portproxy слушает подстановочный адрес или петлю — петля через 127.0.0.1; снимите запись (netsh interface portproxy delete v4tov4) и -Install"
+            }
+            elseif ($listen -ne $Address) {
+                $found += "порт ${port}: запись portproxy на другом адресе — адрес хоста в ЛВС сменился; engine-setup.ps1 -Install"
+            }
+            if ($e.ConnectAddress -ne '127.0.0.1' -or $e.ConnectPort -ne $port) {
+                $found += "порт ${port}: цель portproxy не 127.0.0.1:$port"
+            }
+        }
+    }
+    return $found
+}
+
+# Правило firewall Windows по свойствам Get-NetFirewallRule и его фильтров
+# (поля Enabled, Direction, Action, Protocol, LocalPorts, RemoteAddresses,
+# Profiles, Program, Service): включено, входящие, Allow, TCP, источники —
+# только LocalSubnet, профиль — только Private, порты — ровно порты стека,
+# программа и служба — слушатель portproxy: svchost.exe службы iphlpsvc
+# ($IpHelperService). Путь программы правило хранит как задан — с
+# %SystemRoot% или в другом регистре. Пустой список — замечаний нет.
+function Get-HostRuleProblems($Rule, $Ports) {
+    $found = @()
+    $svchost = Join-Path $env:SystemRoot 'System32\svchost.exe'
+    if ([Environment]::ExpandEnvironmentVariables([string]$Rule.Program) -ine $svchost) {
+        $found += "программа $($Rule.Program), нужна svchost.exe: правило шире слушателя portproxy"
+    }
+    if ([string]$Rule.Service -ine 'iphlpsvc') { $found += "служба $($Rule.Service), нужна iphlpsvc: правило шире слушателя portproxy" }
+    if ([string]$Rule.Enabled -ne 'True') { $found += 'правило выключено' }
+    if ([string]$Rule.Direction -ne 'Inbound') { $found += "направление $($Rule.Direction), нужно Inbound" }
+    if ([string]$Rule.Action -ne 'Allow') { $found += "действие $($Rule.Action), нужно Allow" }
+    if ([string]$Rule.Protocol -ne 'TCP') { $found += "протокол $($Rule.Protocol), нужен TCP" }
+    $addresses = @($Rule.RemoteAddresses | ForEach-Object { [string]$_ })
+    if ($addresses.Count -ne 1 -or $addresses[0] -ne 'LocalSubnet') {
+        $found += "источники — $($addresses.Count) значений, нужен только LocalSubnet: шире локальной подсети порты стека открыты"
+    }
+    if (-not (Test-PrivateProfileOnly $Rule.Profiles)) { $found += "профиль $($Rule.Profiles), нужен только Private: в общественной сети правило открывало бы порты" }
+    $have = @($Rule.LocalPorts | ForEach-Object { [string]$_ })
+    $want = @($Ports | ForEach-Object { [string]$_ })
+    foreach ($port in $want) {
+        if ($have -notcontains $port) { $found += "нет порта $port" }
+    }
+    $extra = @($have | Where-Object { $want -notcontains $_ })
+    if ($extra.Count) { $found += 'порты шире стека: ' + ($extra -join ',') }
     return $found
 }
 
@@ -419,8 +659,57 @@ function Get-Health([string]$Url) {
     }
 }
 
+# Записи portproxy v4tov4 TCP — из реестра: читаются без прав
+# администратора и без разбора локализованного вывода netsh.
+function Get-PortProxyRegistry {
+    if (-not (Test-Path -LiteralPath $PortProxyKey)) { return @() }
+    $key = Get-Item -LiteralPath $PortProxyKey
+    return @($key.GetValueNames() | ForEach-Object { [pscustomobject]@{ Name = $_; Value = [string]$key.GetValue($_) } })
+}
+
+# Адрес прослушивания portproxy по маршрутам, метрикам и профилям сети хоста.
+function Get-HostListenAddress {
+    $routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+    $interfaces = @(Get-NetIPInterface -AddressFamily IPv4 -ErrorAction SilentlyContinue)
+    $profiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)
+    $addresses = @(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue)
+    return Select-ListenAddress $routes $interfaces $profiles $addresses
+}
+
+# netsh: вывод — в кодировке консоли, как его пишет netsh; stderr при 2>&1
+# приходит записями ошибок, и при ErrorActionPreference Stop первая прервала
+# бы сценарий.
+function Invoke-Netsh([string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $text = (& (Join-Path $env:SystemRoot 'System32\netsh.exe') @Arguments 2>&1 | ForEach-Object { [string]$_ }) -join '; '
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    return [pscustomobject]@{ Code = $code; Text = $text.Trim() }
+}
+
+# Правило Hyper-V firewall с именем $RuleName ставил -Install по 0028. На
+# Windows без командлетов Hyper-V firewall (до 11 22H2) его не было.
+# Get-NetFirewallHyperVRule -Name отдаёт под тем же именем и правило firewall
+# Windows (VMCreatorId Any, источник HostFirewallLocal); его удаление
+# командлетом Hyper-V — «Отказано в доступе» (живой -Install, #151). Прежнее
+# правило отличает VMCreatorId WSL.
+$WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+function Remove-LegacyHyperVRule {
+    if (-not (Get-Command Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue)) { return "прежнего правила Hyper-V $RuleName нет (нет Get-NetFirewallHyperVRule)" }
+    $legacy = @(Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue | Where-Object { $_.VMCreatorId -eq $WslVmCreatorId })
+    if ($legacy.Count) {
+        $legacy | Remove-NetFirewallHyperVRule
+        return "прежнее правило Hyper-V $RuleName удалено"
+    }
+    return "прежнего правила Hyper-V $RuleName нет"
+}
+
 $apiPort = Get-Port 'API_HTTP_PORT'
 $haPort = Get-Port 'HA_HTTP_PORT'
+$stackPorts = @($apiPort, $haPort)
 $project = Get-Setting 'COMPOSE_PROJECT_NAME'
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
@@ -484,6 +773,10 @@ if ($Uninstall) {
         }
         Write-Output ('uninstall.backup: install-schedule.ps1 {0}' -f (($scheduleUninstallArgs | Select-Object -Skip 6) -join ' '))
         Write-Output "uninstall.terminate: wsl.exe --terminate $Distro"
+        # Правило, а не перечень записей: записи хоста несут его адрес в ЛВС.
+        Write-Output ('uninstall.portproxy.remove: own v4tov4 entries on ports {0} ({1}, same port) at any listen address' -f ($stackPorts -join ','), "connect $ProxyTarget")
+        # Порядок — как у исполнения: прежнее правило Hyper-V до правила Windows.
+        Write-Output "uninstall.firewall.hyperv.remove: $RuleName"
         Write-Output "uninstall.firewall.remove: $RuleName"
         if ($wslAction -eq 'restore') { Write-Output ('uninstall.wslconfig: restore from {0}' -f (Split-Path -Leaf $wslBackup)) }
         elseif ($wslAction -eq 'remove') { Write-Output ('uninstall.wslconfig: remove (marker {0})' -f (Split-Path -Leaf $wslAbsent)) }
@@ -544,13 +837,24 @@ if ($Uninstall) {
         else { Write-Output "дистрибутив $Distro остановлен" }
     }
 
-    # 5. Правило firewall.
-    if (Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue) {
-        Remove-NetFirewallHyperVRule -Name $RuleName
+    # 5. Доступ из ЛВС: свои записи portproxy, правило firewall Windows и
+    # прежнее правило Hyper-V. Адрес записи в вывод не попадает.
+    $proxyProblems = @()
+    foreach ($own in @(Select-OwnPortProxy (Get-PortProxyRegistry) $stackPorts)) {
+        $deleted = Invoke-Netsh @('interface', 'portproxy', 'delete', 'v4tov4', "listenaddress=$($own.ListenAddress)", "listenport=$($own.ListenPort)")
+        if ($deleted.Code -ne 0) { $proxyProblems += "порт $($own.ListenPort): netsh код $($deleted.Code)" }
+        else { Write-Output "запись portproxy порта $($own.ListenPort) удалена" }
+    }
+    Write-Output (Remove-LegacyHyperVRule)
+    if (Get-NetFirewallRule -Name $RuleName -ErrorAction SilentlyContinue) {
+        Remove-NetFirewallRule -Name $RuleName
         Write-Output "правило $RuleName удалено"
     }
     else {
         Write-Output "правила $RuleName нет"
+    }
+    if ($proxyProblems.Count) {
+        $backupProblem = (@("записи portproxy не сняты: $($proxyProblems -join '; ') — netsh interface portproxy show v4tov4") + @($backupProblem | Where-Object { $_ })) -join '; '
     }
 
     # 6. .wslconfig: копия и отметка расходуются — следующий -Install
@@ -609,19 +913,63 @@ if ($Install) {
     $measureSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 
+    # Правило firewall Windows: входящие на порты стека, которые слушает
+    # portproxy на адресе хоста в ЛВС, — только к его слушателю:
+    # svchost.exe службы IP Helper.
     $ruleParams = @{
-        Name            = $RuleName
-        DisplayName     = 'Домовой: порты стека в WSL из локальной сети'
-        Direction       = 'Inbound'
-        VMCreatorId     = $WslVmCreatorId
-        Protocol        = 'TCP'
-        LocalPorts      = @([string]$apiPort, [string]$haPort)
-        RemoteAddresses = $RemoteAddresses
-        Profiles        = $RuleProfile
-        Action          = 'Allow'
+        Name          = $RuleName
+        DisplayName   = 'Домовой: порты стека из локальной сети (portproxy на движок в WSL)'
+        Direction     = 'Inbound'
+        Protocol      = 'TCP'
+        LocalPort     = @([string]$apiPort, [string]$haPort)
+        RemoteAddress = $RemoteAddresses
+        Profile       = $RuleProfile
+        Program       = (Join-Path $env:SystemRoot 'System32\svchost.exe')
+        Service       = $IpHelperService
+        Action        = 'Allow'
+    }
+
+    # Адрес прослушивания portproxy — до любых действий: без него доступа
+    # из ЛВС не будет, и это отказ, а не установка наполовину.
+    if ($AssumeListenAddress) { $listen = [pscustomobject]@{ Address = $AssumeListenAddress; Reason = '' } }
+    else { $listen = Get-HostListenAddress }
+    $ipHelper = Get-Service -Name $IpHelperService -ErrorAction SilentlyContinue
+    if ($AssumeIpHelperStartType) { $ipHelperStart = $AssumeIpHelperStartType }
+    else { $ipHelperStart = if ($ipHelper) { [string]$ipHelper.StartType } else { 'не найдена' } }
+    # portproxy держит служба IP Helper: без автозапуска записи после
+    # загрузки не слушают.
+    $ipHelperProblem = if ($ipHelperStart -ne 'Automatic') {
+        "служба IP Helper ($IpHelperService): запуск $ipHelperStart, нужен Automatic — без неё portproxy не работает; Set-Service $IpHelperService -StartupType Automatic"
+    } else { '' }
+    # Профили firewall Windows (Get-FirewallProfileStates): правило и
+    # portproxy открывают порты стека на адресе хоста, и закрытыми шире
+    # правила их держат только профили, блокирующие входящие по умолчанию.
+    # Открытый профиль — отказ до первого изменения.
+    if ($AssumeOpenFirewallProfile) {
+        $profileSettings = foreach ($name in 'Domain', 'Private', 'Public') {
+            [pscustomobject]@{ Name = $name; Enabled = 'True'; DefaultInboundAction = $(if ($name -eq $AssumeOpenFirewallProfile) { 'Allow' } else { 'Block' }) }
+        }
+    }
+    else {
+        try { $profileSettings = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop) }
+        catch { $profileSettings = @() }
+    }
+    $openProfiles = @(Get-FirewallProfileStates $profileSettings | Where-Object { $_.Problems.Count })
+    $firewallProfileProblem = ''
+    if ($openProfiles.Count) {
+        $firewallProfileProblem = 'firewall Windows: {0} — порты стека были бы открыты шире правила; Set-NetFirewallProfile -Profile {1} -Enabled True -DefaultInboundAction Block' -f `
+        ((@($openProfiles | ForEach-Object { "профиль $($_.Name): $($_.Problems -join ', ')" }) -join '; '), (@($openProfiles | ForEach-Object { $_.Name }) -join ','))
+    }
+    # add заменяет запись того же адреса и порта: чужая запись на выбранном
+    # адресе и порту стека иначе была бы молча переписана.
+    $foreignProxyPorts = @(if (-not $listen.Reason) { Select-ForeignPortProxyPorts (Get-PortProxyRegistry) $listen.Address $stackPorts })
+    $foreignProxyProblem = ''
+    if ($foreignProxyPorts.Count) {
+        $foreignProxyProblem = 'portproxy: на адресе хоста в ЛВС порт {0} занят чужой записью (цель не 127.0.0.1 того же порта) — чужая запись не переписывается; netsh interface portproxy show v4tov4' -f ($foreignProxyPorts -join ',')
     }
 
     $wslConfig = Get-WslConfigPlan $WslConfigPath
+    $wslSave = Get-WslConfigSave $WslConfigPath $wslConfig.Exists
     $registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
     # Провижининг делает wsl --terminate дистрибутива: держалка и движок
     # гибнут. Работали до -Install — держалка запускается снова после
@@ -688,6 +1036,10 @@ if ($Install) {
         else {
             Write-Output ('wslconfig.exists: {0}' -f $wslConfig.Exists)
             Write-Output ('wslconfig.changed: {0}' -f $wslConfig.Changed)
+            if (-not $wslConfig.Changed) { Write-Output 'wslconfig.save: none (file unchanged)' }
+            elseif ($wslSave -eq 'backup') { Write-Output 'wslconfig.save: backup copy' }
+            elseif ($wslSave -eq 'absent') { Write-Output 'wslconfig.save: absent marker' }
+            else { Write-Output 'wslconfig.save: none (backup copy or absent marker already there)' }
             # Байт в байт, как запишет -Install: строки ниже делятся по
             # переводу строки и лишний CR не показывают.
             Write-Output ('wslconfig.base64: {0}' -f [Convert]::ToBase64String((New-Object Text.UTF8Encoding($false)).GetBytes($wslConfig.Content)))
@@ -695,19 +1047,36 @@ if ($Install) {
                 if ($line) { Write-Output "wslconfig.line: $line" }
             }
         }
-        foreach ($key in 'Name', 'Direction', 'VMCreatorId', 'Protocol', 'Profiles', 'Action') {
+        if ($firewallProfileProblem) { Write-Output "firewall.hostprofiles.conflict: $firewallProfileProblem" }
+        else { Write-Output 'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' }
+        # Порядок — как у исполнения: прежнее правило Hyper-V снимается до
+        # записи правила Windows с тем же именем.
+        Write-Output "firewall.hyperv.remove: $RuleName"
+        foreach ($key in 'Name', 'Direction', 'Protocol', 'Action', 'Program', 'Service') {
             Write-Output ('firewall.{0}: {1}' -f $key.ToLowerInvariant(), $ruleParams[$key])
         }
-        Write-Output ('firewall.localports: {0}' -f ($ruleParams.LocalPorts -join ','))
-        Write-Output ('firewall.remoteaddresses: {0}' -f ($ruleParams.RemoteAddresses -join ','))
-        Write-Output ('firewall.profiles.private_only: {0}' -f (Test-PrivateProfileOnly $ruleParams.Profiles))
+        Write-Output ('firewall.profiles: {0}' -f $ruleParams.Profile)
+        Write-Output ('firewall.localports: {0}' -f ($ruleParams.LocalPort -join ','))
+        Write-Output ('firewall.remoteaddresses: {0}' -f ($ruleParams.RemoteAddress -join ','))
+        Write-Output ('firewall.profiles.private_only: {0}' -f (Test-PrivateProfileOnly $ruleParams.Profile))
+        # Адрес прослушивания не печатается ни подменённый, ни выбранный.
+        if ($listen.Reason) { Write-Output "listen.conflict: $($listen.Reason)" }
+        elseif ($AssumeListenAddress) { Write-Output 'listen.address: assumed (-AssumeListenAddress, not printed)' }
+        else { Write-Output 'listen.address: selected (not printed)' }
+        foreach ($port in $stackPorts) {
+            Write-Output ('portproxy.add: v4tov4 listenport={0} connectaddress={1} connectport={0}' -f $port, $ProxyTarget)
+        }
+        Write-Output ('portproxy.remove: own v4tov4 entries on ports {0} ({1}, same port) at other listen addresses' -f ($stackPorts -join ','), "connect $ProxyTarget")
+        Write-Output "iphlpsvc.starttype: $ipHelperStart"
+        if ($ipHelperProblem) { Write-Output "iphlpsvc.conflict: $ipHelperProblem" }
+        if ($foreignProxyProblem) { Write-Output "portproxy.conflict: $foreignProxyProblem" }
         Write-Output ('backup: install-schedule.ps1 {0}' -f (($scheduleArgs | Select-Object -Skip 6) -join ' '))
         $schedule = Invoke-Native (Get-Process -Id $PID).Path $scheduleArgs
         $scheduleCode = $schedule.Code
         foreach ($line in $schedule.Lines) { Write-Output "backup.$line" }
         foreach ($line in $schedule.ErrLines) { Write-Output "backup.stderr: $line" }
         Write-Output "backup.exitcode: $scheduleCode"
-        if ($wslConfig.Conflict -or $scheduleCode -ne 0) {
+        if ($wslConfig.Conflict -or $listen.Reason -or $ipHelperProblem -or $firewallProfileProblem -or $foreignProxyProblem -or $scheduleCode -ne 0) {
             Write-Output 'DryRun: nothing changed'
             exit 1
         }
@@ -719,8 +1088,12 @@ if ($Install) {
         Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
     }
     if ($wslConfig.Conflict) {
-        Stop-WithError "$WslConfigPath задаёт $($wslConfig.Conflict) — чужая настройка не переписывается; движку нужны networkingMode=mirrored и firewall Hyper-V (README, «Автозапуск после перезагрузки»)"
+        Stop-WithError "$WslConfigPath задаёт $($wslConfig.Conflict) — чужая настройка не переписывается; движку нужны networkingMode=nat и localhostForwarding (README, «Автозапуск после перезагрузки»)"
     }
+    if ($listen.Reason) { Stop-WithError "адрес хоста в ЛВС для portproxy: $($listen.Reason)" }
+    if ($ipHelperProblem) { Stop-WithError $ipHelperProblem }
+    if ($firewallProfileProblem) { Stop-WithError $firewallProfileProblem }
+    if ($foreignProxyProblem) { Stop-WithError $foreignProxyProblem }
     if (-not (Test-Path -LiteralPath $wslExe -PathType Leaf)) {
         Stop-WithError 'wsl.exe не найден — включите WSL2 (wsl --install) и повторите'
     }
@@ -815,36 +1188,52 @@ if ($Install) {
     catch { Stop-WithError "держалка $KeeperTask работала до -Install, а запустить её снова не удалось: $($_.Exception.Message) — Start-ScheduledTask $KeeperTask" }
     if ($resumed) { Write-Output "держалка $KeeperTask работала до -Install — запущена снова; контейнеры поднимет restart: unless-stopped" }
 
-    # 5. .wslconfig.
+    # 5. .wslconfig. Копия или отметка пишется, только если их ещё нет
+    # (Get-WslConfigSave): они описывают файл до первого -Install.
     if ($wslConfig.Changed) {
-        $backup = "$WslConfigPath.domovoy-backup"
-        $absent = "$WslConfigPath.domovoy-absent"
-        if ($wslConfig.Exists) {
-            if (-not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $WslConfigPath -Destination $backup }
-        }
-        elseif (-not (Test-Path -LiteralPath $absent)) {
-            $null = New-Item -ItemType File -Path $absent
-        }
+        if ($wslSave -eq 'backup') { Copy-Item -LiteralPath $WslConfigPath -Destination "$WslConfigPath.domovoy-backup" }
+        elseif ($wslSave -eq 'absent') { $null = New-Item -ItemType File -Path "$WslConfigPath.domovoy-absent" }
         [IO.File]::WriteAllText($WslConfigPath, $wslConfig.Content, (New-Object Text.UTF8Encoding($false)))
-        Write-Output "${WslConfigPath}: networkingMode=mirrored записан; применится после wsl --shutdown (README)"
+        Write-Output "${WslConfigPath}: networkingMode=nat записан; применится после wsl --shutdown (README)"
     }
     else {
-        Write-Output "${WslConfigPath}: networkingMode=mirrored уже задан"
+        Write-Output "${WslConfigPath}: networkingMode=nat уже задан"
     }
 
-    # 6. Правило firewall: пересоздаётся с теми же параметрами.
-    if (Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue) {
-        Remove-NetFirewallHyperVRule -Name $RuleName
+    # 6. Правило firewall Windows: пересоздаётся с теми же параметрами.
+    # Прежнее правило Hyper-V (0028) в NAT не нужно — снимается до записи
+    # правила Windows с тем же именем.
+    Write-Output (Remove-LegacyHyperVRule)
+    if (Get-NetFirewallRule -Name $RuleName -ErrorAction SilentlyContinue) {
+        Remove-NetFirewallRule -Name $RuleName
     }
-    $null = New-NetFirewallHyperVRule @ruleParams
-    Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}' -f $RuleName, ($ruleParams.LocalPorts -join ','), ($RemoteAddresses -join ','), $RuleProfile)
+    $null = New-NetFirewallRule @ruleParams
+    Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}, служба {4}' -f $RuleName, ($ruleParams.LocalPort -join ','), ($RemoteAddresses -join ','), $RuleProfile, $IpHelperService)
 
-    # 7. Расписание бэкапа — последним шагом.
+    # 7. portproxy: свои записи на прежнем адресе снимаются, на нынешнем
+    # пишутся заново (add заменяет запись того же адреса и порта). Адрес в
+    # вывод не попадает.
+    if ([string]$ipHelper.Status -ne 'Running') { Start-Service -Name $IpHelperService }
+    foreach ($own in @(Select-OwnPortProxy (Get-PortProxyRegistry) $stackPorts)) {
+        if ($own.ListenAddress -eq $listen.Address) { continue }
+        $deleted = Invoke-Netsh @('interface', 'portproxy', 'delete', 'v4tov4', "listenaddress=$($own.ListenAddress)", "listenport=$($own.ListenPort)")
+        if ($deleted.Code -ne 0) { Stop-WithError "portproxy: запись порта $($own.ListenPort) на прежнем адресе не снята, netsh код $($deleted.Code) — netsh interface portproxy show v4tov4" }
+        Write-Output "portproxy: запись порта $($own.ListenPort) на прежнем адресе снята"
+    }
+    foreach ($port in $stackPorts) {
+        $added = Invoke-Netsh @('interface', 'portproxy', 'add', 'v4tov4', "listenaddress=$($listen.Address)", "listenport=$port", "connectaddress=$ProxyTarget", "connectport=$port")
+        if ($added.Code -ne 0) { Stop-WithError "portproxy: запись порта $port не добавлена, netsh код $($added.Code)" }
+    }
+    Write-Output ('portproxy: порты {0} с адреса хоста в ЛВС на {1} того же порта' -f ($stackPorts -join ','), $ProxyTarget)
+
+    # 8. Расписание бэкапа — последним шагом.
     $hostExe = (Get-Process -Id $PID).Path
     & $hostExe @scheduleArgs
     $scheduleCode = $LASTEXITCODE
 
-    if ($resumed) {
+    # .wslconfig изменён — работающий экземпляр WSL идёт по прежней сети до
+    # wsl --shutdown, и при повторном запуске тоже.
+    if ($resumed -and -not $wslConfig.Changed) {
         Write-Output @"
 
 Повторный запуск: дистрибутив $Distro перезапускался (wsl --terminate), держалка
@@ -855,9 +1244,10 @@ if ($Install) {
         Write-Output @"
 
 Дальше (README, «Автозапуск после перезагрузки»): wsl --shutdown — применяет
-networkingMode=mirrored и гасит все дистрибутивы пользователя; затем
+networkingMode=nat и гасит все дистрибутивы пользователя; затем
 Start-ScheduledTask $KeeperTask и проверка всех звеньев — -Check.
-Предусловия: BIOS — включаться после пропадания питания; BitLocker без PIN.
+Предусловия: BIOS — включаться после пропадания питания; BitLocker без PIN;
+адрес хоста в ЛВС закреплён в DHCP роутера — сменился адрес, повторите -Install.
 "@
     }
     if ($scheduleCode -ne 0) {
@@ -868,10 +1258,8 @@ Start-ScheduledTask $KeeperTask и проверка всех звеньев — 
 
 # ---------------------------------------------------------------- -Check
 $results = New-Object System.Collections.Generic.List[object]
-# Counted = $false — звено, которое с хоста не проверяется по устройству
-# сети: в вывод идёт, в итог и код выхода — нет.
-function Add-Result([string]$State, [string]$Link, [string]$Detail, [bool]$Counted = $true) {
-    $results.Add([pscustomobject]@{ State = $State; Link = $Link; Detail = $Detail; Counted = $Counted })
+function Add-Result([string]$State, [string]$Link, [string]$Detail) {
+    $results.Add([pscustomobject]@{ State = $State; Link = $Link; Detail = $Detail })
     $line = '{0,-4} {1}' -f $State, $Link
     if ($Detail) { $line += " — $Detail" }
     Write-Output $line
@@ -926,55 +1314,88 @@ else {
     else { Add-Result 'OK' 'задача замера' "порт $measurePort, проект $measureProject" }
 }
 
-$wslConfig = Get-WslConfigPlan $WslConfigPath
-if (-not $wslConfig.Changed -and -not $wslConfig.Conflict) { Add-Result 'OK' '.wslconfig: networkingMode=mirrored' '' }
-elseif ($wslConfig.Conflict) { Add-Result 'FAIL' '.wslconfig: networkingMode=mirrored' "задан $($wslConfig.Conflict)" }
-else { Add-Result 'FAIL' '.wslconfig: networkingMode=mirrored' 'не задан' }
+$wslCheck = Get-WslConfigCheck (Get-WslConfigPlan $WslConfigPath)
+Add-Result $wslCheck.State '.wslconfig: networkingMode=nat' $wslCheck.Detail
 
+# Правило firewall Windows: через него устройства в ЛВС доходят до
+# portproxy на адресе хоста.
+$ruleLink = 'правило firewall'
 try {
-    $rule = Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction Stop
-    $addresses = @($rule.RemoteAddresses | ForEach-Object { [string]$_ })
-    $ports = @($rule.LocalPorts | ForEach-Object { [string]$_ })
-    $problems = New-Object System.Collections.Generic.List[string]
-    if ([string]$rule.Enabled -ne 'True') { $problems.Add('правило выключено') }
-    if ($addresses -notcontains 'LocalSubnet') { $problems.Add('нет LocalSubnet') }
-    $wider = @($addresses | Where-Object { $RemoteAddresses -notcontains $_ })
-    if ($wider.Count) { $problems.Add('адреса шире локальной подсети и петли: ' + ($wider -join ',')) }
-    if (-not (Test-PrivateProfileOnly $rule.Profiles)) { $problems.Add("профиль $($rule.Profiles), нужен только Private: в общественной сети правило открывало бы порты — engine-setup.ps1 -Install") }
-    foreach ($port in $apiPort, $haPort) {
-        if ($ports -notcontains [string]$port) { $problems.Add("нет порта $port") }
-    }
-    $extraPorts = @($ports | Where-Object { @([string]$apiPort, [string]$haPort) -notcontains $_ })
-    if ($extraPorts.Count) { $problems.Add('порты шире стека: ' + ($extraPorts -join ',')) }
-    if ($problems.Count) { Add-Result 'FAIL' 'правило firewall' ($problems -join '; ') }
-    else { Add-Result 'OK' 'правило firewall' ('TCP {0} с {1}, профиль {2}' -f ($ports -join ','), ($addresses -join ','), $rule.Profiles) }
+    $rule = Get-NetFirewallRule -Name $RuleName -ErrorAction Stop
+    $portFilter = $rule | Get-NetFirewallPortFilter
+    $addressFilter = $rule | Get-NetFirewallAddressFilter
+    $applicationFilter = $rule | Get-NetFirewallApplicationFilter
+    $serviceFilter = $rule | Get-NetFirewallServiceFilter
+    $ruleView = [pscustomobject]@{ Enabled = $rule.Enabled; Direction = $rule.Direction; Action = $rule.Action; Protocol = $portFilter.Protocol
+        LocalPorts = @($portFilter.LocalPort); RemoteAddresses = @($addressFilter.RemoteAddress); Profiles = $rule.Profile
+        Program = $applicationFilter.Program; Service = $serviceFilter.Service }
+    $ruleProblems = @(Get-HostRuleProblems $ruleView $stackPorts)
+    if ($ruleProblems.Count) { Add-Result 'FAIL' $ruleLink (($ruleProblems -join '; ') + ' — engine-setup.ps1 -Install') }
+    else { Add-Result 'OK' $ruleLink ('TCP {0} с LocalSubnet, профиль Private, svchost.exe службы {1}' -f ($stackPorts -join ','), $IpHelperService) }
 }
 catch {
-    if (Get-Command Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue) {
-        if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { Add-Result 'FAIL' 'правило firewall' "нет правила $RuleName" }
-        else { Add-Result 'SKIP' 'правило firewall' "не проверено: $($_.Exception.Message) (нужен терминал администратора?)" }
-    }
-    else {
-        Add-Result 'SKIP' 'правило firewall' 'не проверено: нет Get-NetFirewallHyperVRule (Windows 11 22H2+)'
-    }
+    if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { Add-Result 'FAIL' $ruleLink "нет правила $RuleName — engine-setup.ps1 -Install" }
+    else { Add-Result 'SKIP' $ruleLink "не проверено: $($_.Exception.Message)" }
 }
 
-# Firewall Hyper-V для VM WSL: правило выше сужает доступ, только пока
-# firewall включён и по умолчанию блокирует входящие. ActiveStore — действующие
-# значения: в хранилище по умолчанию без явной настройки стоит NotConfigured.
+# Профили firewall Windows (Get-FirewallProfileStates), каждый своим звеном:
+# Private — правило выше сужает доступ, только пока профиль блокирует
+# остальное; Public и Domain — слушатель portproxy привязан к адресу, а не к
+# сети, и в сети этих профилей порты стека закрывает только блокировка
+# входящих по умолчанию. ActiveStore — действующие значения: в хранилище по
+# умолчанию без явной настройки стоит NotConfigured.
 try {
-    $vmFirewall = Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name $WslVmCreatorId -ErrorAction Stop
-    $vmProblems = @(Get-VmFirewallProblems $vmFirewall)
-    if ($vmProblems.Count) { Add-Result 'FAIL' 'firewall Hyper-V для VM WSL' (($vmProblems -join '; ') + ' — входящие на порты стека открыты шире правила') }
-    else { Add-Result 'OK' 'firewall Hyper-V для VM WSL' 'Enabled True, DefaultInboundAction Block' }
+    $profileStates = @(Get-FirewallProfileStates @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop))
+    foreach ($state in $profileStates) {
+        $profileLink = "firewall Windows: профиль $($state.Name)"
+        if ($state.Problems.Count) { Add-Result 'FAIL' $profileLink (($state.Problems -join '; ') + " — в сети профиля $($state.Name) порты стека открыты шире правила; Set-NetFirewallProfile -Profile $($state.Name) -Enabled True -DefaultInboundAction Block") }
+        else { Add-Result 'OK' $profileLink 'Enabled True, DefaultInboundAction Block' }
+    }
 }
 catch {
-    if (Get-Command Get-NetFirewallHyperVVMSetting -ErrorAction SilentlyContinue) {
-        Add-Result 'SKIP' 'firewall Hyper-V для VM WSL' "не проверено: $($_.Exception.Message) (нужен терминал администратора?)"
+    foreach ($name in 'Domain', 'Private', 'Public') { Add-Result 'SKIP' "firewall Windows: профиль $name" "не проверено: $($_.Exception.Message)" }
+}
+
+# Адрес хоста в ЛВС — тем же выбором, что у -Install: смена адреса (DHCP,
+# другая сеть) видна как запись portproxy на другом адресе. Адрес в вывод
+# не попадает.
+$listen = Get-HostListenAddress
+$listenLink = 'адрес хоста в ЛВС для portproxy'
+if ($listen.Reason) { Add-Result 'FAIL' $listenLink $listen.Reason }
+else { Add-Result 'OK' $listenLink 'выбран (в вывод не попадает)' }
+
+$proxyLink = 'portproxy: записи портов стека'
+if ($listen.Reason) { Add-Result 'SKIP' $proxyLink 'не проверено — адрес хоста в ЛВС не выбран' }
+else {
+    $proxyProblems = @(Get-PortProxyProblems (Get-PortProxyRegistry) $listen.Address $stackPorts)
+    if ($proxyProblems.Count) { Add-Result 'FAIL' $proxyLink ($proxyProblems -join '; ') }
+    else { Add-Result 'OK' $proxyLink ('порты {0} с адреса в ЛВС на {1} того же порта' -f ($stackPorts -join ','), $ProxyTarget) }
+}
+
+$ipHelper = Get-Service -Name $IpHelperService -ErrorAction SilentlyContinue
+$ipHelperLink = "служба IP Helper ($IpHelperService) для portproxy"
+if (-not $ipHelper) { Add-Result 'FAIL' $ipHelperLink 'службы нет' }
+elseif ([string]$ipHelper.Status -ne 'Running' -or [string]$ipHelper.StartType -ne 'Automatic') {
+    Add-Result 'FAIL' $ipHelperLink "состояние $($ipHelper.Status), запуск $($ipHelper.StartType) — нужны Running и Automatic: Set-Service $IpHelperService -StartupType Automatic; Start-Service $IpHelperService"
+}
+else { Add-Result 'OK' $ipHelperLink 'Running, Automatic' }
+
+# Запись в реестре не значит, что служба слушает: адрес мог появиться после
+# её старта, а порт — быть занят другим процессом. Слушатель на адресе и
+# порту должен принадлежать процессу службы IP Helper.
+$listenerLink = 'portproxy слушает адрес в ЛВС'
+if ($listen.Reason) { Add-Result 'SKIP' $listenerLink 'не проверено — адрес хоста в ЛВС не выбран' }
+else {
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$IpHelperService'" -ErrorAction SilentlyContinue
+    $servicePid = if ($service) { [int]$service.ProcessId } else { 0 }
+    $listenerProblems = @()
+    foreach ($port in $stackPorts) {
+        $owners = @(Get-NetTCPConnection -State Listen -LocalAddress $listen.Address -LocalPort $port -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.OwningProcess })
+        if (-not $owners.Count) { $listenerProblems += "порт ${port}: слушателя нет" }
+        elseif (-not $servicePid -or $owners -notcontains $servicePid) { $listenerProblems += "порт ${port}: слушает не служба IP Helper — Get-NetTCPConnection -State Listen -LocalPort $port" }
     }
-    else {
-        Add-Result 'SKIP' 'firewall Hyper-V для VM WSL' 'не проверено: нет Get-NetFirewallHyperVVMSetting (Windows 11 22H2+)'
-    }
+    if ($listenerProblems.Count) { Add-Result 'FAIL' $listenerLink ($listenerProblems -join '; ') }
+    else { Add-Result 'OK' $listenerLink ('порты {0}, процесс службы {1}' -f ($stackPorts -join ','), $IpHelperService) }
 }
 
 $running = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
@@ -1052,22 +1473,24 @@ else {
     else { Add-Result 'OK' 'порт замера = опубликованный порт api' "$measurePort" }
 }
 
-# /health с хоста через петлю. Петля в mirrored при правиле только на
-# LocalSubnet в опыте 2026-10-12 отвечала тайм-аутом; правило дополнено
-# 127.0.0.1 (::1 правило Hyper-V не принимает).
-# Адрес — 127.0.0.1, не localhost: ::1 в правило Hyper-V не задаётся, и
-# localhost, который Windows пробует сначала как ::1, висит до тайм-аута.
+# /health с хоста тремя путями, все в итоге. 127.0.0.1 и [::1] — петля, в
+# NAT её принимает wslrelay и доводит до движка; адрес в ЛВС — portproxy
+# на 127.0.0.1, путь телефона в домашней сети без роутера. Адреса —
+# явные, не localhost: localhost Windows разрешает сначала в ::1, и по
+# строке не было бы видно, какой путь проверен.
+function Add-HealthResult([string]$Link, $Answer) {
+    if ($Answer.Stack) { Add-Result 'OK' $Link '200 формы стека' }
+    elseif ($Answer.Code) { Add-Result 'FAIL' $Link "код $($Answer.Code)$(if ($Answer.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
+    else { Add-Result 'FAIL' $Link "нет ответа: $($Answer.Error)" }
+}
 $loop = Get-Health ('http://127.0.0.1:{0}/health' -f $apiPort)
-if ($loop.Stack) { Add-Result 'OK' "/health на 127.0.0.1:$apiPort" '200 формы стека' }
-elseif ($loop.Code) { Add-Result 'FAIL' "/health на 127.0.0.1:$apiPort" "код $($loop.Code)$(if ($loop.Code -eq 200) { ', тело не формы стека — чужой слушатель' })" }
-else { Add-Result 'FAIL' "/health на 127.0.0.1:$apiPort" "нет ответа: $($loop.Error)" }
-
-# Доступ из ЛВС с хоста не проверяется: в mirrored хост не достаёт до
-# слушателя дистрибутива по своему же адресу в ЛВС (hostAddressLoopback по
-# умолчанию false, -Install его не пишет) — такой запрос отказал бы всегда.
-# Его проверяет устройство в домашней сети (README, «Проверочные
-# перезагрузки и замер»); звено печатается, но в итог и код не входит.
-Add-Result 'SKIP' "/health из ЛВС, порт $apiPort" 'не проверяется с хоста в mirrored — доступ из ЛВС проверяет устройство в сети' $false
+Add-HealthResult "/health на 127.0.0.1:$apiPort" $loop
+Add-HealthResult "/health на [::1]:$apiPort" (Get-Health ('http://[::1]:{0}/health' -f $apiPort))
+# Метка без адреса: адрес хоста в ЛВС в вывод не попадает, и ошибка
+# Get-Health называет тип исключения, а не текст с адресом.
+$lanLink = "/health по адресу в ЛВС, порт $apiPort"
+if ($listen.Reason) { Add-Result 'SKIP' $lanLink 'не проверено — адрес хоста в ЛВС не выбран' }
+else { Add-HealthResult $lanLink (Get-Health ('http://{0}:{1}/health' -f $listen.Address, $apiPort)) }
 
 # Расписание бэкапа (#8): S4U и состояние по install-schedule.ps1 -Check.
 $backupTaskObject = Get-ScheduledTask -TaskName $BackupTask -ErrorAction SilentlyContinue
@@ -1084,10 +1507,10 @@ else {
     else { Add-Result 'OK' 'расписание бэкапа' 'S4U' }
 }
 
-$notOk = @($results | Where-Object { $_.Counted -and $_.State -ne 'OK' })
+$notOk = @($results | Where-Object { $_.State -ne 'OK' })
 if ($notOk.Count) {
     Write-Output ('итог: не закрыто звеньев — {0}: {1}' -f $notOk.Count, (($notOk | ForEach-Object { $_.Link }) -join '; '))
     exit 1
 }
-Write-Output 'итог: все звенья, проверяемые с хоста, OK; доступ из ЛВС — с устройства в сети'
+Write-Output 'итог: все звенья OK'
 exit 0
