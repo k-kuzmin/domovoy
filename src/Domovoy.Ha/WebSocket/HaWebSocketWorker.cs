@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text.Json;
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;
 using Domovoy.Ha.State;
@@ -49,6 +50,7 @@ internal sealed class HaWebSocketWorker : BackgroundService
     private const int ReceiveBufferBytes = 16 * 1024;
 
     private readonly HaOptions _options;
+    private readonly IEntityAllowList _allowList;
     private readonly HaStateCache _cache;
     private readonly HaConnectionState _state;
     private readonly HaEventSource _events;
@@ -59,6 +61,7 @@ internal sealed class HaWebSocketWorker : BackgroundService
 
     public HaWebSocketWorker(
         IOptions<HaOptions> options,
+        IEntityAllowList allowList,
         HaStateCache cache,
         HaConnectionState state,
         HaEventSource events,
@@ -70,6 +73,7 @@ internal sealed class HaWebSocketWorker : BackgroundService
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options.Value;
+        _allowList = allowList;
         _cache = cache;
         _state = state;
         _events = events;
@@ -429,12 +433,22 @@ internal sealed class HaWebSocketWorker : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Разобрать ответ get_states, отбросив сущности вне allow-list до
+    /// разбора — как REST-путь: объект чужой сущности не разбирается вовсе.
+    /// </summary>
     private List<HaEntityState> ParseStates(JsonElement result)
     {
-        var states = new List<HaEntityState>(result.GetArrayLength());
+        var states = new List<HaEntityState>();
         int skipped = 0;
         foreach (JsonElement element in result.EnumerateArray())
         {
+            if (HaWebSocketProtocol.GetString(element, "entity_id") is not string entityId
+                || _allowList.Find(entityId) is null)
+            {
+                continue;
+            }
+
             try
             {
                 states.Add(HaWebSocketProtocol.ParseState(element));

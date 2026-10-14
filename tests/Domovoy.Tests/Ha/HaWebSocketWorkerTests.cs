@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;
 using Domovoy.Ha;
@@ -57,6 +58,23 @@ public sealed class HaWebSocketWorkerTests
         harness.Cache.Snapshot().Select(state => state.EntityId).Should().BeEquivalentTo([Kitchen, Bedroom]);
         harness.Cache.Find(Bedroom)!.State.Should().Be("21.5");
         harness.Cache.Find(Bedroom)!.Attributes["unit_of_measurement"].Should().Be("°C");
+    }
+
+    [Fact(DisplayName = "Чужая сущность в get_states отбрасывается до разбора: битое состояние не даёт предупреждения")]
+    public async Task OffListStateIsDroppedBeforeParsing()
+    {
+        await using Harness harness = await Harness.StartAsync(Fast, new RecordingDelay(), fake =>
+        {
+            fake.SetState(Kitchen, "on");
+            fake.SetRawState(OffList, $$"""{"entity_id":"{{OffList}}","state":5}""");
+        });
+
+        await harness.WaitForStatusAsync(HaConnectionStatus.Connected);
+
+        harness.Cache.Snapshot().Select(state => state.EntityId).Should().Equal(Kitchen);
+        harness.Logs.Entries.Should().NotContain(
+            entry => entry.Level >= LogLevel.Warning,
+            "объект сущности вне allow-list не разбирается вовсе");
     }
 
     [Fact(DisplayName = "Без токена воркер не подключается и ставит NotConfigured")]
@@ -576,7 +594,8 @@ public sealed class HaWebSocketWorkerTests
                 .SetMinimumLevel(LogLevel.Trace)
                 .AddProvider(Logs));
 
-            Cache = new HaStateCache(HaStateCacheTests.AllowList(Kitchen, Bedroom));
+            AllowList = HaStateCacheTests.AllowList(Kitchen, Bedroom);
+            Cache = new HaStateCache(AllowList);
             State = new HaConnectionState();
             State.StatusChanged += (_, status) => _transitions.Enqueue(status);
             Events = new HaEventSource();
@@ -587,6 +606,8 @@ public sealed class HaWebSocketWorkerTests
         public string Token { get; }
 
         public CapturingLoggerProvider Logs { get; }
+
+        public IEntityAllowList AllowList { get; }
 
         public HaStateCache Cache { get; }
 
@@ -631,6 +652,7 @@ public sealed class HaWebSocketWorkerTests
 
             Worker = new HaWebSocketWorker(
                 Options.Create(options),
+                AllowList,
                 Cache,
                 State,
                 Events,
