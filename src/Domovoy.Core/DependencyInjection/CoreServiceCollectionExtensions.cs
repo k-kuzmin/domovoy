@@ -39,7 +39,9 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IFastRouteTemplate, ReadValueTemplate>();
         services.AddSingleton<IFastRouteTemplate, SetValueTemplate>();
         services.AddSingleton<IFastRouter, FastRouter>();
-        services.AddSingleton<IFastPath, FastPathRunner>();
+        // Transient, не singleton: ранер держит IHaClient — типизированный
+        // HttpClient, а долгоживущая ссылка на него не переживает смену DNS.
+        services.AddTransient<IFastPath, FastPathRunner>();
 
         return services;
     }

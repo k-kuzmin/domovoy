@@ -125,6 +125,18 @@ public sealed class FastRouterTests
         match.EntityId.Should().Be(KitchenLight);
     }
 
+    [Fact(DisplayName = "Быстрый путь не захватывает IHaClient на время жизни контейнера")]
+    public void FastPathDoesNotCaptureHaClientForever()
+    {
+        // IHaClient — типизированный HttpClient (transient): синглтон,
+        // держащий его, не переживает смену DNS у Home Assistant.
+        var services = new ServiceCollection();
+        services.AddDomovoyCore(new ConfigurationBuilder().Build());
+
+        services.Single(d => d.ServiceType == typeof(IFastPath)).Lifetime
+            .Should().Be(ServiceLifetime.Transient);
+    }
+
     [Fact(DisplayName = "Роутер не зависит ни от одного конкретного шаблона")]
     public void RouterDoesNotReferenceConcreteTemplates()
     {
