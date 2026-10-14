@@ -58,7 +58,7 @@
        правила держат профили firewall Windows: все три (Domain, Private,
        Public) должны быть включены и по умолчанию блокировать входящие —
        иначе отказ до первого изменения. Прежнее правило Hyper-V firewall
-       с тем же именем (0028) снимается;
+       с тем же именем (0028) снимается до записи правила Windows;
     7. portproxy v4tov4 с адреса хоста в ЛВС на 127.0.0.1 того же порта —
        по записи на порт API и Home Assistant: доступ из ЛВС. Адрес —
        IPv4 интерфейса с маршрутом по умолчанию в частной сети, с наименьшим
@@ -756,8 +756,9 @@ if ($Uninstall) {
         Write-Output "uninstall.terminate: wsl.exe --terminate $Distro"
         # Правило, а не перечень записей: записи хоста несут его адрес в ЛВС.
         Write-Output ('uninstall.portproxy.remove: own v4tov4 entries on ports {0} ({1}, same port) at any listen address' -f ($stackPorts -join ','), "connect $ProxyTarget")
-        Write-Output "uninstall.firewall.remove: $RuleName"
+        # Порядок — как у исполнения: прежнее правило Hyper-V до правила Windows.
         Write-Output "uninstall.firewall.hyperv.remove: $RuleName"
+        Write-Output "uninstall.firewall.remove: $RuleName"
         if ($wslAction -eq 'restore') { Write-Output ('uninstall.wslconfig: restore from {0}' -f (Split-Path -Leaf $wslBackup)) }
         elseif ($wslAction -eq 'remove') { Write-Output ('uninstall.wslconfig: remove (marker {0})' -f (Split-Path -Leaf $wslAbsent)) }
         else { Write-Output 'uninstall.wslconfig: keep (no .domovoy-backup copy and no .domovoy-absent marker)' }
@@ -1019,6 +1020,9 @@ if ($Install) {
         }
         if ($firewallProfileProblem) { Write-Output "firewall.hostprofiles.conflict: $firewallProfileProblem" }
         else { Write-Output 'firewall.hostprofiles: ok (Domain, Private, Public: Enabled True, DefaultInboundAction Block)' }
+        # Порядок — как у исполнения: прежнее правило Hyper-V снимается до
+        # записи правила Windows с тем же именем.
+        Write-Output "firewall.hyperv.remove: $RuleName"
         foreach ($key in 'Name', 'Direction', 'Protocol', 'Action') {
             Write-Output ('firewall.{0}: {1}' -f $key.ToLowerInvariant(), $ruleParams[$key])
         }
@@ -1026,7 +1030,6 @@ if ($Install) {
         Write-Output ('firewall.localports: {0}' -f ($ruleParams.LocalPort -join ','))
         Write-Output ('firewall.remoteaddresses: {0}' -f ($ruleParams.RemoteAddress -join ','))
         Write-Output ('firewall.profiles.private_only: {0}' -f (Test-PrivateProfileOnly $ruleParams.Profile))
-        Write-Output "firewall.hyperv.remove: $RuleName"
         # Адрес прослушивания не печатается ни подменённый, ни выбранный.
         if ($listen.Reason) { Write-Output "listen.conflict: $($listen.Reason)" }
         elseif ($AssumeListenAddress) { Write-Output 'listen.address: assumed (-AssumeListenAddress, not printed)' }

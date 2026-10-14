@@ -24,7 +24,7 @@
 #     правило, portproxy и .wslconfig и ничего не создаёт (адрес, служба
 #     IP Helper и профили firewall подменены — от машины вывод не зависит),
 #     отказывает при IP Helper без автозапуска и открытом профиле
-#     firewall; -Uninstall -DryRun печатает
+#     firewall; строки идут в порядке исполнения; -Uninstall -DryRun печатает
 #     план сноса движка без отката и не трогает .wslconfig, копию и
 #     отметку; measure-boot.ps1 против локальной заглушки /health на python
 #     (порт на 127.0.0.1, журнал во временном каталоге);
@@ -466,6 +466,18 @@ dry_run() {
     -AssumeIpHelperStartType "${ip_helper:-Automatic}" -AssumeOpenFirewallProfile "${open_profile:-None}" "$@"
 }
 
+# Номер первой строки вывода, равной $2; пусто — строки нет.
+line_no() { grep -nxF -- "$2" "$work/out.$1" | head -n 1 | cut -d: -f1; }
+
+# Строка $2 раньше строки $3 в выводе $1: порядок строк сухого прогона —
+# порядок исполнения.
+before() {
+  local a b
+  a="$(line_no "$1" "$2")"
+  b="$(line_no "$1" "$3")"
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
+}
+
 has() { grep -qxF -- "$2" "$work/out.$1"; }
 
 # Содержимое .wslconfig из сухого прогона байт в байт против ожидаемого.
@@ -519,6 +531,10 @@ test_engine_setup_dry_run() {
     done
     # Правило — firewall Windows, а не Hyper-V: VMCreatorId у него нет.
     if grep -qi '^firewall\.vmcreatorid' "$work/out.$shell"; then fail "$name/$shell" "правило собрано для Hyper-V"; show_out; return; fi
+    # Прежнее правило Hyper-V снимается до записи правила Windows с тем же
+    # именем — так и печатается.
+    before "$shell" 'firewall.hyperv.remove: domovoy-engine-ports' 'firewall.name: domovoy-engine-ports' \
+      || { fail "$name/$shell" "firewall.hyperv.remove не раньше firewall.name — порядок не тот, что у исполнения"; show_out; return; }
     # Адрес прослушивания в вывод не попадает — ни подменённый, ни выбранный.
     if grep -qF '192.0.2.10' "$work/out.$shell"; then fail "$name/$shell" "адрес прослушивания в выводе"; show_out; return; fi
     if grep -q 'networkingMode=mirrored' "$work/out.$shell"; then fail "$name/$shell" "mirrored в .wslconfig"; show_out; return; fi
@@ -790,6 +806,13 @@ test_uninstall_dry_run_without_rollback() {
       'uninstall.wslconfig: restore from wslconfig.domovoy-backup' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name" "нет «$line»"; show_out; return; }
     done
+    # Порядок строк — порядок исполнения: записи portproxy, прежнее правило
+    # Hyper-V, правило Windows.
+    if ! before "$shell" "uninstall.portproxy.remove: own v4tov4 entries on ports 28081,$(compose_default HA_HTTP_PORT) (connect 127.0.0.1, same port) at any listen address" \
+      'uninstall.firewall.hyperv.remove: domovoy-engine-ports' ||
+      ! before "$shell" 'uninstall.firewall.hyperv.remove: domovoy-engine-ports' 'uninstall.firewall.remove: domovoy-engine-ports'; then
+      fail "$name" "порядок portproxy → Hyper-V → правило Windows не тот, что у исполнения"; show_out; return
+    fi
     grep -q '^uninstall\.stack\.stop: wsl\.exe -d domovoy-engine -u root --cd .* --exec docker compose --profile ha stop$' "$work/out.$shell" \
       || { fail "$name" "стек не останавливается командой stop внутри движка"; show_out; return; }
     # stop, а не down: тома стека остаются.
