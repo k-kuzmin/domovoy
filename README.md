@@ -151,6 +151,13 @@ curl -s http://127.0.0.1:18080/health
 `/health` отдаёт только это одно поле; раздельный статус БД, Home Assistant и
 LLM доступен на `GET /api/v1/health` под токеном устройства.
 
+**Реестр сущностей обязателен для старта.** `config/entities.yaml` — allow-list
+сущностей, доступных агенту; он читается и проверяется при старте
+(`ValidateOnStart`). Нет файла, неизвестный домен, действие не из каталога
+домена, не заданное обязательное поле, ссылка на несуществующую комнату или
+повтор `entity_id` — сервис не стартует, а сообщение называет запись и поле.
+Пустой реестр не ошибка: он запрещает всё.
+
 Скопированные файлы `config/` и `.env` закрыты `.gitignore` — заполнять их
 реальными значениями безопасно. Пароль базы в `.env.example` — значение для
 примера: наружу порт базы не публикуется, но при реальной эксплуатации
@@ -557,8 +564,13 @@ git config core.hooksPath .githooks
 dotnet restore
 dotnet build
 dotnet test
-dotnet run --project src/Domovoy.Api
+Ha__EntityRegistryPath=../../config/entities.yaml dotnet run --project src/Domovoy.Api
 ```
+
+`dotnet run` считает относительные пути от каталога проекта
+`src/Domovoy.Api`, а реестр сущностей проверяется на старте, поэтому путь к
+нему задаётся явно — переменной окружения, как выше, или абсолютным путём.
+Файл — копия `config/entities.example.yaml` (см. «Быстрый старт»).
 
 Ещё два инструмента нужны, если задачу ведёт агент в Claude CLI. Обычной
 разработке руками они не нужны.
@@ -583,13 +595,43 @@ dotnet user-secrets set "Ntfy:Topic"      "<имя топика>"
 dotnet user-secrets list
 ```
 
+### Живые замеры с Home Assistant (LiveCheck)
+
+`tests/Domovoy.Tests.LiveCheck` — консольная программа для замеров против
+настоящего Home Assistant: `dotnet test` её не запускает, сборка решения
+собирает. Воркер, кэш и быстрый путь она поднимает той же регистрацией, что
+api. Конфигурация — только переменные окружения:
+
+```bash
+export Ha__BaseUrl=http://homeassistant:8123        # адрес HA в локальной сети
+export Ha__Token=<токен служебного пользователя>
+export Ha__EntityRegistryPath=config/entities.yaml   # от текущего каталога
+
+# p50, p95 и max быстрого пути отдельно для чтения и действий.
+# Фразы — по одной в строке, файл держать вне репозитория.
+# Без --allow-actions изменяющие фразы пропускаются: устройства не трогаются.
+dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- \
+  latency --phrases ~/domovoy-phrases.txt --iterations 50
+
+# Переходы статуса WebSocket и доступности REST с отметкой времени; после
+# каждого Connected — интервал «REST ответил → Connected», время ответа
+# get_states и число расхождений кэша с GET api/states. Остановка — Ctrl+C.
+dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- reconnect
+```
+
+Вывод можно прикладывать к issue: токена, адреса Home Assistant и `entity_id`
+в нём нет — только статусы, числа и время. Время восстановления развёрнутого
+api видно по переходам `components.ha_websocket` в `GET /api/v1/health`.
+
 ### Команды
 
 | Задача | Команда |
 |---|---|
 | Сборка | `dotnet build` |
 | Тесты | `dotnet test` |
-| Запуск API | `dotnet run --project src/Domovoy.Api` |
+| Запуск API | `Ha__EntityRegistryPath=../../config/entities.yaml dotnet run --project src/Domovoy.Api` |
+| Замер p95 быстрого пути на живом HA | `dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- latency --phrases <файл>` |
+| Наблюдение за реконнектом к живому HA | `dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- reconnect` |
 | Формат и стиль | `dotnet format --verify-no-changes` |
 | Миграции: создать | `dotnet ef migrations add <Имя> --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
 | Миграции: применить | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
@@ -630,6 +672,15 @@ dotnet user-secrets list
 для healthcheck контейнера и туннеля. Подробный статус компонентов доступен
 на `GET /api/v1/health` под Bearer-токеном: публичный домен индексируется и
 сканируется, состав компонентов наружу не отдаётся.
+
+Home Assistant в подробном ответе — два поля: `components.ha` — REST
+(`GET api/` с токеном), `components.ha_websocket` — постоянное
+WebSocket-соединение с подпиской на `state_changed`. Состояния
+`ha_websocket`: `ok` — соединение установлено и кэш состояний перечитан,
+`not_configured` — токен не задан, `unreachable` — подключение или
+переподключение (пауза растёт 1, 2, 4 … с до потолка
+`Ha:ReconnectMaxDelaySeconds`, по умолчанию 60 с), `error` — токен отклонён.
+Анонимный `/health` учитывает `ha_websocket` только в общем слове `status`.
 
 ## Секреты и приватные данные
 
