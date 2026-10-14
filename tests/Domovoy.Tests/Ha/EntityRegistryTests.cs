@@ -120,6 +120,20 @@ public sealed partial class EntityRegistryTests : IDisposable
             ["light.example_hall", "living_room"]
         },
         {
+            // entity_id, по ошибке вписанный в domain, — значение вне каталога: не цитируется.
+            "entities",
+            Entity("light.example_hall", "Свет в прихожей", "living_room", "light.example_hall_lamp", "[turn_on]"),
+            "domain",
+            ["light.example_hall_lamp", "living_room"]
+        },
+        {
+            // То же для действия: значение вне каталога не цитируется.
+            "entities",
+            Entity("light.example_hall", "Свет в прихожей", "living_room", "light", "[turn_on, switch.example_hall_fan]"),
+            "actions",
+            ["switch.example_hall_fan", "living_room"]
+        },
+        {
             "entities",
             Entity("light.example_hall", null, "living_room", "light", "[turn_on]"),
             "name",

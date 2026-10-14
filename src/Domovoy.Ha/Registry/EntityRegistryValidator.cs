@@ -10,8 +10,9 @@ namespace Domovoy.Ha.Registry;
 /// Каждое сообщение называет запись номером в разделе (<c>entities[3]</c>) и
 /// поле. Значений из реестра — entity_id, id комнаты, script_id, area — в
 /// сообщении нет: оно уходит в лог старта, а реестр — приватный профиль дома.
-/// Домен и действие цитируются: это словарь Home Assistant, а не данные дома,
-/// хотя в отказе «не входит в каталог» значение берётся из файла как есть.
+/// Домен и действие цитируются, только если значение есть в каталоге слоя:
+/// тогда это словарь Home Assistant, а не данные дома. Значение вне каталога
+/// не цитируется — в поле по ошибке может стоять entity_id.
 /// </summary>
 internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryOptions>
 {
@@ -128,7 +129,7 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
 
             if (!HaDomainCatalog.IsKnownDomain(domain))
             {
-                failures.Add($"{label}: поле domain — домен «{domain}» не входит в каталог слоя Home Assistant.");
+                failures.Add($"{label}: поле domain — значение вне каталога слоя Home Assistant.");
                 continue;
             }
 
@@ -147,7 +148,9 @@ internal sealed class EntityRegistryValidator : IValidateOptions<EntityRegistryO
                 }
                 else if (!HaDomainCatalog.IsActionAllowed(domain, action!))
                 {
-                    failures.Add($"{label}: поле actions — действие «{action}» не входит в домен «{domain}».");
+                    failures.Add(HaDomainCatalog.IsKnownAction(action!)
+                        ? $"{label}: поле actions — действие «{action}» не входит в домен «{domain}»."
+                        : $"{label}: поле actions — значение вне каталога слоя Home Assistant.");
                 }
             }
         }

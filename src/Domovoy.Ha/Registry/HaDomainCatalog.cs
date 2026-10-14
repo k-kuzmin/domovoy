@@ -73,6 +73,11 @@ internal static class HaDomainCatalog
 
     public static bool IsKnownDomain(string domain) => Actions.ContainsKey(domain);
 
+    /// <summary>Действие есть в каталоге хотя бы одного домена; <see cref="ReadAction"/> — всегда.</summary>
+    public static bool IsKnownAction(string action) =>
+        string.Equals(action, ReadAction, StringComparison.Ordinal)
+        || Actions.Values.Any(actions => actions.ContainsKey(action));
+
     /// <summary>Действие входит в каталог домена; <see cref="ReadAction"/> — в любом известном домене.</summary>
     public static bool IsActionAllowed(string domain, string action) =>
         Actions.TryGetValue(domain, out IReadOnlyDictionary<string, HaActionSpec>? actions)
