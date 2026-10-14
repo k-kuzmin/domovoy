@@ -631,10 +631,16 @@ function Invoke-Netsh([string[]]$Arguments) {
 
 # Правило Hyper-V firewall с именем $RuleName ставил -Install по 0028. На
 # Windows без командлетов Hyper-V firewall (до 11 22H2) его не было.
+# Get-NetFirewallHyperVRule -Name отдаёт под тем же именем и правило firewall
+# Windows (VMCreatorId Any, источник HostFirewallLocal); его удаление
+# командлетом Hyper-V — «Отказано в доступе» (живой -Install, #151). Прежнее
+# правило отличает VMCreatorId WSL.
+$WslVmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 function Remove-LegacyHyperVRule {
     if (-not (Get-Command Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue)) { return "прежнего правила Hyper-V $RuleName нет (нет Get-NetFirewallHyperVRule)" }
-    if (Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue) {
-        Remove-NetFirewallHyperVRule -Name $RuleName
+    $legacy = @(Get-NetFirewallHyperVRule -Name $RuleName -ErrorAction SilentlyContinue | Where-Object { $_.VMCreatorId -eq $WslVmCreatorId })
+    if ($legacy.Count) {
+        $legacy | Remove-NetFirewallHyperVRule
         return "прежнее правило Hyper-V $RuleName удалено"
     }
     return "прежнего правила Hyper-V $RuleName нет"
@@ -777,6 +783,7 @@ if ($Uninstall) {
         if ($deleted.Code -ne 0) { $proxyProblems += "порт $($own.ListenPort): netsh код $($deleted.Code)" }
         else { Write-Output "запись portproxy порта $($own.ListenPort) удалена" }
     }
+    Write-Output (Remove-LegacyHyperVRule)
     if (Get-NetFirewallRule -Name $RuleName -ErrorAction SilentlyContinue) {
         Remove-NetFirewallRule -Name $RuleName
         Write-Output "правило $RuleName удалено"
@@ -784,7 +791,6 @@ if ($Uninstall) {
     else {
         Write-Output "правила $RuleName нет"
     }
-    Write-Output (Remove-LegacyHyperVRule)
     if ($proxyProblems.Count) {
         $backupProblem = (@("записи portproxy не сняты: $($proxyProblems -join '; ') — netsh interface portproxy show v4tov4") + @($backupProblem | Where-Object { $_ })) -join '; '
     }
@@ -1096,13 +1102,14 @@ if ($Install) {
     }
 
     # 6. Правило firewall Windows: пересоздаётся с теми же параметрами.
-    # Прежнее правило Hyper-V (0028) в NAT не нужно — снимается.
+    # Прежнее правило Hyper-V (0028) в NAT не нужно — снимается до записи
+    # правила Windows с тем же именем.
+    Write-Output (Remove-LegacyHyperVRule)
     if (Get-NetFirewallRule -Name $RuleName -ErrorAction SilentlyContinue) {
         Remove-NetFirewallRule -Name $RuleName
     }
     $null = New-NetFirewallRule @ruleParams
     Write-Output ('правило {0}: TCP {1}, с адресов {2}, профиль {3}' -f $RuleName, ($ruleParams.LocalPort -join ','), ($RemoteAddresses -join ','), $RuleProfile)
-    Write-Output (Remove-LegacyHyperVRule)
 
     # 7. portproxy: свои записи на прежнем адресе снимаются, на нынешнем
     # пишутся заново (add заменяет запись того же адреса и порта). Адрес в
