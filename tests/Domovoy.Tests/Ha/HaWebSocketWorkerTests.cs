@@ -18,8 +18,8 @@ namespace Domovoy.Tests.Ha;
 /// Сроки <see cref="HaWebSocketTimings"/> — сотни миллисекунд вместо
 /// секунд; пауза реконнекта подменена через <see cref="IReconnectDelay"/>.
 /// Верхние границы времени даны с запасом <see cref="Slack"/>: классы
-/// тестов идут параллельно, и машина CI бывает медленной. Нижние границы —
-/// без запаса: их нарушение не может быть случайным.
+/// тестов идут параллельно, и машина CI бывает медленной. Нижние границы
+/// по часам воркера — без запаса; по меткам сервера фейка — с допуском.
 /// </summary>
 public sealed class HaWebSocketWorkerTests
 {
@@ -278,7 +278,7 @@ public sealed class HaWebSocketWorkerTests
         await Task.Delay(3 * (Fast.ReadinessPollInterval + Fast.ReadinessPollTimeout));
 
         delay.Requested.Should().Equal(TimeSpan.FromSeconds(1));
-        harness.Fake.AuthCount.Should().Be(1, "второй вход с отклонённым токеном до конца паузы — повод для бана по IP");
+        harness.Fake.AuthCount.Should().Be(1, "второй вход с отклонённым токеном до конца паузы HA может засчитать как неудачный вход");
         harness.Fake.ApiRootRequests.Should().BeEmpty("после auth_invalid REST не опрашивается");
         harness.State.Status.Should().Be(HaConnectionStatus.AuthRejected);
     }
@@ -324,8 +324,10 @@ public sealed class HaWebSocketWorkerTests
             pause.Should().BeLessThan(Fast.ReadinessPollInterval + Fast.ReadinessPollTimeout + Slack);
         }
 
+        // Метки снимает сервер фейка. Первый запрос к нему платит за
+        // холодный маршрут, поэтому первый зазор не сравнивается.
         IReadOnlyList<TimeSpan> polls = harness.Fake.ApiRootRequests;
-        for (int i = 1; i < polls.Count; i++)
+        for (int i = 2; i < polls.Count; i++)
         {
             (polls[i] - polls[i - 1]).Should().BeGreaterThanOrEqualTo(
                 Fast.ReadinessPollInterval * 0.8,
@@ -342,8 +344,9 @@ public sealed class HaWebSocketWorkerTests
             delay,
             fake => fake.WebSocketMode = FakeWebSocketMode.RejectUpgrade);
 
-        await Task.Delay(6 * Fast.ReadinessPollInterval);
-        harness.Fake.WebSocketRequestCount.Should().BeGreaterThanOrEqualTo(3);
+        // Окно отказа — 6 интервалов опроса; предел ожидания с запасом на
+        // медленную машину. Без досрочного конца паузы попытка одна.
+        await WaitUntilAsync(() => harness.Fake.WebSocketRequestCount >= 3, (6 * Fast.ReadinessPollInterval) + Slack);
 
         var ready = Stopwatch.StartNew();
         harness.Fake.WebSocketMode = FakeWebSocketMode.Accept;
