@@ -12,9 +12,9 @@ namespace Domovoy.Core.Abstractions;
 public interface IFastRouter
 {
     /// <summary>
-    /// Подобрать вызов инструмента по шаблону. <c>null</c> означает
+    /// Подобрать сущность и действие по шаблону. <c>null</c> означает
     /// «шаблон не подошёл» — это не ошибка, а условие перехода на путь
     /// через LLM.
     /// </summary>
-    ToolCall? TryMatch(string text);
+    FastRouteMatch? TryMatch(string text);
 }

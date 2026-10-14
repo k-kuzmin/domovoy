@@ -28,7 +28,11 @@ internal sealed class ConfiguredEntityAllowList : IEntityAllowList
 
     public IReadOnlyList<HaEntityDescriptor> All { get; } = [];
 
+    public IReadOnlyList<HaAreaDescriptor> Areas { get; } = [];
+
     public bool IsActionAllowed(string entityId, string action) => false;
 
     public HaEntityDescriptor? Find(string entityId) => null;
+
+    public HaAreaDescriptor? FindArea(string areaId) => null;
 }

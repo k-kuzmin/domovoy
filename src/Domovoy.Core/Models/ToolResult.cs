@@ -3,6 +3,14 @@ namespace Domovoy.Core.Models;
 /// <summary>Результат вызова инструмента.</summary>
 public sealed record ToolResult
 {
+    /// <summary>
+    /// Значение <see cref="ToolCallId"/> для результата, построенного не
+    /// из вызова инструмента моделью: прямой вызов слоя Home Assistant и
+    /// быстрый путь. Инструмент, получивший такой результат, ставит id
+    /// своего вызова: <c>result with { ToolCallId = call.Id }</c>.
+    /// </summary>
+    public const string DirectCallId = "direct";
+
     public required string ToolCallId { get; init; }
 
     public required bool Success { get; init; }
@@ -16,6 +24,13 @@ public sealed record ToolResult
 
     /// <summary>Причина отказа. Заполняется, когда <see cref="Success"/> ложно.</summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// Машиночитаемый код отказа из <see cref="HaErrorCodes"/>; те же строки
+    /// идут в <see cref="ApiError.Code"/>. <c>null</c> — успех или отказ без
+    /// кода.
+    /// </summary>
+    public string? ErrorCode { get; init; }
 
     /// <summary>
     /// Действие требует подтверждения: инструмент ничего не сделал и

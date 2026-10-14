@@ -18,12 +18,21 @@ public interface IHaClient
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Вызов сервиса Home Assistant. Список доступных сервисов ограничен
+    /// Вызов действия над сущностью. Список доступных сервисов ограничен
     /// белым списком (раздел 4.3 ТЗ).
     /// </summary>
+    /// <param name="domain">Домен сущности.</param>
+    /// <param name="action">
+    /// Имя действия из реестра сущности (allow-list), а не сервис HA;
+    /// сервис и поле значения слой Ha выводит по своему каталогу доменов —
+    /// это и есть белый список сервисов раздела 4.3 ТЗ.
+    /// </param>
+    /// <param name="entityId">Сущность из allow-list.</param>
+    /// <param name="value">Значение действия или <c>null</c>, если действие его не принимает.</param>
+    /// <param name="cancellationToken">Отмена вызова.</param>
     Task<ToolResult> CallServiceAsync(
         string domain,
-        string service,
+        string action,
         string entityId,
         string? value,
         CancellationToken cancellationToken);
