@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Domovoy.Core.Abstractions;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Models;
 using Domovoy.Ha;
+using Domovoy.Ha.Registry;
 using Domovoy.Ha.State;
 using Domovoy.Ha.WebSocket;
 using FluentAssertions;
@@ -57,7 +59,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "При Connected состояния берутся из кэша, HA не спрашивается")]
-    public async Task ConnectedReadsFromCache()
+    public async Task GetStatesBypassesCacheWhenNotConnectedAndReadsItWhenConnected()
     {
         _fake.SetState(KitchenLight, "off");
         _cache.ReplaceAll([State(KitchenLight, "on")]);
@@ -73,7 +75,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     [InlineData(nameof(HaConnectionStatus.Connecting))]
     [InlineData(nameof(HaConnectionStatus.Reconnecting))]
     [InlineData(nameof(HaConnectionStatus.AuthRejected))]
-    public async Task NotConnectedReadsFromRest(string status)
+    public async Task GetStatesBypassesCacheWhenNotConnected(string status)
     {
         _fake.SetState(KitchenLight, "off", new Dictionary<string, object?> { ["brightness"] = 128 });
         _cache.ReplaceAll([State(KitchenLight, "on")]);
@@ -89,7 +91,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "Ответ REST фильтруется по allow-list")]
-    public async Task RestResponseIsFilteredByAllowList()
+    public async Task GetStatesReturnsOnlyAllowListedEntities()
     {
         _fake.SetState(KitchenLight, "on");
         _fake.SetState(OutsideList, "on");
@@ -103,7 +105,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     [Theory(DisplayName = "Фильтр по комнате и домену действует и на кэш, и на REST")]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task AreaAndDomainFilterApplyOnBothPaths(bool connected)
+    public async Task GetStatesReturnsOnlyAllowListedEntitiesOfAreaAndDomain(bool connected)
     {
         string[] ids = [KitchenLight, LivingRoomLight, BedroomTemperature, BedroomAc];
         foreach (string id in ids)
@@ -125,7 +127,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "REST GET api/states не 2xx — HaUnavailableException")]
-    public async Task StatesNon2xxThrowsUnavailable()
+    public async Task GetStatesBypassesCacheWhenNotConnectedAndReportsNon2xx()
     {
         _fake.StatesStatusCode = HttpStatusCode.InternalServerError;
 
@@ -136,7 +138,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "REST недоступен — HaUnavailableException без адреса и токена")]
-    public async Task StatesNetworkErrorThrowsUnavailable()
+    public async Task GetStatesBypassesCacheWhenNotConnectedAndReportsNetworkError()
     {
         _fake.RestAvailable = false;
 
@@ -171,7 +173,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "Сущность вне allow-list — entity_not_allowed без запроса к HA")]
-    public async Task EntityOutsideListIsRejected()
+    public async Task CallServiceRejectsEntityOutsideAllowListWithoutCallingHa()
     {
         ToolResult result = await CreateClient().CallServiceAsync("light", "turn_on", OutsideList, null, CancellationToken.None);
 
@@ -184,7 +186,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     [InlineData("media_player", "media_play", LivingRoomTv, null)]
     [InlineData("light", "turn_on", BedroomTemperature, null)]
     [InlineData("sensor", "turn_on", BedroomTemperature, null)]
-    public async Task ActionOutsideListIsRejected(string domain, string action, string entityId, string? value)
+    public async Task CallServiceRejectsDisallowedActionAndConfirmation(string domain, string action, string entityId, string? value)
     {
         ToolResult result = await CreateClient().CallServiceAsync(domain, action, entityId, value, CancellationToken.None);
 
@@ -192,7 +194,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "Действие read через вызов сервиса — action_not_allowed")]
-    public async Task ReadActionIsRejected()
+    public async Task CallServiceRejectsDisallowedActionAndConfirmationForRead()
     {
         ToolResult result = await CreateClient().CallServiceAsync("sensor", "read", BedroomTemperature, null, CancellationToken.None);
 
@@ -200,7 +202,7 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     }
 
     [Fact(DisplayName = "Действие в реестре, но вне каталога домена — action_not_allowed")]
-    public async Task ActionOutsideCatalogIsRejected()
+    public async Task CallServiceRejectsDisallowedActionAndConfirmationOutsideCatalog()
     {
         ToolResult result = await CreateClient().CallServiceAsync("light", "self_destruct", KitchenLight, null, CancellationToken.None);
 
@@ -213,26 +215,28 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
     [InlineData(KitchenLight, "light", "set_brightness", null)]
     [InlineData(KitchenLight, "light", "turn_on", "1")]
     [InlineData(BedroomAc, "climate", "set_temperature", "40")]
-    public async Task InvalidValueIsRejected(string entityId, string domain, string action, string? value)
+    public async Task CallServiceRejectsInvalidValueWithoutCallingHa(string entityId, string domain, string action, string? value)
     {
         ToolResult result = await CreateClient().CallServiceAsync(domain, action, entityId, value, CancellationToken.None);
 
         AssertRefused(result, HaErrorCodes.InvalidValue);
     }
 
-    [Fact(DisplayName = "Замок требует подтверждения по каталогу, даже без флага реестра")]
-    public async Task CatalogConfirmationIsIndependentOfRegistry()
+    [Theory(DisplayName = "Замок требует подтверждения по каталогу, даже без флага реестра")]
+    [InlineData("lock")]
+    [InlineData("unlock")]
+    public async Task LockActionRequiresConfirmationWithoutRegistryFlag(string action)
     {
         _allowList.Find(FrontDoor)!.RequiresConfirmation.Should().BeFalse();
 
-        ToolResult result = await CreateClient().CallServiceAsync("lock", "unlock", FrontDoor, null, CancellationToken.None);
+        ToolResult result = await CreateClient().CallServiceAsync("lock", action, FrontDoor, null, CancellationToken.None);
 
         AssertRefused(result, HaErrorCodes.ConfirmationRequired);
         result.RequiresConfirmation.Should().BeTrue();
     }
 
     [Fact(DisplayName = "Флаг реестра добавляет подтверждение действию, которому каталог его не требует")]
-    public async Task RegistryFlagAddsConfirmation()
+    public async Task CallServiceRejectsDisallowedActionAndConfirmationWhenRegistryFlagIsSet()
     {
         ToolResult result = await CreateClient().CallServiceAsync("light", "turn_on", GuardedLight, null, CancellationToken.None);
 
@@ -240,12 +244,67 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
         result.RequiresConfirmation.Should().BeTrue();
     }
 
+    /// <summary>Каждое действие каталога, которому подтверждение не нужно.</summary>
+    public static TheoryData<string, string> CatalogActionsWithoutConfirmation()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (KeyValuePair<string, IReadOnlyDictionary<string, HaActionSpec>> domain in
+                 HaDomainCatalog.Actions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            foreach (KeyValuePair<string, HaActionSpec> action in
+                     domain.Value.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+            {
+                if (!action.Value.RequiresConfirmation)
+                {
+                    data.Add(domain.Key, action.Key);
+                }
+            }
+        }
+
+        return data;
+    }
+
+    [Theory(DisplayName = "Каждое действие каталога без подтверждения уходит POST в сервис каталога")]
+    [MemberData(nameof(CatalogActionsWithoutConfirmation))]
+    public async Task CallServiceSendsMappedServiceForAllowedAction(string domain, string action)
+    {
+        HaActionSpec spec = HaDomainCatalog.Resolve(domain, action)!;
+        string entityId = CatalogEntityId(domain);
+        string? value = ValidValue(spec);
+
+        ToolResult result = await CreateClient().CallServiceAsync(domain, action, entityId, value, CancellationToken.None);
+
+        result.Success.Should().BeTrue(result.Error);
+        result.ErrorCode.Should().BeNull();
+
+        FakeRestRequest request = _fake.RestRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("POST");
+        request.Path.Should().Be($"/api/services/{domain}/{spec.Service}");
+        request.AuthorizedWithExpectedToken.Should().BeTrue();
+
+        using JsonDocument body = JsonDocument.Parse(request.Body);
+        body.RootElement.GetProperty("entity_id").GetString().Should().Be(entityId);
+        if (spec.ValueField is null)
+        {
+            body.RootElement.EnumerateObject().Should().ContainSingle();
+        }
+        else
+        {
+            body.RootElement.GetProperty(spec.ValueField).ValueKind.Should().Be(spec.Kind switch
+            {
+                HaValueKind.Boolean => JsonValueKind.True,
+                HaValueKind.String => JsonValueKind.String,
+                _ => JsonValueKind.Number,
+            });
+        }
+    }
+
     [Theory(DisplayName = "Разрешённое действие уходит POST в сервис каталога с типизированным телом")]
     [InlineData(KitchenLight, "light", "turn_off", null, "/api/services/light/turn_off", null)]
     [InlineData(KitchenLight, "light", "set_brightness", "40", "/api/services/light/turn_on", "brightness_pct")]
     [InlineData(BedroomAc, "climate", "set_temperature", "22,5", "/api/services/climate/set_temperature", "temperature")]
     [InlineData(LivingRoomTv, "media_player", "volume_set", "30", "/api/services/media_player/volume_set", "volume_level")]
-    public async Task AllowedActionIsPosted(
+    public async Task CallServiceSendsMappedServiceForAllowedActionWithTypedBody(
         string entityId,
         string domain,
         string action,
@@ -330,6 +389,18 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
         Options.Create(new HaOptions { BaseUrl = _fake.BaseUrl, Token = token }),
         _loggerFactory.CreateLogger<HaRestClient>());
 
+    /// <summary>Сущность allow-list теста, которой разрешены все действия каталога домена.</summary>
+    private static string CatalogEntityId(string domain) => $"{domain}.example_catalog";
+
+    /// <summary>Значение, которое проходит описание действия: нижняя граница числа, true, короткая строка.</summary>
+    private static string? ValidValue(HaActionSpec spec) => spec.Kind switch
+    {
+        HaValueKind.None => null,
+        HaValueKind.Boolean => "true",
+        HaValueKind.String => "HDMI 1",
+        _ => spec.Min!.Value.ToString(CultureInfo.InvariantCulture),
+    };
+
     private void AssertRefused(ToolResult result, string errorCode)
     {
         result.Success.Should().BeFalse();
@@ -391,6 +462,9 @@ public sealed class HaRestClientTests : IAsyncLifetime, IDisposable
             Entity(LivingRoomTv, "living_room", "turn_off", "volume_set"),
             Entity(FrontDoor, "living_room", "lock", "unlock"),
             Entity(GuardedLight, "bedroom", "turn_on", "turn_off") with { RequiresConfirmation = true },
+            .. HaDomainCatalog.Actions
+                .Where(domain => domain.Value.Count > 0)
+                .Select(domain => Entity(CatalogEntityId(domain.Key), "kitchen", [.. domain.Value.Keys])),
         ];
 
         public HaEntityDescriptor? Find(string entityId) =>
