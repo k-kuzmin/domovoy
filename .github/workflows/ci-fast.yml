@@ -189,6 +189,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/review-comments.test.sh
 
+      - name: Сценарии ожидания мерджа
+        if: ${{ !cancelled() }}
+        run: bash scripts/merge-wait.test.sh
+
       - name: Сценарии картинки прогресса
         if: ${{ !cancelled() }}
         run: bash scripts/status-progress.test.sh
