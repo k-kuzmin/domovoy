@@ -238,6 +238,21 @@ cat > "$CANON" <<'PLAN'
     "workaround": "нет: срок проверяется там же, где причина",
     "council_signs": ["правка обвязки"],
     "executor": "оркестратор сам: два файла, место найдено",
+    "slices": [
+      {
+        "name": "валидатор",
+        "files": ["scripts/plan.sh", "scripts/review-comments.sh"],
+        "contract": "пункт «непроверяем» несёт причину и срок; сообщение о просрочке — в форме замечания",
+        "after": []
+      },
+      {
+        "name": "правила",
+        "files": ["docs/rules/plan.md"],
+        "contract": "правило называет срок там же, где причину, словами сообщения валидатора",
+        "after": ["валидатор"]
+      }
+    ],
+    "single_slice_reason": "",
     "fork": false
   },
   "files": [
@@ -753,7 +768,18 @@ end_case
 
 # ------------------------------------------------------------------
 begin_case 'Предупреждение о размере плана не меняет код возврата'
-run_validate "$(mutate '.files as $f | .files = [range(0; 20) | $f[0]]')"
+# Двадцать копий одного файла сужают множество files до scripts/plan.sh, и
+# срезы согласованной фикстуры называли бы файлы, которых в плане больше нет.
+# Сценарию дан один согласованный срез с причиной: утверждения о размере те же,
+# карточка остаётся полной.
+run_validate "$(mutate '.files as $f | .files = [range(0; 20) | $f[0]]
+    | .fork_card.slices = [{
+        "name": "валидатор",
+        "files": ["scripts/plan.sh"],
+        "contract": "разбор пункта «непроверяем» в одном файле",
+        "after": []
+      }]
+    | .fork_card.single_slice_reason = "один файл — резать нечего"')"
 expect_status 0
 expect_output 'предупреждение: файлов в плане 20'
 expect_no_violations
@@ -776,6 +802,148 @@ run_validate "$(mutate '
     | .flags.new_dependency_reason = "разбор cron, обоснование в комментарии #4242"')"
 expect_status 0
 expect_no_violations
+end_case
+
+# ------------------------------------------------------------------
+# Срезы. Полная карточка раскладывает файлы плана на срезы — fork_card.slices.
+# Согласованная фикстура несёт два среза: «правила» ждёт «валидатор». Каждый
+# сценарий портит раскладку одной мутацией и ждёт свой отказ дословно.
+# ------------------------------------------------------------------
+begin_case 'Срезы: полная карточка без срезов отвергается'
+run_validate "$(mutate 'del(.fork_card.slices, .fork_card.single_slice_reason)')"
+expect_status 1
+expect_output 'нарушение: срезы: в полной карточке развилки нет fork_card.slices — файлы плана раскладываются на срезы'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: файл в двух срезах отвергается'
+run_validate "$(mutate '.fork_card.slices[1].files += ["scripts/plan.sh"]')"
+expect_status 1
+expect_output 'нарушение: срезы: файл отдан нескольким срезам: scripts/plan.sh — «валидатор», «правила»'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: объединение срезов не равно files плана'
+# Журнал задачи (docs/tasks/**) ни в одном срезе фикстуры не назван — и отказа
+# на него нет: журнал ведёт оркестратор, а не срез.
+run_validate "$(mutate '.fork_card.slices[0].files -= ["scripts/review-comments.sh"]')"
+expect_status 1
+expect_output 'нарушение: срезы: файл плана не отдан ни одному срезу: scripts/review-comments.sh'
+expect_no_output 'docs/tasks/4242.md'
+
+run_validate "$(mutate '.fork_card.slices[1].files += ["scripts/risk.sh"]')"
+expect_status 1
+expect_output 'нарушение: срезы: срез «правила» называет файл, которого нет в files плана: scripts/risk.sh'
+
+# Обратная сторона того же исключения: журнал и план задачи ни одному срезу не
+# принадлежат, и срез, назвавший их, отвергается — даже когда путь есть в files
+# плана. Отказ один: ветка «нет в files плана» на него не срабатывает.
+run_validate "$(mutate '.fork_card.slices[0].files += ["docs/tasks/4242.md"]')"
+expect_status 1
+expect_output 'нарушение: срезы: срез «валидатор» называет журнал или план задачи — их правит оркестратор: docs/tasks/4242.md'
+expect_no_output 'нет в files плана: docs/tasks/4242.md'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: after на несуществующий срез и цикл отвергаются'
+run_validate "$(mutate '.fork_card.slices[1].after = ["тексты"]')"
+expect_status 1
+expect_output 'нарушение: срезы: срез «правила» ждёт несуществующий срез «тексты»'
+expect_no_output 'цикл в after'
+
+run_validate "$(mutate '.fork_card.slices[0].after = ["правила"]')"
+expect_status 1
+expect_output 'нарушение: срезы: цикл в after — не упорядочиваются срезы: «валидатор», «правила»'
+
+# After на себя: остаток — ровно сам срез, упорядоченный «валидатор» в него не
+# попадает.
+run_validate "$(mutate '.fork_card.slices[1].after = ["правила"]')"
+expect_status 1
+expect_output 'нарушение: срезы: цикл в after — не упорядочиваются срезы: «правила»'
+expect_no_output '«валидатор», «правила»'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: повторяющееся имя среза отвергается'
+run_validate "$(mutate '.fork_card.slices[1].name = "валидатор" | .fork_card.slices[1].after = []')"
+expect_status 1
+expect_output 'нарушение: срезы: имя среза повторяется: «валидатор»'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: один срез без причины отвергается, с причиной проходит и доезжает до рендера'
+run_validate "$(mutate '.fork_card.slices = [{
+        "name": "всё сразу",
+        "files": ["scripts/plan.sh", "scripts/review-comments.sh", "docs/rules/plan.md"],
+        "contract": "пункт «непроверяем» несёт причину и срок",
+        "after": []
+      }]')"
+expect_status 1
+expect_output 'нарушение: срезы: срез один, а single_slice_reason пуст — почему задачу нельзя разрезать, не сказано'
+
+ONE_SLICE="$(mutate '.fork_card.slices = [{
+        "name": "всё сразу",
+        "files": ["scripts/plan.sh", "scripts/review-comments.sh", "docs/rules/plan.md"],
+        "contract": "пункт «непроверяем» несёт причину и срок",
+        "after": []
+      }]
+    | .fork_card.single_slice_reason = "сообщение валидатора и текст правила пишутся одной фразой — разрезанные, они разъедутся"')"
+run_validate "$ONE_SLICE"
+expect_status 0
+expect_no_violations
+run_render "$ONE_SLICE"
+expect_status 0
+expect_prose 'сообщение валидатора и текст правила пишутся одной фразой — разрезанные, они разъедутся'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: форма среза проверяется схемой'
+run_validate "$(mutate '.fork_card.slices = []')"
+expect_status 1
+expect_output 'план.fork_card.slices: элементов 0, схема требует не меньше 1'
+
+run_validate "$(mutate 'del(.fork_card.slices[0].contract)')"
+expect_status 1
+expect_output 'план.fork_card.slices[0].contract: обязательное поле схемы отсутствует'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: trivial без срезов проходит, trivial со срезами отвергается'
+run_validate "$(mutate '.fork_card = {"trivial": "опечатка в сообщении валидатора, второго способа нет"}')"
+expect_status 0
+expect_no_violations
+
+run_validate "$(mutate '.fork_card = {
+        "trivial": "опечатка в сообщении валидатора, второго способа нет",
+        "slices": .fork_card.slices
+      }')"
+expect_status 1
+expect_output 'план.fork_card.slices: поле не описано схемой'
+expect_output 'план.fork_card: не подходит ни под один вариант схемы'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: номер задачи ниже 148 от срезов не освобождает'
+# Порога по номеру нет: номер задачи — не время написания плана.
+run_validate "$(mutate '.issue = 9 | del(.fork_card.slices, .fork_card.single_slice_reason)')"
+expect_status 1
+expect_output 'нарушение: срезы: в полной карточке развилки нет fork_card.slices'
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Срезы: при --at проверка срезов не выполняется'
+# Один и тот же файл с ключом и без: разницу в выводе даёт ключ, а не план.
+# Исторический режим сверяет план с деревом, для которого он писался, а правила
+# срезов тогда не было.
+NO_SLICES="$(mutate '.issue = 9 | del(.fork_card.slices, .fork_card.single_slice_reason)')"
+run_validate "$NO_SLICES" --at HEAD
+expect_status 0
+expect_no_violations
+expect_no_output 'нарушение: срезы:'
+
+run_validate "$NO_SLICES"
+expect_status 1
+expect_output 'нарушение: срезы: в полной карточке развилки нет fork_card.slices'
 end_case
 
 # ------------------------------------------------------------------

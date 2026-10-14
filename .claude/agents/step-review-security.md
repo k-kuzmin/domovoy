@@ -21,7 +21,9 @@ tools: Read, Glob, Grep, Bash
 
 **Предмет читай сам:** `git diff origin/main...<ветка>` и
 `git log origin/main..<ветка>`; задача — по номеру из имени ветки
-`feat/<номер>-…`, `gh issue view <номер> --comments`. PR на этом этапе ещё
+`feat/<номер>-…`,
+`gh issue view <номер> --json title,labels,body,comments --jq '"# " + .title, "Метки: " + ([.labels[].name] | join(", ")), "", .body, (.comments[] | "", "---", "Комментарий: " + .author.login + ", " + .createdAt, "", .body)'`.
+PR на этом этапе ещё
 нет. Оркестратор передаёт имя ветки и ничего больше — пересказ реализации был
 бы утверждением автора кода о собственной работе.
 

@@ -19,8 +19,9 @@ tools: Read, Glob, Grep, Edit, Write, Bash
 отбором, а не целиком, — `docs/rules/reading.md`. Файлы репозитория читай
 инструментом `Read`, а не кусками через оболочку.
 
-**План — файл `docs/tasks/<номер>.plan.json`**, задача — `gh issue view
-<номер> --comments`. План — обязательство, а не набросок. Файл плана не
+**План — файл `docs/tasks/<номер>.plan.json`**, задача —
+`gh issue view <номер> --json title,labels,body,comments --jq '"# " + .title, "Метки: " + ([.labels[].name] | join(", ")), "", .body, (.comments[] | "", "---", "Комментарий: " + .author.login + ", " + .createdAt, "", .body)'`.
+План — обязательство, а не набросок. Файл плана не
 правишь: расхождение с ним возвращаешь в ответе отдельным абзацем, оркестратор
 перенесёт его в PR.
 
