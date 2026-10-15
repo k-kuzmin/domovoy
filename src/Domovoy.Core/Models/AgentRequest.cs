@@ -11,6 +11,12 @@ public enum AgentRequestSource
 
     /// <summary>Быстрое действие из интерфейса, минуя LLM.</summary>
     Ui,
+
+    /// <summary>
+    /// Административное действие через <c>/api/v1/admin</c>, а не запрос к
+    /// агенту. Пишется в аудит отзыва устройства.
+    /// </summary>
+    Admin,
 }
 
 /// <summary>
