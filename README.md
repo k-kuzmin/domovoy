@@ -211,6 +211,39 @@ HA на любой код, от первичной настройки он не 
 `homeassistant-config`, вне рабочего дерева. **`docker compose down -v` и
 `docker volume prune` удаляют этот том**: HA после них настраивается заново.
 
+### Схема базы данных
+
+Приложение миграций на старте не применяет: схему базы стека обновляет
+владелец, после первого подъёма и после каждого обновления, в котором
+появилась миграция. Без этого `/health` отвечает, но привязка устройств и
+админ-эндпоинты получают `503` `auth_unavailable` — таблиц ещё нет.
+
+Порт базы наружу не опубликован, поэтому `dotnet ef database update` с хоста
+до неё не дотягивается. Миграции применяются идемпотентным SQL-скриптом через
+`psql` внутри контейнера; уже применённые скрипт пропускает. Нужны SDK .NET 8
+и инструмент `dotnet-ef` 8.x:
+
+```bash
+dotnet ef migrations script --idempotent --output migrate.sql \
+  --project src/Domovoy.Data --startup-project src/Domovoy.Api
+docker compose exec -T postgres \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < migrate.sql
+rm migrate.sql
+```
+
+Скрипт пишется в файл, а не в конвейер: в стандартный вывод `dotnet ef`
+печатает и строки сборки. Имя пользователя и базы `psql` берёт из окружения
+контейнера, `.env` хостовой оболочкой не читается.
+
+**Новая миграция.** Создаётся командой из таблицы «Команды» раздела
+«Локальная разработка». Сгенерированный основной файл миграции приводится к
+стилю проекта до коммита — иначе лишний `using System;` даёт IDE0005, а
+предупреждения в сборке — ошибки:
+
+```bash
+dotnet format --include src/Domovoy.Data/Migrations/<метка>_<Имя>.cs
+```
+
 ## Резервное копирование и восстановление
 
 Сценарии — в [`ops/backup/`](ops/backup/); подробности поведения и
@@ -602,6 +635,7 @@ dotnet run --project src/Domovoy.Api
 
 ```bash
 cd src/Domovoy.Api
+dotnet user-secrets set "Auth:AdminToken" "<админ-секрет не короче 32 символов>"
 dotnet user-secrets set "Ha:Token"        "<токен Home Assistant>"
 dotnet user-secrets set "Llm:ApiKey"      "<ключ провайдера>"
 dotnet user-secrets set "Ntfy:Topic"      "<имя топика>"
@@ -670,7 +704,9 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 | Наблюдение за реконнектом к живому HA | `dotnet run -c Release --project tests/Domovoy.Tests.LiveCheck -- reconnect` |
 | Формат и стиль | `dotnet format --verify-no-changes` |
 | Миграции: создать | `dotnet ef migrations add <Имя> --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
-| Миграции: применить | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
+| Миграции: привести новую к стилю | `dotnet format --include src/Domovoy.Data/Migrations/<метка>_<Имя>.cs` |
+| Миграции: применить к локальной базе | `dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api` |
+| Миграции: применить к базе стека | раздел «Схема базы данных» |
 | Поиск секретов: индекс | `gitleaks git --staged --redact --no-banner` |
 | Поиск секретов: история | `gitleaks git --redact --no-banner` |
 | Стек целиком | `docker compose up -d --build --wait` |
@@ -686,14 +722,16 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 
 ## API
 
-Базовый префикс `/api/v1`, аутентификация — Bearer-токен устройства.
-На этапе каркаса любой запрос к `/api/v1`, кроме `POST /auth/device`,
-получает `401`: привязка устройств ещё не реализована, и предъявленный токен
-отклоняется. `POST /auth/device` анонимный и отвечает `501`.
+Базовый префикс `/api/v1`, аутентификация — Bearer-токен устройства:
+`Authorization: Bearer <token>`. Токен устройство получает один раз, при
+привязке, обменом одноразового кода — подраздел «Привязка устройства». Любой
+маршрут `/api/v1`, кроме `POST /auth/device`, без действующего токена
+отвечает `401`; отозванный токен отклоняется со следующего же запроса.
+Эндпоинты, чей этап не наступил, при действующем токене отвечают `501`.
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| `POST` | `/auth/device` | регистрация устройства, обмен кода привязки на токен |
+| `POST` | `/auth/device` | обмен кода привязки на токен устройства, без токена |
 | `POST` | `/chat` | текстовый запрос, ответ потоком SSE |
 | `POST` | `/voice` | multipart с аудио, первое событие потока — `recognized` |
 | `POST` | `/confirm` | подтверждение чувствительного действия |
@@ -703,6 +741,80 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 | `GET` | `/health` | раздельный статус БД, Home Assistant и LLM |
 
 Формат ошибок единый: `{ "error": { "code": "...", "message": "...", "details": ... } }`.
+Хранилище устройств недоступно — `503` с кодом `auth_unavailable`, а не `401`:
+клиент не должен считать токен отозванным из-за сбоя базы.
+
+В базе хранится SHA-256 токена и кода привязки, а не их значения; в логи они
+не попадают. Открытое значение токена отдаётся ровно один раз — в ответе
+`POST /auth/device`.
+
+### Админ-эндпоинты
+
+Выпуск кода привязки, список устройств и отзыв — под `/api/v1/admin`, со
+своей Bearer-схемой: общий секрет `Auth:AdminToken`
+([0032](docs/decisions/0032-admin-endpoints-shared-secret.md)). Токен
+устройства админку не открывает, админ-секрет не делает запрос устройством.
+
+| Метод | Путь | Ответ |
+|---|---|---|
+| `POST` | `/api/v1/admin/pairing-codes` | `201`, `{ "code": "...", "expires_at": "..." }` — одноразовый код привязки |
+| `GET` | `/api/v1/admin/devices` | `200`, `{ "devices": [ { "id", "name", "created_at", "last_seen_at", "revoked_at" } ] }` |
+| `DELETE` | `/api/v1/admin/devices/{id}` | `204`; неизвестное или уже отозванное устройство — `404` `device_not_found` |
+
+`Auth:AdminToken` — случайная строка не короче 32 символов
+(`openssl rand -base64 32`). Пусто или плейсхолдер — админ-эндпоинты
+закрыты и отвечают `401` на любой запрос; задан, но короче 32 символов — api
+не стартует. Значение задаётся только на целевой машине: в `.env` —
+`AUTH_ADMIN_TOKEN`, локально — `dotnet user-secrets`. `last_seen_at`
+обновляется не чаще раза в минуту. Отзыв пишется в аудит (`audit_entries`,
+`revoke_device` с `device_id`), значения токена в записи нет.
+
+### Привязка устройства
+
+1. Владелец выпускает код — он живёт `Auth:PairingCodeLifetimeMinutes`
+   минут (по умолчанию 10) и гасится первым успешным обменом:
+
+   ```bash
+   curl -s -X POST -H "Authorization: Bearer <admin-token>" https://api.example.com/api/v1/admin/pairing-codes
+   ```
+
+2. Устройство обменивает код на токен. `name` необязателен и не длиннее 64
+   символов:
+
+   ```bash
+   curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"code":"<pairing-code>","name":"<имя устройства>"}' \
+     https://api.example.com/api/v1/auth/device
+   ```
+
+   Ответ — `200` `{ "token": "..." }` с `Cache-Control: no-store`, больше
+   ничего ([0025](docs/decisions/0025-anonymous-device-pairing-endpoint.md)).
+   Неверный, просроченный и уже использованный код дают одинаковый
+   `400` `invalid_pairing_code`; тело без `code` или `name` длиннее 64
+   символов — `400` `invalid_request`, код при этом не тратится.
+
+Обмен ограничен `Auth:PairingAttemptsPerMinute` попытками в минуту (по
+умолчанию 5) на весь эндпоинт, а не на адрес: сверх предела — `429`
+`rate_limited` с заголовком `Retry-After`. Цена общего предела — запись
+[0032](docs/decisions/0032-admin-endpoints-shared-secret.md).
+
+### Утерян телефон
+
+Узнать `<device-id>` — поле `id` в списке устройств, устройство узнаётся по
+`name` и `last_seen_at`:
+
+```bash
+curl -s -H "Authorization: Bearer <admin-token>" https://api.example.com/api/v1/admin/devices
+```
+
+Отозвать его токен — одна команда:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer <admin-token>" https://api.example.com/api/v1/admin/devices/<device-id>
+```
+
+`204` — токен отозван, следующий запрос с ним получит `401`. Остальные
+устройства продолжают работать.
 
 `GET /health` без префикса и без токена отдаёт только пригодность к работе —
 для healthcheck контейнера и туннеля. Подробный статус компонентов доступен
