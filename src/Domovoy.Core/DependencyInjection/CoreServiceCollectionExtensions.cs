@@ -1,4 +1,5 @@
 using Domovoy.Core.Abstractions;
+using Domovoy.Core.Auth;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Routing;
 using Domovoy.Core.Routing.Templates;
@@ -43,6 +44,7 @@ public static class CoreServiceCollectionExtensions
 
         // Часы привязки устройств (#12) — системные, если тест не подложил свои.
         services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<DeviceAuthService>();
 
         // Быстрый путь (FR-CORE-2). Шаблоны перебираются в порядке
         // регистрации; новый шаблон — одна строка здесь, роутер не меняется.
