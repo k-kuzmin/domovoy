@@ -113,7 +113,7 @@
     }
   ],
   "approach": {
-    "summary": "Порт хранилища в Core, логика в Core, EF в Data, HTTP в Api. (1) Core: порт IDeviceStore оперирует только хешами — AddPairingCodeAsync(codeHash, expiresAt), RedeemPairingCodeAsync(codeHash, tokenHash, deviceName, now) → Guid? (атомарно: погасить код и завести устройство), FindActiveDeviceAsync(tokenHash) → (Id, LastSeenAt)?, TouchLastSeenAsync(id, now), ListDevicesAsync, RevokeDeviceAsync(id, now) → bool. Сервис DeviceAuthService (Core/Auth) генерирует секреты RandomNumberGenerator: токен — 32 байта base64url, код привязки — 8 символов алфавита Crockford base32; хеш — SHA-256 (DeviceSecrets.Hash), время — TimeProvider. Открытое значение токена и кода наружу отдаётся один раз и в хранилище не передаётся. Кэша поиска токена нет: каждый запрос идёт в хранилище, поэтому отзыв действует со следующего запроса. LastSeenAt обновляется не чаще раза в минуту. Отзыв пишет AuditEntry через IAuditLog: Source = новый AgentRequestSource.Admin, ToolName = revoke_device, Arguments = { device_id }, значения токена нет. Настройки — AuthOptions (секция Auth): AdminToken, PairingCodeLifetimeMinutes (по умолчанию 10), PairingAttemptsPerMinute (по умолчанию 5), ValidateDataAnnotations + ValidateOnStart проверяют форму, пустой AdminToken — не ошибка старта. (2) Data: таблицы devices (id uuid, name, token_hash bytea unique, created_at, last_seen_at, revoked_at), pairing_codes (id, code_hash bytea unique, created_at, expires_at, used_at), audit_entries (id, occurred_at, request_id, source строкой, original_phrase, tool_name, arguments jsonb, success, error); имена snake_case явно. EfDeviceStore гасит код условным ExecuteUpdateAsync (used_at IS NULL AND expires_at > now) в транзакции со вставкой устройства: ровно одна строка — успех. EfAuditLog.WriteAsync вставляет строку. Первая миграция — dotnet ef migrations add DeviceAuth. (3) Api: DeviceTokenAuthenticationHandler ищет устройство через DeviceAuthService; сбой хранилища (кроме отмены) — 503 auth_unavailable без текста исключения, а не 500 и не 401. Вторая схема AdminToken: AdminTokenAuthenticationHandler сравнивает SHA-256 предъявленного и настроенного секрета CryptographicOperations.FixedTimeEquals; секрет не настроен (PlaceholderValues.IsUnset) — админ-маршруты отвечают 401 всегда. Политика по умолчанию и FallbackPolicy явно ограничены схемой DeviceToken, админ-политика — схемой AdminToken; админ-группа /api/v1/admin смаплена отдельно, не внутри группы /api/v1. Маршруты: POST /api/v1/auth/device { code, name? } → 200 { token } с Cache-Control: no-store, неверный, просроченный и погашенный код — одинаковый 400 invalid_pairing_code; POST /api/v1/admin/pairing-codes → 201 { code, expires_at }; GET /api/v1/admin/devices → { devices: [{ id, name, created_at, last_seen_at, revoked_at }] }; DELETE /api/v1/admin/devices/{id:guid} → 204, неизвестное или уже отозванное — 404 device_not_found. Единый формат ошибки — один писатель ApiErrorResults, им пользуются NotImplemented, Challenge и Forbidden обеих схем и OnRejected лимитера: 401 unauthorized, 403 forbidden, 429 rate_limited с Retry-After. Ограничение частоты — встроенный Microsoft.AspNetCore.RateLimiting (shared framework net8, пакета нет): политика pairing, фиксированное окно в минуту, один общий раздел, а не по IP — за туннелем адрес источника один и тот же. Применяется только к /auth/device. (4) Конфигурация и документы: ключ Auth:AdminToken пустым в appsettings.json, AUTH_ADMIN_TOKEN=<admin-token> в .env.example, Auth__AdminToken в docker-compose.yml; README — раздел API, привязка устройства, сценарий «утерян телефон» одной командой curl с api.example.com и плейсхолдерами, применение миграции к базе compose; запись 0032 о схеме и адресе админ-эндпоинтов. Тесты не трогают Postgres: фабрика по умолчанию подменяет IDeviceStore потокобезопасным InMemoryDeviceStore и IAuditLog — RecordingAuditLog. Хранение хешем доказывается моделью DomovoyDbContext, собранной с UseNpgsql без соединения.",
+    "summary": "Порт хранилища в Core, логика в Core, EF в Data, HTTP в Api. (1) Core: порт IDeviceStore оперирует только хешами — AddPairingCodeAsync(codeHash, expiresAt), RedeemPairingCodeAsync(codeHash, tokenHash, deviceName, now) → Guid? (атомарно: погасить код и завести устройство), FindActiveDeviceAsync(tokenHash) → (Id, LastSeenAt)?, TouchLastSeenAsync(id, now), ListDevicesAsync, RevokeDeviceAsync(id, auditEntry, now) → bool (атомарно: отметка отзыва и строка аудита одной транзакцией — сбой аудита откатывает отзыв, повторный DELETE работает). Сервис DeviceAuthService (Core/Auth) генерирует секреты RandomNumberGenerator: токен — 32 байта base64url, код привязки — 8 символов алфавита Crockford base32; хеш — SHA-256 (DeviceSecrets.Hash), время — TimeProvider. Открытое значение токена и кода наружу отдаётся один раз и в хранилище не передаётся. Кэша поиска токена нет: каждый запрос идёт в хранилище, поэтому отзыв действует со следующего запроса. LastSeenAt обновляется не чаще раза в минуту и не критично: сбой обновления — Warning в лог с id устройства, без токена, запрос остаётся аутентифицированным. Отзыв передаёт хранилищу AuditEntry: Source = новый AgentRequestSource.Admin, ToolName = revoke_device, Arguments = { device_id }, значения токена нет. Настройки — AuthOptions (секция Auth): AdminToken, PairingCodeLifetimeMinutes (по умолчанию 10), PairingAttemptsPerMinute (по умолчанию 5), ValidateDataAnnotations + ValidateOnStart проверяют форму, пустой AdminToken — не ошибка старта; AuthOptionsValidator: AdminToken либо не настроен (PlaceholderValues.IsUnset), либо не короче 32 символов — короче это ошибка формы и отказ старта с сообщением без значения (угадываемый секрет на публичном входе хуже закрытой админки). (2) Data: таблицы devices (id uuid, name, token_hash bytea unique, created_at, last_seen_at, revoked_at), pairing_codes (id, code_hash bytea unique, created_at, expires_at, used_at), audit_entries (id, occurred_at, request_id, source строкой, original_phrase, tool_name, arguments jsonb, success, error); имена snake_case явно. EfDeviceStore гасит код условным ExecuteUpdateAsync (used_at IS NULL AND expires_at > now) в транзакции со вставкой устройства: ровно одна строка — успех. EfDeviceStore.RevokeDeviceAsync в одной транзакции делает условный ExecuteUpdate (revoked_at IS NULL) и при ровно одной строке — вставку AuditRecord. Маппинг AuditEntry → AuditRecord один (AuditRecord.From), им же пользуется рабочий EfAuditLog.WriteAsync. Первая миграция — dotnet ef migrations add DeviceAuth. (3) Api: DeviceTokenAuthenticationHandler ищет устройство через DeviceAuthService. Сбой хранилища (кроме отмены): HandleAuthenticateAsync в Response не пишет, а возвращает AuthenticateResult.Fail(new DeviceStoreUnavailableException()) — исключение своего типа с нейтральным текстом, исходное — в Warning-лог; HandleChallengeAsync берёт тот же закэшированный результат (HandleAuthenticateOnceSafeAsync — хендлер один на запрос, хранилище второй раз не зовётся) и при этом типе отказа пишет 503 auth_unavailable через ApiErrorResults.Write, не вызывая base, иначе — 401 unauthorized. Ответ пишет только challenge, и только авторизация на защищённом маршруте его вызывает: двойной записи нет, анонимные маршруты 503 не получают. На маршрутах с метаданными IAllowAnonymous хендлер возвращает NoResult, не обращаясь к хранилищу: FallbackPolicy и политика группы аутентифицируют и /health, и /auth/device. Вторая схема AdminToken: AdminTokenAuthenticationHandler сравнивает SHA-256 предъявленного и настроенного секрета CryptographicOperations.FixedTimeEquals; секрет не настроен (PlaceholderValues.IsUnset) — админ-маршруты отвечают 401 всегда; неудачная попытка — Warning в лог без предъявленного значения. Схемы по умолчанию у AddAuthentication() нет: UseAuthentication никого не аутентифицирует, каждую схему зовёт только PolicyEvaluator своей политики, challenge и forbid идут по схемам политики. Политика по умолчанию и FallbackPolicy явно ограничены схемой DeviceToken, админ-политика — схемой AdminToken: аутентификация админа от хранилища устройств не зависит (сами админ-действия от него зависят); админ-группа /api/v1/admin смаплена отдельно, не внутри группы /api/v1. Маршруты: POST /api/v1/auth/device { code, name? } → 200 { token } с Cache-Control: no-store, неверный, просроченный и погашенный код — одинаковый 400 invalid_pairing_code; POST /api/v1/admin/pairing-codes → 201 { code, expires_at }; GET /api/v1/admin/devices → { devices: [{ id, name, created_at, last_seen_at, revoked_at }] }; DELETE /api/v1/admin/devices/{id:guid} → 204, неизвестное или уже отозванное — 404 device_not_found. Сбой хранилища внутри /auth/device и /admin/* (кроме отмены) — тот же 503 auth_unavailable без текста исключения. Единый формат ошибки — один писатель ApiErrorResults, им пользуются NotImplemented, Challenge и Forbidden обеих схем и OnRejected лимитера: 401 unauthorized, 403 forbidden, 429 rate_limited с Retry-After. Ограничение частоты — встроенный Microsoft.AspNetCore.RateLimiting (shared framework net8, пакета нет): политика pairing, фиксированное окно в минуту, один общий раздел, а не по IP — за туннелем адрес источника один и тот же. Применяется только к /auth/device. Компромисс назван: общий раздел даёт тому, кто прошёл внешний периметр, отложить чужую привязку до конца окна (риск ниже); выбор следует из записи 0025 — «Перебор кодов обязан упираться в лимит обращений к эндпоинту», — а раздел, который обходится подделкой заголовка, этой границы не держит. (4) Конфигурация и документы: ключ Auth:AdminToken пустым в appsettings.json, AUTH_ADMIN_TOKEN=<admin-token> в .env.example, Auth__AdminToken в docker-compose.yml; README — раздел API, привязка устройства, сценарий «утерян телефон» одной командой curl с api.example.com и плейсхолдерами, применение миграции к базе compose; запись 0032 о схеме и адресе админ-эндпоинтов. Тесты не трогают Postgres: фабрика по умолчанию подменяет IDeviceStore потокобезопасным InMemoryDeviceStore, который копит и записи аудита отзыва. Хранение хешем доказывается моделью DomovoyDbContext, собранной с UseNpgsql без соединения.",
     "rejected": [
       {
         "option": "Тесты EF-хранилища на EF InMemory, Sqlite или Testcontainers",
@@ -142,13 +142,45 @@
       {
         "option": "В ответ /auth/device добавить device_id и срок",
         "reason": "Запись 0025: эндпоинт отдаёт токен устройства и ничего больше; иное — условие пересмотра решения."
+      },
+      {
+        "option": "Раздел лимитера по CF-Connecting-IP или X-Forwarded-For",
+        "reason": "Порт api опубликован на хост (docker-compose.yml:102): запрос в обход туннеля ставит любой заголовок, каждый поддельный адрес — свой раздел, и перебор кодов уходит из-под лимита — граница 0025 не держится."
+      },
+      {
+        "option": "Лимит только неудачных обменов или раздел по коду",
+        "reason": "Встроенный RateLimiting считает запросы до исполнения эндпоинта; счёт неудач — свой лимитер вместо встроенного, выбранного владельцем, а раздел по предъявленному коду перебор не ограничивает вовсе — каждый код свой раздел."
+      },
+      {
+        "option": "Лимит pairing константой вместо Auth:PairingAttemptsPerMinute (совет, прагматик)",
+        "reason": "На перекрытии стоят фабрика тестов (1000) и тест лимита (2) — риск «общий лимитер» ниже; константа дала бы тестам общий счёт 5/мин или тестовый шов в продукте, а опция без appsettings и README закрыта таблицей синхронизации."
+      },
+      {
+        "option": "Тест, разбирающий строку curl в README и сверяющий путь со смапленным маршрутом",
+        "reason": "Критерий #13 — описание в README; разбор документации и сопоставление с EndpointDataSource ради одной строки хрупки, а переименование маршрута /api/v1 и так запрещено таблицей совместимости. Отдельного файла нет: остаётся строковая проверка ReadmeLostPhoneScenarioIsOneCurlLine в ConfigurationExampleTests — plan.sh validate требует тест на каждый проверяемый пункт приёмки, а строка в CI ловит удаление сценария и реальный хост."
+      },
+      {
+        "option": "Второй полный обход маршрутов отдельным тестом с неизвестным токеном",
+        "reason": "Дублирует обход без токена; оставлен один Theory с двумя случаями — без заголовка и с неизвестным Bearer: только второй ведёт через хранилище."
+      },
+      {
+        "option": "Тест «законный код проходит после окна лимита»",
+        "reason": "Лимитер net8 не принимает TimeProvider (в System.Threading.RateLimiting.xml ref-пака 8.0 упоминаний TimeProvider нет): тест ждал бы реальную минуту. Пополнение окна — поведение фреймворка; тест лимита проверяет, что Retry-After не больше окна."
+      },
+      {
+        "option": "Ограничение частоты на админ-маршруты",
+        "reason": "При секрете не короче 32 символов случайной строки перебор нереален; минимальная длина проверяется на старте, неудачные попытки видны в логе. Лимит на админку — второй механизм без выигрыша."
+      },
+      {
+        "option": "Аудит отзыва отдельным вызовом IAuditLog после RevokeDeviceAsync",
+        "reason": "Две операции без общей транзакции: аудит упал после отзыва — ответ 500, повторный DELETE даёт 404, запись аудита потеряна навсегда. Отзыв и аудит — одна транзакция в EfDeviceStore."
       }
     ]
   },
   "fork_card": {
     "matches_request": "Да, по решениям владельца в журнале 12.md: #12 и #13 одним PR; код привязки выпускает админ-эндпоинт под /api/v1/admin, одноразовый, с ограниченным временем жизни; доступ к админке — отдельный секрет из IConfiguration, своя Bearer-схема, без секрета закрыто; ограничение частоты /auth/device встроенным RateLimiting; аудит — таблица и рабочий EfAuditLog.WriteAsync. Расхождение с ТЗ раздела 5 (адреса /api/v1/admin/* в контракте нет) уходит записью 0032; правка самого ТЗ вне репозитория — за владельцем. Пункт #12 «токен отсутствует в артефактах клиента» непроверяем: клиента нет (#38).",
-    "alternative": "Развилка о том, как первая миграция доезжает до базы compose. Выбрано: миграцию применяет человек — по CLAUDE.md «Команды человека» (dotnet ef database update закрыт агенту); для базы в compose, порт которой наружу не опубликован, README даёт dotnet ef migrations script --idempotent в docker compose exec -T postgres psql. Владелец увидит лишний шаг после каждого обновления схемы, а до него /auth/device и все маршруты под токеном отвечают 503 auth_unavailable. Вариант Б — приложение применяет миграции само на старте (Database.MigrateAsync до RunAsync): шага у владельца нет, docker compose up на чистой машине сразу даёт рабочую привязку, но старт api начинает зависеть от доступности и прав в базе, тестовому хосту нужен выключатель миграции на старте, а применение схемы перестаёт быть действием человека — нужна запись решения. Цена Б — около 1 ч и запись в docs/decisions/.",
-    "ripple": "Греп вызывающих: DeviceTokenDefaults.SchemeName — Program.cs:44,46; MapApiV1Endpoints — Program.cs:69; new ApiError — только ApiV1Endpoints.cs:59 (переводится на ApiErrorResults); DomovoyDbContext — DatabaseProbe, EfAuditLog, EfConversationStore, EfMemoryStore, EfTokenLedger (конструкторы, модель им безразлична; DatabaseProbe.CanConnectAsync от таблиц не зависит); IAuditLog — вызывающих нет, первым становится DeviceAuthService; AgentRequestSource — AgentRequest.cs:31 и AuditEntry.cs:13, switch нет, новое значение Admin никого не ломает; FallbackPolicy и политика по умолчанию — все маршруты /api/v1 и /api/v1/health: схема по-прежнему DeviceToken, явное ограничение схемой поведение для них не меняет, а тест «каждый маршрут требует аутентификации» это закрепляет. Тесты: HealthEndpointTests.PresentedTokenIsRejected — утверждение 401 остаётся, меняется DisplayName («не реализована» перестаёт быть правдой); ApiRequiresAuthentication — без правки; AnonymousEndpointsRuleTests — набор анонимных не меняется (новых AllowAnonymous нет); ConfigurationExampleTests — новая переменная AUTH_ADMIN_TOKEN описывается в .env.example. tests/test-count.baseline растёт. Наружу: /auth/device из 501 становится 200/400/429, добавляются /api/v1/admin/*, тело 401 появляется там, где было пустым, — всё добавления, разрешённые таблицей совместимости. ast-index в worktree отвечает 0 использований (индекс не построен), ответ взят грепом.",
+    "alternative": "Развилка о том, как первая миграция доезжает до базы compose. Выбрано: миграцию применяет человек — по CLAUDE.md «Команды человека» (dotnet ef database update закрыт агенту); для базы в compose, порт которой наружу не опубликован, README даёт dotnet ef migrations script --idempotent в docker compose exec -T postgres psql. Владелец увидит лишний шаг после каждого обновления схемы, а до него /auth/device, /api/v1/admin/* и маршруты под токеном с предъявленным Bearer отвечают 503 auth_unavailable. Вариант Б — приложение применяет миграции само на старте (Database.MigrateAsync до RunAsync): шага у владельца нет, docker compose up на чистой машине сразу даёт рабочую привязку, но старт api начинает зависеть от доступности и прав в базе, тестовому хосту нужен выключатель миграции на старте, а применение схемы перестаёт быть действием человека — нужна запись решения. Цена Б — около 1 ч и запись в docs/decisions/.",
+    "ripple": "Греп вызывающих: DeviceTokenDefaults.SchemeName — Program.cs:44,46; MapApiV1Endpoints — Program.cs:69; new ApiError — только ApiV1Endpoints.cs:59 (переводится на ApiErrorResults); DomovoyDbContext — DatabaseProbe, EfAuditLog, EfConversationStore, EfMemoryStore, EfTokenLedger (конструкторы, модель им безразлична; DatabaseProbe.CanConnectAsync от таблиц не зависит); IAuditLog — вызывающих нет и не появляется: аудит отзыва пишет EfDeviceStore в транзакции отзыва общим маппингом AuditRecord.From, EfAuditLog.WriteAsync рабочий для будущих вызывающих (#16); AgentRequestSource — AgentRequest.cs:31 и AuditEntry.cs:13, switch нет, новое значение Admin никого не ломает; FallbackPolicy и политика по умолчанию — все маршруты /api/v1 и /api/v1/health: схема по-прежнему DeviceToken, явное ограничение схемой поведение для них не меняет, а тест «каждый маршрут требует аутентификации» это закрепляет; схема по умолчанию снимается — вызовов ChallengeAsync, Forbid и Results.Challenge без схемы в src нет (греп по Challenge|Forbid). Тесты: HealthEndpointTests.PresentedTokenIsRejected — утверждение 401 остаётся, меняется DisplayName («не реализована» перестаёт быть правдой); ApiRequiresAuthentication — без правки; AnonymousEndpointsRuleTests — набор анонимных не меняется (новых AllowAnonymous нет); ConfigurationExampleTests — новая переменная AUTH_ADMIN_TOKEN описывается в .env.example. tests/test-count.baseline растёт. Наружу: /auth/device из 501 становится 200/400/429, добавляются /api/v1/admin/*, тело 401 появляется там, где было пустым, — всё добавления, разрешённые таблицей совместимости. ast-index в worktree отвечает 0 использований (индекс не построен), ответ взят грепом.",
     "workaround": "Нет. Аудит отзыва укладывается в существующий AuditEntry с новым значением источника Admin — это использование модели, а не обход; форма аудита целиком остаётся за #16.",
     "council_signs": [
       "контракт API или миграция: новые маршруты /api/v1/admin/*, реализация /auth/device, тело 401; первая миграция src/Domovoy.Data/Migrations",
@@ -166,13 +198,14 @@
           "src/Domovoy.Core/Models/DeviceInfo.cs",
           "src/Domovoy.Core/Models/PairingCodeIssued.cs",
           "src/Domovoy.Core/Configuration/AuthOptions.cs",
+          "src/Domovoy.Core/Configuration/AuthOptionsValidator.cs",
           "src/Domovoy.Core/Models/AgentRequest.cs",
           "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
           "tests/Domovoy.Tests/Auth/InMemoryDeviceStore.cs",
           "tests/Domovoy.Tests/Auth/ManualTimeProvider.cs",
           "tests/Domovoy.Tests/Auth/DeviceAuthServiceTests.cs"
         ],
-        "contract": "public interface IDeviceStore { Task AddPairingCodeAsync(byte[] codeHash, DateTimeOffset createdAt, DateTimeOffset expiresAt, CancellationToken ct); Task<Guid?> RedeemPairingCodeAsync(byte[] codeHash, byte[] tokenHash, string? deviceName, DateTimeOffset now, CancellationToken ct) — атомарно, null при неверном, просроченном или погашенном коде; Task<ActiveDevice?> FindActiveDeviceAsync(byte[] tokenHash, CancellationToken ct) — revoked_at IS NULL; Task TouchLastSeenAsync(Guid id, DateTimeOffset now, CancellationToken ct); Task<IReadOnlyList<DeviceInfo>> ListDevicesAsync(CancellationToken ct) — по created_at; Task<bool> RevokeDeviceAsync(Guid id, DateTimeOffset now, CancellationToken ct) — false, если нет или уже отозвано }. Модели Core/Models: record DeviceInfo(Guid Id, string? Name, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, DateTimeOffset? RevokedAt); record ActiveDevice(Guid Id, DateTimeOffset? LastSeenAt) — в файле DeviceInfo.cs; record PairingCodeIssued(string Code, DateTimeOffset ExpiresAt). DeviceSecrets (static): NewToken() — 32 байта base64url; NewPairingCode() — 8 символов Crockford base32 верхним регистром; Hash(string) — SHA-256 UTF-8 → byte[32]; NormalizePairingCode(string) — trim, верхний регистр. DeviceAuthService (scoped, конструктор IDeviceStore, IAuditLog, IOptions<AuthOptions>, TimeProvider): IssuePairingCodeAsync → PairingCodeIssued; RedeemPairingCodeAsync(code, name) → string? token; AuthenticateAsync(token) → Guid? deviceId (и TouchLastSeen, если LastSeenAt null или старше 1 мин); ListDevicesAsync; RevokeDeviceAsync(id, requestId) → bool, при true пишет AuditEntry { Source = Admin, ToolName = \"revoke_device\", OriginalPhrase = \"\", Arguments = { device_id }, Success = true }. AuthOptions: SectionName = \"Auth\"; string AdminToken = \"\"; [Range(1,1440)] int PairingCodeLifetimeMinutes = 10; [Range(1,1000)] int PairingAttemptsPerMinute = 5. AddDomovoyCore регистрирует AuthOptions через AddValidatedOptions, DeviceAuthService scoped и TryAddSingleton(TimeProvider.System). AgentRequestSource получает значение Admin. Тестовые InMemoryDeviceStore (потокобезопасный, lock; свойство StoredHashes — все байтовые значения, попавшие в хранилище) и ManualTimeProvider (GetUtcNow из поля, Advance) — общие для срезов api и docs-config.",
+        "contract": "public interface IDeviceStore { Task AddPairingCodeAsync(byte[] codeHash, DateTimeOffset createdAt, DateTimeOffset expiresAt, CancellationToken ct); Task<Guid?> RedeemPairingCodeAsync(byte[] codeHash, byte[] tokenHash, string? deviceName, DateTimeOffset now, CancellationToken ct) — атомарно, null при неверном, просроченном или погашенном коде; Task<ActiveDevice?> FindActiveDeviceAsync(byte[] tokenHash, CancellationToken ct) — revoked_at IS NULL; Task TouchLastSeenAsync(Guid id, DateTimeOffset now, CancellationToken ct); Task<IReadOnlyList<DeviceInfo>> ListDevicesAsync(CancellationToken ct) — по created_at; Task<bool> RevokeDeviceAsync(Guid id, AuditEntry audit, DateTimeOffset now, CancellationToken ct) — отметка отзыва и запись audit атомарно; false, если нет или уже отозвано, и тогда аудит не пишется }. Модели Core/Models: record DeviceInfo(Guid Id, string? Name, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, DateTimeOffset? RevokedAt); record ActiveDevice(Guid Id, DateTimeOffset? LastSeenAt) — в файле DeviceInfo.cs; record PairingCodeIssued(string Code, DateTimeOffset ExpiresAt). DeviceSecrets (static): NewToken() — 32 байта base64url; NewPairingCode() — 8 символов Crockford base32 верхним регистром; Hash(string) — SHA-256 UTF-8 → byte[32]; NormalizePairingCode(string) — trim, верхний регистр. DeviceAuthService (scoped, конструктор IDeviceStore, IOptions<AuthOptions>, TimeProvider): IssuePairingCodeAsync → PairingCodeIssued; RedeemPairingCodeAsync(code, name) → string? token; AuthenticateAsync(token) → ActiveDevice? — только поиск, исключение хранилища пробрасывается; TouchLastSeenIfStaleAsync(ActiveDevice) — no-op, если LastSeenAt не старше 1 мин, исключение пробрасывается, ловит и логирует хендлер; ListDevicesAsync; RevokeDeviceAsync(id, requestId) → bool, передаёт хранилищу AuditEntry { Source = Admin, ToolName = \"revoke_device\", OriginalPhrase = \"\", Arguments = { device_id }, Success = true }. AuthOptions: SectionName = \"Auth\"; string AdminToken = \"\"; [Range(1,1440)] int PairingCodeLifetimeMinutes = 10; [Range(1,1000)] int PairingAttemptsPerMinute = 5. AuthOptionsValidator : IValidateOptions<AuthOptions> — AdminToken либо PlaceholderValues.IsUnset, либо длина ≥ 32, сообщение отказа называет ключ Auth:AdminToken и порог, но не значение. AddDomovoyCore регистрирует AuthOptions через AddValidatedOptions и AuthOptionsValidator singleton, DeviceAuthService scoped и TryAddSingleton(TimeProvider.System). AgentRequestSource получает значение Admin. Тестовые InMemoryDeviceStore (потокобезопасный, lock; свойство StoredHashes — все байтовые значения, попавшие в хранилище; AuditEntries — записи, переданные в RevokeDeviceAsync; выключатели FailFind и FailTouch — бросать из FindActiveDeviceAsync и TouchLastSeenAsync; счётчик FindCalls) и ManualTimeProvider (GetUtcNow из поля, Advance) — общие для срезов api и docs-config.",
         "after": []
       },
       {
@@ -188,7 +221,7 @@
           "src/Domovoy.Data/Migrations/**",
           "tests/Domovoy.Tests/Data/DeviceAuthSchemaTests.cs"
         ],
-        "contract": "EfDeviceStore : IDeviceStore (internal sealed), регистрируется в AddDomovoyData как AddScoped<IDeviceStore, EfDeviceStore>. Таблицы и колонки snake_case: devices(id uuid pk, name varchar(64) null, token_hash bytea not null unique, created_at timestamptz, last_seen_at timestamptz null, revoked_at timestamptz null); pairing_codes(id uuid pk, code_hash bytea not null unique, created_at, expires_at, used_at null, device_id uuid null); audit_entries(id bigint identity pk, occurred_at, request_id, source text — enum строкой, original_phrase, tool_name, arguments jsonb, success, error null). Колонки с открытым значением токена или кода в модели нет. Миграция одна, имя DeviceAuth, только Create*; Drop/Rename нет. Сгенерированный код миграции проходит сборку с TreatWarningsAsErrors без подавлений.",
+        "contract": "EfDeviceStore : IDeviceStore (internal sealed), регистрируется в AddDomovoyData как AddScoped<IDeviceStore, EfDeviceStore>. Таблицы и колонки snake_case: devices(id uuid pk, name varchar(64) null, token_hash bytea not null unique, created_at timestamptz, last_seen_at timestamptz null, revoked_at timestamptz null); pairing_codes(id uuid pk, code_hash bytea not null unique, created_at, expires_at, used_at null, device_id uuid null); audit_entries(id bigint identity pk, occurred_at, request_id, source text — enum строкой, original_phrase, tool_name, arguments jsonb, success, error null). Колонки с открытым значением токена или кода в модели нет. RevokeDeviceAsync: BeginTransactionAsync, условный ExecuteUpdateAsync (id = @id AND revoked_at IS NULL), при ровно одной строке — Add(AuditRecord.From(audit)) и SaveChangesAsync, затем Commit; любое исключение — откат, revoked_at не выставлен. AuditRecord.From(AuditEntry) — единственный маппинг, им же пишет EfAuditLog.WriteAsync. Миграция одна, имя DeviceAuth, только Create*; Drop/Rename нет. Сгенерированный код миграции проходит сборку с TreatWarningsAsErrors без подавлений.",
         "after": ["core"]
       },
       {
@@ -204,13 +237,12 @@
           "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
           "tests/Domovoy.Tests/DomovoyApiFactory.cs",
           "tests/Domovoy.Tests/HealthEndpointTests.cs",
-          "tests/Domovoy.Tests/Auth/RecordingAuditLog.cs",
           "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
           "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
           "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
           "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs"
         ],
-        "contract": "DeviceTokenDefaults: SchemeName = \"DeviceToken\", AdminSchemeName = \"AdminToken\", AdminPolicyName = \"admin\", PairingRateLimitPolicy = \"pairing\". Маршруты и тела — как в подходе; коды ошибок в ApiErrorResults: unauthorized, forbidden, rate_limited, invalid_pairing_code, invalid_request, device_not_found, auth_unavailable, not_implemented. ApiErrorResults.Write(HttpContext, status, code, message) и ApiErrorResults.Result(status, code, message) — единственный писатель { error: { code, message } }. AdminEndpoints.MapAdminEndpoints(app) зовётся из Program.cs рядом с MapApiV1Endpoints. DomovoyApiFactory по умолчанию: ConfigureTestServices заменяет IDeviceStore на InMemoryDeviceStore (singleton на фабрику, доступен тестам свойством Store), IAuditLog на RecordingAuditLog (свойство AuditLog); RepositoryOverrides добавляет Auth:PairingAttemptsPerMinute = 1000, чтобы общий лимитер класса тестов не срабатывал вне теста лимита; Auth:AdminToken фабрика не задаёт — тесты, которым нужен админ, задают пробное значение через WithWebHostBuilder. Конфигурация Auth не читается до Build (DomovoyApiFactory.cs:25–26: прочитанное Program.cs до Build фабрика не перекрывает): фабрика раздела лимитера берёт IOptions<AuthOptions> из HttpContext.RequestServices, AdminTokenAuthenticationHandler читает секрет через IOptionsMonitor<AuthOptions> на каждом запросе — иначе перекрытия тестов (лимит 2, лимит 1000, пустой секрет) до них не дойдут. Срез ждёт от docs-config только ключи конфигурации Auth:*, и те читаются через AuthOptions из core.",
+        "contract": "DeviceTokenDefaults: SchemeName = \"DeviceToken\", AdminSchemeName = \"AdminToken\", AdminPolicyName = \"admin\", PairingRateLimitPolicy = \"pairing\". Маршруты и тела — как в подходе; коды ошибок в ApiErrorResults: unauthorized, forbidden, rate_limited, invalid_pairing_code, invalid_request, device_not_found, auth_unavailable, not_implemented. ApiErrorResults.Write(HttpContext, status, code, message) и ApiErrorResults.Result(status, code, message) — единственный писатель { error: { code, message } }. Program.cs: AddAuthentication() без схемы по умолчанию; DefaultPolicy и FallbackPolicy — new AuthorizationPolicyBuilder(SchemeName).RequireAuthenticatedUser(), админ-политика — AdminSchemeName. DeviceTokenAuthenticationHandler: IAllowAnonymous на эндпоинте → NoResult; сбой AuthenticateAsync сервиса → Fail(DeviceStoreUnavailableException), HandleChallengeAsync по закэшированному результату пишет 503 auth_unavailable или 401 unauthorized; сбой TouchLastSeenIfStaleAsync → Warning с id устройства, Success. Эндпоинты /auth/device и /admin/* ловят сбой хранилища (кроме OperationCanceledException) — 503 auth_unavailable. OnRejected лимитера пишет 429 с Retry-After из метаданных аренды и Warning без тела запроса. AdminEndpoints.MapAdminEndpoints(app) зовётся из Program.cs рядом с MapApiV1Endpoints. DomovoyApiFactory по умолчанию: ConfigureTestServices заменяет IDeviceStore на InMemoryDeviceStore (singleton на фабрику, доступен тестам свойством Store); RepositoryOverrides добавляет Auth:PairingAttemptsPerMinute = 1000, чтобы общий лимитер класса тестов не срабатывал вне теста лимита; Auth:AdminToken фабрика не задаёт — тесты, которым нужен админ, задают пробное значение не короче 32 символов и без маркеров PlaceholderValues через WithWebHostBuilder. Конфигурация Auth не читается до Build (DomovoyApiFactory.cs:25–26: прочитанное Program.cs до Build фабрика не перекрывает): фабрика раздела лимитера берёт IOptions<AuthOptions> из HttpContext.RequestServices, AdminTokenAuthenticationHandler читает секрет через IOptionsMonitor<AuthOptions> на каждом запросе — иначе перекрытия тестов (лимит 2, лимит 1000, пустой секрет) до них не дойдут. Срез ждёт от docs-config только ключи конфигурации Auth:*, и те читаются через AuthOptions из core.",
         "after": ["core"]
       },
       {
@@ -220,13 +252,12 @@
           ".env.example",
           "docker-compose.yml",
           "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
-          "tests/Domovoy.Tests/Auth/LostPhoneReadmeTests.cs",
           "README.md",
           "docs/decisions/0032-admin-endpoints-shared-secret.md",
           "docs/decisions/README.md",
           "tests/test-count.baseline"
         ],
-        "contract": "Ключи: appsettings.json — секция \"Auth\": { \"AdminToken\": \"\", \"PairingCodeLifetimeMinutes\": 10, \"PairingAttemptsPerMinute\": 5 }; .env.example — AUTH_ADMIN_TOKEN=<admin-token> с комментарием «случайная строка, только на целевой машине; пусто или плейсхолдер — админ-эндпоинты закрыты»; docker-compose.yml, сервис api — Auth__AdminToken: ${AUTH_ADMIN_TOKEN}. SecretSettingPaths дополняется Auth:AdminToken. README: раздел API переписан под рабочую аутентификацию; подраздел привязки устройства (выпуск кода админом → обмен на токен); сценарий «утерян телефон» — одна строка curl -X DELETE -H \"Authorization: Bearer <admin-token>\" https://api.example.com/api/v1/admin/devices/<device-id>, перед ней — как узнать <device-id> из GET /api/v1/admin/devices; применение миграции к базе compose. LostPhoneReadmeTests находит в README строку с curl -X DELETE, проверяет хост api.example.com, плейсхолдеры в угловых скобках и что путь соответствует смапленному маршруту DELETE /api/v1/admin/devices/{id:guid}. Запись 0032: схема и адрес админ-эндпоинтов, расходится с разделом 5 ТЗ; строка в docs/decisions/README.md. test-count.baseline — число, которое печатает scripts/test-count-invariant.sh после склейки всех срезов.",
+        "contract": "Ключи: appsettings.json — секция \"Auth\": { \"AdminToken\": \"\", \"PairingCodeLifetimeMinutes\": 10, \"PairingAttemptsPerMinute\": 5 }; .env.example — AUTH_ADMIN_TOKEN=<admin-token> с комментарием «случайная строка не короче 32 символов, например openssl rand -base64 32, только на целевой машине; пусто или плейсхолдер — админ-эндпоинты закрыты, короче 32 — api не стартует»; docker-compose.yml, сервис api — Auth__AdminToken: ${AUTH_ADMIN_TOKEN}. SecretSettingPaths дополняется Auth:AdminToken. README: раздел API переписан под рабочую аутентификацию; подраздел привязки устройства (выпуск кода админом → обмен на токен); сценарий «утерян телефон» — одна строка curl -X DELETE -H \"Authorization: Bearer <admin-token>\" https://api.example.com/api/v1/admin/devices/<device-id>, перед ней — как узнать <device-id> из GET /api/v1/admin/devices; применение миграции к базе compose. В README ровно одна строка с curl -X DELETE — её проверяет строковый тест ReadmeLostPhoneScenarioIsOneCurlLine в ConfigurationExampleTests. Запись 0032: схема и адрес админ-эндпоинтов, расходится с разделом 5 ТЗ; строка в docs/decisions/README.md. test-count.baseline — число, которое печатает scripts/test-count-invariant.sh после склейки всех срезов.",
         "after": ["data", "api"]
       }
     ],
@@ -242,7 +273,7 @@
     {
       "path": "src/Domovoy.Core/Auth/DeviceAuthService.cs",
       "action": "create",
-      "why": "Логика привязки, аутентификации, списка и отзыва: генерация, хеширование, срок жизни кода, обновление last_seen, запись аудита отзыва."
+      "why": "Логика привязки, аутентификации, списка и отзыва: генерация, хеширование, срок жизни кода, обновление last_seen, запись аудита отзыва, передаваемая хранилищу вместе с отзывом."
     },
     {
       "path": "src/Domovoy.Core/Auth/DeviceSecrets.cs",
@@ -263,6 +294,11 @@
       "path": "src/Domovoy.Core/Configuration/AuthOptions.cs",
       "action": "create",
       "why": "Секция Auth: админ-секрет, срок жизни кода, лимит попыток обмена."
+    },
+    {
+      "path": "src/Domovoy.Core/Configuration/AuthOptionsValidator.cs",
+      "action": "create",
+      "why": "Форма админ-секрета: не настроен или не короче 32 символов; короткий — отказ старта без значения в сообщении."
     },
     {
       "path": "src/Domovoy.Core/Models/AgentRequest.cs",
@@ -297,12 +333,12 @@
     {
       "path": "src/Domovoy.Data/EfDeviceStore.cs",
       "action": "create",
-      "why": "EF-реализация IDeviceStore с атомарным погашением кода условным UPDATE в транзакции."
+      "why": "EF-реализация IDeviceStore: атомарное погашение кода условным UPDATE в транзакции; отзыв и строка аудита — одной транзакцией."
     },
     {
       "path": "src/Domovoy.Data/EfAuditLog.cs",
       "action": "modify",
-      "why": "Заглушка заменяется вставкой строки audit_entries (решение владельца: минимальная запись)."
+      "why": "Заглушка заменяется вставкой строки audit_entries через общий маппинг AuditRecord.From (решение владельца: минимальная запись, рабочий WriteAsync)."
     },
     {
       "path": "src/Domovoy.Data/DataServiceCollectionExtensions.cs",
@@ -317,12 +353,12 @@
     {
       "path": "src/Domovoy.Api/Program.cs",
       "action": "modify",
-      "why": "Вторая схема, политика по умолчанию и FallbackPolicy с явной схемой DeviceToken, админ-политика, AddRateLimiter и UseRateLimiter, MapAdminEndpoints."
+      "why": "Вторая схема, снятие схемы по умолчанию, политика по умолчанию и FallbackPolicy с явной схемой DeviceToken, админ-политика, AddRateLimiter и UseRateLimiter, MapAdminEndpoints."
     },
     {
       "path": "src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs",
       "action": "modify",
-      "why": "Настоящая проверка токена через DeviceAuthService; 401 и 403 в едином формате; сбой хранилища — 503 auth_unavailable."
+      "why": "Настоящая проверка токена через DeviceAuthService; 401 и 403 в едином формате; сбой хранилища — Fail своего типа и 503 auth_unavailable из challenge; анонимные маршруты — NoResult без обращения к хранилищу."
     },
     {
       "path": "src/Domovoy.Api/Security/DeviceTokenDefaults.cs",
@@ -357,7 +393,7 @@
     {
       "path": "tests/Domovoy.Tests/DomovoyApiFactory.cs",
       "action": "modify",
-      "why": "По умолчанию подменяет IDeviceStore и IAuditLog фейками и поднимает лимит pairing — тесты не ходят в Postgres и не упираются в общий лимитер."
+      "why": "По умолчанию подменяет IDeviceStore фейком и поднимает лимит pairing — тесты не ходят в Postgres и не упираются в общий лимитер."
     },
     {
       "path": "tests/Domovoy.Tests/HealthEndpointTests.cs",
@@ -367,17 +403,12 @@
     {
       "path": "tests/Domovoy.Tests/Auth/InMemoryDeviceStore.cs",
       "action": "create",
-      "why": "Потокобезопасный фейк IDeviceStore для тестов сервиса и API, с доступом к сохранённым хешам."
+      "why": "Потокобезопасный фейк IDeviceStore для тестов сервиса и API: сохранённые хеши, записи аудита отзыва, выключатели сбоя поиска и обновления, счётчик поиска."
     },
     {
       "path": "tests/Domovoy.Tests/Auth/ManualTimeProvider.cs",
       "action": "create",
       "why": "Управляемое время для проверки срока жизни кода и частоты обновления last_seen — без пакета Microsoft.Extensions.TimeProvider.Testing."
-    },
-    {
-      "path": "tests/Domovoy.Tests/Auth/RecordingAuditLog.cs",
-      "action": "create",
-      "why": "Фейк IAuditLog, копящий записи для проверки аудита отзыва."
     },
     {
       "path": "tests/Domovoy.Tests/Auth/DeviceAuthServiceTests.cs",
@@ -387,17 +418,17 @@
     {
       "path": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
       "action": "create",
-      "why": "Привязка и отзыв через HTTP, единый формат ошибок, лимит частоты, сбой хранилища."
+      "why": "Привязка и отзыв через HTTP, единый формат ошибок, лимит частоты, сбой хранилища, хранилище не трогается вне маршрутов устройства."
     },
     {
       "path": "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
       "action": "create",
-      "why": "Разделение схем: токен устройства на админке и админ-секрет на маршрутах устройства — 401; без секрета админка закрыта."
+      "why": "Разделение схем: токен устройства на админке и админ-секрет на маршрутах устройства — 401; без секрета админка закрыта; короткий секрет — отказ старта."
     },
     {
       "path": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
       "action": "create",
-      "why": "Поведенческий обход всех зарегистрированных маршрутов: без токена — 401 в едином формате, кроме /health и /auth/device."
+      "why": "Поведенческий обход всех зарегистрированных маршрутов: без токена и с неизвестным токеном — 401 в едином формате, кроме /health и /auth/device."
     },
     {
       "path": "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs",
@@ -427,12 +458,7 @@
     {
       "path": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
       "action": "modify",
-      "why": "Auth:AdminToken в SecretSettingPaths — заполненный секрет в appsettings.json роняет тест."
-    },
-    {
-      "path": "tests/Domovoy.Tests/Auth/LostPhoneReadmeTests.cs",
-      "action": "create",
-      "why": "Сценарий «утерян телефон» в README — одна команда curl с плейсхолдерами, путь которой совпадает со смапленным маршрутом отзыва."
+      "why": "Auth:AdminToken в SecretSettingPaths — заполненный секрет в appsettings.json роняет тест; строковая проверка сценария «утерян телефон» в README."
     },
     {
       "path": "README.md",
@@ -499,7 +525,7 @@
       "file": "tests/Domovoy.Tests/Auth/DeviceAuthServiceTests.cs",
       "new": true,
       "covers": ["A13-audit"],
-      "behavior": "Успешный отзыв пишет ровно одну AuditEntry с Source = Admin, ToolName = revoke_device и device_id в Arguments; ни одно поле записи не содержит значения токена. Отзыв неизвестного устройства аудит не пишет."
+      "behavior": "Успешный отзыв передаёт хранилищу ровно одну AuditEntry (InMemoryDeviceStore.AuditEntries) с Source = Admin, ToolName = revoke_device и device_id в Arguments; ни одно поле записи не содержит значения токена. Отзыв неизвестного устройства аудит не пишет."
     },
     {
       "name": "LastSeenIsTouchedAtMostOncePerMinute",
@@ -527,7 +553,7 @@
       "file": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
       "new": true,
       "covers": ["A12-ratelimit"],
-      "behavior": "С Auth:PairingAttemptsPerMinute = 2 третий обмен в окне — 429 rate_limited в едином формате с заголовком Retry-After, даже если код верный."
+      "behavior": "С Auth:PairingAttemptsPerMinute = 2 третий обмен в окне — 429 rate_limited в едином формате с заголовком Retry-After от 1 до 60 секунд — отказ ограничен окном, даже если код верный."
     },
     {
       "name": "RevokedTokenIsRejectedOnNextRequest",
@@ -541,14 +567,28 @@
       "file": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
       "new": true,
       "covers": ["A12-unauthorized"],
-      "behavior": "Хранилище, бросающее исключение с маркерным текстом, даёт на запрос с Bearer 503 auth_unavailable; маркера нет ни в теле, ни в заголовках; без заголовка Authorization тот же маршрут — 401, а не 503."
+      "behavior": "InMemoryDeviceStore с FailFind, бросающий исключение с маркерным текстом: запрос с Bearer на /api/v1/state — 503, тело разбирается как один JSON-объект { error: { code: auth_unavailable, message } } (двойной записи нет, исключение до клиента TestServer не дошло), WWW-Authenticate нет; маркера нет ни в теле, ни в заголовках; без заголовка Authorization тот же маршрут — 401, а не 503."
+    },
+    {
+      "name": "DeviceStoreIsNotQueriedOutsideDeviceRoutes",
+      "file": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "new": true,
+      "covers": ["A12-unauthorized"],
+      "behavior": "InMemoryDeviceStore с FailFind: GET /health с Bearer даёт тот же статус, что без заголовка; POST /api/v1/auth/device с Bearer и неизвестным кодом — 400 invalid_pairing_code; GET /api/v1/admin/devices с админ-секретом — 200. FindCalls после трёх запросов — 0: ни анонимные маршруты, ни аутентификация админа хранилище устройств за токеном не зовут."
+    },
+    {
+      "name": "TouchFailureKeepsRequestAuthenticated",
+      "file": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "new": true,
+      "covers": ["A13-list"],
+      "behavior": "InMemoryDeviceStore с FailTouch: первый запрос привязанного устройства на /api/v1/state — 501 (аутентифицирован), а не 503 и не 401: сбой обновления last_seen запрос не роняет."
     },
     {
       "name": "AdminListsDevicesAndRevokesOne",
       "file": "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
       "new": true,
       "covers": ["A13-list", "A13-revoke"],
-      "behavior": "Два привязанных устройства, одно сделало запрос; GET /api/v1/admin/devices отдаёт оба с id и name, у обратившегося last_seen_at не null; DELETE одного — 204, второе продолжает получать 501, повторный DELETE того же — 404 device_not_found, RecordingAuditLog содержит одну запись."
+      "behavior": "Два привязанных устройства, одно сделало запрос; GET /api/v1/admin/devices отдаёт оба с id и name, у обратившегося last_seen_at не null; DELETE одного — 204, второе продолжает получать 501, повторный DELETE того же — 404 device_not_found, Store.AuditEntries содержит одну запись."
     },
     {
       "name": "DeviceTokenIsRejectedOnAdminRoutes",
@@ -565,6 +605,13 @@
       "behavior": "Настроенный админ-секрет как Bearer на /api/v1/state и /api/v1/health — 401: админ не становится устройством."
     },
     {
+      "name": "AdminTokenShorterThanMinimumFailsStartup",
+      "file": "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
+      "new": true,
+      "covers": ["A13-admin-access"],
+      "behavior": "Хост с Auth:AdminToken из 31 символа без маркеров плейсхолдера не стартует: CreateClient бросает OptionsValidationException, сообщение называет Auth:AdminToken и не содержит значения; то же значение в 32 символа — хост стартует, <admin-token> — стартует с закрытой админкой."
+    },
+    {
       "name": "AdminRoutesClosedWhenSecretIsUnset",
       "file": "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
       "new": true,
@@ -572,18 +619,11 @@
       "behavior": "При Auth:AdminToken пустом, равном <admin-token> и равном change-me любой Bearer, включая сами эти строки, на админ-маршрутах — 401."
     },
     {
-      "name": "EveryNonAnonymousRouteRejectsMissingToken",
+      "name": "EveryNonAnonymousRouteRejectsMissingOrUnknownToken",
       "file": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
       "new": true,
       "covers": ["A12-all-routes", "A12-unauthorized"],
-      "behavior": "Обходит EndpointDataSource собранного приложения; для каждого RouteEndpoint и каждого его метода (без метода — GET и POST), кроме GET /health и POST /api/v1/auth/device, подставляет параметры маршрута (guid) и шлёт запрос без Authorization: ответ 401 и тело { error: { code: unauthorized, message } }. Положительный контроль: в обходе есть /api/v1/chat, /api/v1/health и /api/v1/admin/devices — пустой обход не проходит."
-    },
-    {
-      "name": "EveryNonAnonymousRouteRejectsUnknownToken",
-      "file": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
-      "new": true,
-      "covers": ["A12-all-routes", "A12-unauthorized"],
-      "behavior": "Тот же обход с Bearer неизвестного токена: каждый маршрут — 401 в едином формате."
+      "behavior": "Theory с двумя случаями — без Authorization и с Bearer неизвестного токена. Обходит EndpointDataSource собранного приложения; для каждого RouteEndpoint и каждого его метода (без метода — GET и POST), кроме GET /health и POST /api/v1/auth/device, подставляет параметры маршрута (guid) и шлёт запрос: ответ 401 и тело { error: { code: unauthorized, message } }. Положительный контроль: в обходе есть /api/v1/chat, /api/v1/health и /api/v1/admin/devices — пустой обход не проходит."
     },
     {
       "name": "AnonymousRoutesAreExactlyHealthAndPairing",
@@ -614,18 +654,18 @@
       "behavior": "GenerateCreateScript() содержит CREATE TABLE audit_entries с колонками source (text), arguments (jsonb), occurred_at — EfAuditLog пишет в существующую таблицу, а enum хранится строкой."
     },
     {
-      "name": "LostPhoneScenarioIsOneCurlCommandWithPlaceholders",
-      "file": "tests/Domovoy.Tests/Auth/LostPhoneReadmeTests.cs",
-      "new": true,
-      "covers": ["A13-readme"],
-      "behavior": "В README ровно одна строка с curl -X DELETE; хост — api.example.com, токен и идентификатор — плейсхолдеры в угловых скобках; путь этой строки сопоставляется со смапленным маршрутом DELETE /api/v1/admin/devices/{id:guid} собранного приложения — переименование маршрута роняет тест."
-    },
-    {
       "name": "AppSettingsCarryNoSecrets",
       "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
       "new": false,
       "covers": ["A13-admin-access"],
       "behavior": "Существующий AppSettingsCarryNoSecrets с Auth:AdminToken в SecretSettingPaths: заполненный админ-секрет в appsettings.json роняет тест. Меняется только список ключей."
+    },
+    {
+      "name": "ReadmeLostPhoneScenarioIsOneCurlLine",
+      "file": "tests/Domovoy.Tests/ConfigurationExampleTests.cs",
+      "new": true,
+      "covers": ["A13-readme"],
+      "behavior": "Строковая проверка README без сборки приложения и без разбора маршрутов: строк с curl -X DELETE ровно одна, в ней api.example.com, <admin-token>, <device-id> и /api/v1/admin/devices/. Удаление сценария, вторая команда или реальный хост вместо плейсхолдера роняют тест."
     },
     {
       "name": "PresentedTokenIsRejected",
@@ -645,8 +685,8 @@
     {
       "id": "A12-unauthorized",
       "criterion": "#12: все прочие эндпоинты без валидного Bearer-токена отвечают 401 в едином формате { error: { code, message, details? } }.",
-      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthentication|FullyQualifiedName~HealthEndpointTests\" — все проходят.",
-      "evidence": "Зелёные EveryNonAnonymousRouteRejectsMissingToken и EveryNonAnonymousRouteRejectsUnknownToken: каждый маршрут проверен на 401 и форму тела; число проверенных пар метод+путь — в сообщении теста."
+      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthentication|FullyQualifiedName~HealthEndpointTests|FullyQualifiedName~DeviceAuthEndpointTests\" — все проходят.",
+      "evidence": "Зелёные оба случая EveryNonAnonymousRouteRejectsMissingOrUnknownToken: каждый маршрут проверен на 401 и форму тела без токена и с неизвестным токеном; число проверенных пар метод+путь — в сообщении теста. Зелёные StoreFailureYields503WithoutExceptionText и DeviceStoreIsNotQueriedOutsideDeviceRoutes."
     },
     {
       "id": "A12-hash",
@@ -669,14 +709,14 @@
     {
       "id": "A12-all-routes",
       "criterion": "#12: тест подтверждает, что каждый зарегистрированный маршрут, кроме явно перечисленных анонимных (/health, /auth/device), требует аутентификации.",
-      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthenticationTests\" — проходит; ручная проба: временно повесить .AllowAnonymous() на GET /api/v1/state — краснеют EveryNonAnonymousRouteRejectsMissingToken и AnonymousRoutesAreExactlyHealthAndPairing (правка не коммитится). Снятие RequireAuthorization с группы пробой не годится: маршруты подхватывает FallbackPolicy, и тест законно остаётся зелёным.",
-      "evidence": "Зелёные EveryNonAnonymousRouteRejectsMissingToken и AnonymousRoutesAreExactlyHealthAndPairing; красный прогон пробы с GET /api/v1/state в сообщении — строкой в журнале задачи."
+      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthenticationTests\" — проходит; ручная проба: временно повесить .AllowAnonymous() на GET /api/v1/state — краснеют EveryNonAnonymousRouteRejectsMissingOrUnknownToken и AnonymousRoutesAreExactlyHealthAndPairing (правка не коммитится). Снятие RequireAuthorization с группы пробой не годится: маршруты подхватывает FallbackPolicy, и тест законно остаётся зелёным.",
+      "evidence": "Зелёные EveryNonAnonymousRouteRejectsMissingOrUnknownToken и AnonymousRoutesAreExactlyHealthAndPairing; красный прогон пробы с GET /api/v1/state в сообщении — строкой в журнале задачи."
     },
     {
       "id": "A12-ratelimit",
       "criterion": "Решение владельца (журнал 12.md): ограничение частоты /auth/device встроенным RateLimiting — вторая мера границы записи 0025.",
       "method": "dotnet test --filter \"FullyQualifiedName~PairingAttemptsBeyondLimitGet429\" — проходит; grep -n RateLimiting Directory.Packages.props — пусто (пакета нет).",
-      "evidence": "Зелёный PairingAttemptsBeyondLimitGet429; пустой вывод grep по Directory.Packages.props."
+      "evidence": "Зелёный PairingAttemptsBeyondLimitGet429 (429 с Retry-After в пределах окна); пустой вывод grep по Directory.Packages.props."
     },
     {
       "id": "A13-revoke",
@@ -687,8 +727,8 @@
     {
       "id": "A13-list",
       "criterion": "#13: админ-эндпоинт возвращает список привязанных устройств с датой последнего обращения.",
-      "method": "dotnet test --filter \"FullyQualifiedName~AdminListsDevicesAndRevokesOne|FullyQualifiedName~LastSeenIsTouched\" — проходят.",
-      "evidence": "Зелёные AdminListsDevicesAndRevokesOne (last_seen_at не null у обратившегося) и LastSeenIsTouchedAtMostOncePerMinute."
+      "method": "dotnet test --filter \"FullyQualifiedName~AdminListsDevicesAndRevokesOne|FullyQualifiedName~LastSeenIsTouched|FullyQualifiedName~TouchFailureKeepsRequestAuthenticated\" — проходят.",
+      "evidence": "Зелёные AdminListsDevicesAndRevokesOne (last_seen_at не null у обратившегося), LastSeenIsTouchedAtMostOncePerMinute и TouchFailureKeepsRequestAuthenticated."
     },
     {
       "id": "A13-next-request",
@@ -705,14 +745,14 @@
     {
       "id": "A13-readme",
       "criterion": "#13: сценарий «утерян телефон» описан в README одной командой curl с плейсхолдерами вместо реального имени хоста.",
-      "method": "dotnet test --filter \"FullyQualifiedName~LostPhoneReadmeTests\" — проходит; gitleaks dir . --redact --no-banner — чисто.",
-      "evidence": "Зелёный LostPhoneScenarioIsOneCurlCommandWithPlaceholders; цитата строки curl из README.md файл:строка; чистый вывод gitleaks (правило domovoy-real-hostname)."
+      "method": "dotnet test --filter \"FullyQualifiedName~ReadmeLostPhoneScenarioIsOneCurlLine\" — проходит; grep -n \"curl -X DELETE\" README.md — ровно одна строка, в ней api.example.com, <admin-token> и <device-id>, путь /api/v1/admin/devices/; gitleaks dir . --redact --no-banner — чисто; ревью диффа сверяет путь строки с маршрутом в AdminEndpoints.cs.",
+      "evidence": "Зелёный ReadmeLostPhoneScenarioIsOneCurlLine; вывод grep из одной строки — цитата README.md:строка; чистый вывод gitleaks (правило domovoy-real-hostname)."
     },
     {
       "id": "A13-admin-access",
       "criterion": "Решение владельца (журнал 12.md): доступ к админ-эндпоинтам — отдельный админ-секрет из IConfiguration, своя Bearer-схема; без настроенного секрета админ-эндпоинты закрыты; схема и адрес — записью в docs/decisions/.",
       "method": "dotnet test --filter \"FullyQualifiedName~AdminEndpointTests|FullyQualifiedName~ConfigurationExampleTests\" — проходят; ls docs/decisions/0032-*.md — файл есть, строка 0032 в docs/decisions/README.md.",
-      "evidence": "Зелёные DeviceTokenIsRejectedOnAdminRoutes, AdminSecretIsRejectedOnDeviceRoutes, AdminRoutesClosedWhenSecretIsUnset, AppSettingsCarryNoSecrets; путь записи 0032."
+      "evidence": "Зелёные DeviceTokenIsRejectedOnAdminRoutes, AdminSecretIsRejectedOnDeviceRoutes, AdminTokenShorterThanMinimumFailsStartup, AdminRoutesClosedWhenSecretIsUnset, AppSettingsCarryNoSecrets; путь записи 0032."
     }
   ],
   "risks": [
@@ -734,7 +774,7 @@
     },
     {
       "risk": "До применения миграции владельцем все маршруты под токеном отвечают 503: таблицы devices нет.",
-      "mitigation": "Хендлер отдаёт явный 503 auth_unavailable вместо 500; README в разделе обновления называет команду применения миграции к базе compose; ci-heavy этого не задевает — healthy api проверяется по анонимному /health, который от таблиц не зависит. Альтернатива с миграцией на старте — в карточке развилки, решает владелец."
+      "mitigation": "Хендлер отдаёт явный 503 auth_unavailable из challenge вместо 500, анонимный /health хранилище не трогает; README в разделе обновления называет команду применения миграции к базе compose; ci-heavy этого не задевает — healthy api проверяется по анонимному /health, который от таблиц не зависит. Альтернатива с миграцией на старте — в карточке развилки, решает владелец."
     },
     {
       "risk": "Общий лимитер pairing один на хост тестов класса: тесты, обменивающие коды, упрутся в лимит 5/мин и станут нестабильными.",
@@ -747,6 +787,22 @@
     {
       "risk": "Тест логов на статическом Log.Logger Serilog перехватывает события параллельных хостов и даёт ложный зелёный или ложный красный.",
       "mitigation": "DeviceTokenLoggingTests в непараллельной коллекции OutboundHttpLoggingSerialGroup и с положительным контролем — события своих запросов в sink обязаны быть."
+    },
+    {
+      "risk": "Общий раздел лимитера pairing: тот, кто прошёл внешний периметр, шлёт 5 мусорных обменов в минуту и откладывает законную привязку владельца, пока шлёт.",
+      "mitigation": "Принятый компромисс, не развилка — следует из записи 0025 («Перебор кодов обязан упираться в лимит обращений к эндпоинту»), раздел по подделываемому заголовку эту границу снимает. Аноним сперва проходит Cloudflare Access (0025, «Внешний периметр»); отказ ограничен окном — 429 с Retry-After, проверено тестом; каждый отказ — Warning в лог, владелец видит перебор; привязка редкая, код живёт 10 минут и перевыпускается. Компромисс уходит в запись 0032 и в «Выбрано и отвергнуто» тела PR."
+    },
+    {
+      "risk": "Короткий или угадываемый Auth:AdminToken подбирается через публичный вход: подбор даёт выпуск кодов, список устройств и отзыв.",
+      "mitigation": "AuthOptionsValidator отказывает в старте при настроенном секрете короче 32 символов (AdminTokenShorterThanMinimumFailsStartup); .env.example называет способ генерации; неудачные попытки — Warning без значения; сравнение за постоянное время. Плейсхолдер на примере — админка закрыта, compose up поднимается."
+    },
+    {
+      "risk": "Атомарность отзыва и аудита тестами не доказана: фейк хранилища транзакции Postgres не исполняет.",
+      "mitigation": "Отзыв и вставка аудита — одна транзакция EfDeviceStore с одним SaveChanges после условного ExecuteUpdate; ревью диффа сверяет именно это выражение, как у погашения кода; владелец на живом стеке после отзыва видит строку revoke_device в audit_entries (A13-audit)."
+    },
+    {
+      "risk": "Снятие схемы по умолчанию: вызов ChallengeAsync, Forbid или Results.Challenge без схемы бросит InvalidOperationException.",
+      "mitigation": "Сейчас таких вызовов в src нет (греп Challenge|Forbid); обход всех маршрутов без токена и с неизвестным токеном (EveryNonAnonymousRouteRejectsMissingOrUnknownToken) получает 401 через challenge схемы политики на каждом маршруте — исключение уронило бы тест."
     },
     {
       "risk": "Ломающее изменение контракта /api/v1.",
