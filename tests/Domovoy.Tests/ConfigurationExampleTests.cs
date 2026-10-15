@@ -30,6 +30,7 @@ public sealed class ConfigurationExampleTests
 
     private static readonly string[] SecretSettingPaths =
     [
+        "Auth:AdminToken",
         "Ha:Token",
         "Llm:ApiKey",
         "Ntfy:Topic",

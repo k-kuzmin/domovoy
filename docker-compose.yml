@@ -73,6 +73,8 @@ services:
       ConnectionStrings__Domovoy: >-
         Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
 
+      Auth__AdminToken: ${AUTH_ADMIN_TOKEN}
+
       Ha__BaseUrl: ${HA_BASE_URL}
       Ha__Token: ${HA_TOKEN}
       Ha__EntityRegistryPath: config/entities.yaml
