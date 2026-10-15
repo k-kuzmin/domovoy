@@ -824,6 +824,13 @@ curl -X DELETE -H "Authorization: Bearer <admin-token>" https://api.example.com/
 на `GET /api/v1/health` под Bearer-токеном: публичный домен индексируется и
 сканируется, состав компонентов наружу не отдаётся.
 
+Ограничение: токен устройства проверяется по базе, поэтому при недоступной
+базе `GET /api/v1/health` отвечает `503` `auth_unavailable`, а не отчётом
+о компонентах — раздельного статуса БД в этот момент не получить. Анонимный
+`/health` отдаёт лишь общее слово состояния; причину называет предупреждение
+в логе «Хранилище устройств недоступно»
+([0032](docs/decisions/0032-admin-endpoints-shared-secret.md), «Следствия»).
+
 Home Assistant в подробном ответе — два поля: `components.ha` — REST
 (`GET api/` с токеном), `components.ha_websocket` — постоянное
 WebSocket-соединение с подпиской на `state_changed`. Состояния
