@@ -83,6 +83,16 @@ public static class ApiV1Endpoints
                 $"Имя устройства длиннее {MaxDeviceNameLength} символов.");
         }
 
+        // PostgreSQL не принимает U+0000 в text: без этой проверки такое имя
+        // доходило бы до базы и возвращалось 503 вместо ошибки запроса.
+        if (request.Name is not null && request.Name.Any(char.IsControl))
+        {
+            return ApiErrorResults.Result(
+                StatusCodes.Status400BadRequest,
+                ApiErrorResults.InvalidRequest,
+                "Имя устройства содержит управляющие символы.");
+        }
+
         string? token;
         try
         {

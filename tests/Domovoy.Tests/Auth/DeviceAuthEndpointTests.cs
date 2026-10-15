@@ -231,6 +231,27 @@ public sealed class DeviceAuthEndpointTests : IClassFixture<DomovoyApiFactory>
 
         accepted.StatusCode.Should().Be(HttpStatusCode.OK, "отклонённый запрос код не погасил");
     }
+
+    [Theory(DisplayName = "Управляющий символ в имени устройства — 400 invalid_request, код не тратится")]
+    [InlineData("phone\u0000")]
+    [InlineData("pho\nne")]
+    [InlineData("\u007f")]
+    public async Task PairingWithControlCharacterInNameIsInvalidRequest(string name)
+    {
+        using WebApplicationFactory<Program> host = AuthTestApi.WithAdmin(_factory);
+        using HttpClient client = host.CreateClient();
+        string code = await AuthTestApi.IssueCodeAsync(client);
+
+        using (HttpResponseMessage rejected = await AuthTestApi.RedeemAsync(client, code, name))
+        {
+            rejected.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            (await AuthTestApi.ReadErrorCodeAsync(rejected)).Should().Be("invalid_request");
+        }
+
+        using HttpResponseMessage accepted = await AuthTestApi.RedeemAsync(client, code, "phone");
+
+        accepted.StatusCode.Should().Be(HttpStatusCode.OK, "отклонённый запрос код не погасил");
+    }
 }
 
 /// <summary>Общие шаги тестов привязки и админ-эндпоинтов.</summary>

@@ -780,8 +780,8 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
    curl -s -X POST -H "Authorization: Bearer <admin-token>" https://api.example.com/api/v1/admin/pairing-codes
    ```
 
-2. Устройство обменивает код на токен. `name` необязателен и не длиннее 64
-   символов:
+2. Устройство обменивает код на токен. `name` необязателен, не длиннее 64
+   символов и без управляющих символов:
 
    ```bash
    curl -s -X POST -H "Content-Type: application/json" \
@@ -792,8 +792,9 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
    Ответ — `200` `{ "token": "..." }` с `Cache-Control: no-store`, больше
    ничего ([0025](docs/decisions/0025-anonymous-device-pairing-endpoint.md)).
    Неверный, просроченный и уже использованный код дают одинаковый
-   `400` `invalid_pairing_code`; тело без `code` или `name` длиннее 64
-   символов — `400` `invalid_request`, код при этом не тратится.
+   `400` `invalid_pairing_code`; тело без `code`, `name` длиннее 64
+   символов или с управляющим символом — `400` `invalid_request`, код при
+   этом не тратится.
 
 Обмен ограничен `Auth:PairingAttemptsPerMinute` попытками в минуту (по
 умолчанию 5) на весь эндпоинт, а не на адрес: сверх предела — `429`
