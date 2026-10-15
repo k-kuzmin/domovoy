@@ -13,8 +13,8 @@
     },
     {
       "path": "src/Domovoy.Api/Program.cs",
-      "line": 43,
-      "observation": "Одна схема DeviceToken, она же схема по умолчанию; FallbackPolicy (строка 52) — RequireAuthenticatedUser без указания схем. AddProblemDetails зарегистрирован (строка 62), UseRateLimiter в конвейере нет (строки 64–66)."
+      "line": 44,
+      "observation": "Одна схема DeviceToken, она же схема по умолчанию; FallbackPolicy (строка 53) — RequireAuthenticatedUser без указания схем. AddProblemDetails зарегистрирован (строка 60), UseRateLimiter в конвейере нет (строки 64–66)."
     },
     {
       "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
@@ -152,7 +152,7 @@
     "workaround": "Нет. Аудит отзыва укладывается в существующий AuditEntry с новым значением источника Admin — это использование модели, а не обход; форма аудита целиком остаётся за #16.",
     "council_signs": [
       "контракт API или миграция: новые маршруты /api/v1/admin/*, реализация /auth/device, тело 401; первая миграция src/Domovoy.Data/Migrations",
-      "общий механизм: обработчик аутентификации и политики авторизации действуют на каждый маршрут — греп: группа /api/v1 (ApiV1Endpoints.cs:21), /api/v1/health (HealthEndpoints.cs:37), FallbackPolicy (Program.cs:52)",
+      "общий механизм: обработчик аутентификации и политики авторизации действуют на каждый маршрут — греп: группа /api/v1 (ApiV1Endpoints.cs:21), /api/v1/health (HealthEndpoints.cs:37), FallbackPolicy (Program.cs:53)",
       "новая функциональность: привязка устройств, админ-эндпоинты, отзыв, ограничение частоты, аудит"
     ],
     "executor": "Субагенты по срезам: задача целиком — около 30 файлов и далеко за порогом в ~40 строк. Срез core идёт первым и задаёт контракт; data и api — параллельно после него; docs-config — последним. Оркестратор склеивает стыки (DI-регистрации, имена ключей, число тестов) и сверяет дифф сам.",
@@ -210,7 +210,7 @@
           "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
           "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs"
         ],
-        "contract": "DeviceTokenDefaults: SchemeName = \"DeviceToken\", AdminSchemeName = \"AdminToken\", AdminPolicyName = \"admin\", PairingRateLimitPolicy = \"pairing\". Маршруты и тела — как в подходе; коды ошибок в ApiErrorResults: unauthorized, forbidden, rate_limited, invalid_pairing_code, invalid_request, device_not_found, auth_unavailable, not_implemented. ApiErrorResults.Write(HttpContext, status, code, message) и ApiErrorResults.Result(status, code, message) — единственный писатель { error: { code, message } }. AdminEndpoints.MapAdminEndpoints(app) зовётся из Program.cs рядом с MapApiV1Endpoints. DomovoyApiFactory по умолчанию: ConfigureTestServices заменяет IDeviceStore на InMemoryDeviceStore (singleton на фабрику, доступен тестам свойством Store), IAuditLog на RecordingAuditLog (свойство AuditLog); RepositoryOverrides добавляет Auth:PairingAttemptsPerMinute = 1000, чтобы общий лимитер класса тестов не срабатывал вне теста лимита; Auth:AdminToken фабрика не задаёт — тесты, которым нужен админ, задают пробное значение через WithWebHostBuilder. Срез ждёт от docs-config только ключи конфигурации Auth:*, и те читаются через AuthOptions из core.",
+        "contract": "DeviceTokenDefaults: SchemeName = \"DeviceToken\", AdminSchemeName = \"AdminToken\", AdminPolicyName = \"admin\", PairingRateLimitPolicy = \"pairing\". Маршруты и тела — как в подходе; коды ошибок в ApiErrorResults: unauthorized, forbidden, rate_limited, invalid_pairing_code, invalid_request, device_not_found, auth_unavailable, not_implemented. ApiErrorResults.Write(HttpContext, status, code, message) и ApiErrorResults.Result(status, code, message) — единственный писатель { error: { code, message } }. AdminEndpoints.MapAdminEndpoints(app) зовётся из Program.cs рядом с MapApiV1Endpoints. DomovoyApiFactory по умолчанию: ConfigureTestServices заменяет IDeviceStore на InMemoryDeviceStore (singleton на фабрику, доступен тестам свойством Store), IAuditLog на RecordingAuditLog (свойство AuditLog); RepositoryOverrides добавляет Auth:PairingAttemptsPerMinute = 1000, чтобы общий лимитер класса тестов не срабатывал вне теста лимита; Auth:AdminToken фабрика не задаёт — тесты, которым нужен админ, задают пробное значение через WithWebHostBuilder. Конфигурация Auth не читается до Build (DomovoyApiFactory.cs:25–26: прочитанное Program.cs до Build фабрика не перекрывает): фабрика раздела лимитера берёт IOptions<AuthOptions> из HttpContext.RequestServices, AdminTokenAuthenticationHandler читает секрет через IOptionsMonitor<AuthOptions> на каждом запросе — иначе перекрытия тестов (лимит 2, лимит 1000, пустой секрет) до них не дойдут. Срез ждёт от docs-config только ключи конфигурации Auth:*, и те читаются через AuthOptions из core.",
         "after": ["core"]
       },
       {
@@ -590,7 +590,7 @@
       "file": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
       "new": true,
       "covers": ["A12-all-routes"],
-      "behavior": "Маршруты, ответившие без токена не 401, — ровно GET /health и POST /api/v1/auth/device: исключение в обходе не маскирует третий анонимный маршрут."
+      "behavior": "Маршруты, ответившие без токена не 401, — ровно путь /health при любом методе (MapHealthChecks метода не объявляет, сопоставление по пути — как в AnonymousEndpointsRule.Reconcile) и POST /api/v1/auth/device: исключение в обходе не маскирует третий анонимный маршрут."
     },
     {
       "name": "PairingSecretsNeverReachLogs",
@@ -669,8 +669,8 @@
     {
       "id": "A12-all-routes",
       "criterion": "#12: тест подтверждает, что каждый зарегистрированный маршрут, кроме явно перечисленных анонимных (/health, /auth/device), требует аутентификации.",
-      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthenticationTests\" — проходит; ручная проба: временно убрать RequireAuthorization у группы /api/v1 — тест краснеет (правка не коммитится).",
-      "evidence": "Зелёные EveryNonAnonymousRouteRejectsMissingToken и AnonymousRoutesAreExactlyHealthAndPairing; красный прогон пробы с именем маршрута в сообщении — строкой в журнале задачи."
+      "method": "dotnet test --filter \"FullyQualifiedName~AllRoutesRequireAuthenticationTests\" — проходит; ручная проба: временно повесить .AllowAnonymous() на GET /api/v1/state — краснеют EveryNonAnonymousRouteRejectsMissingToken и AnonymousRoutesAreExactlyHealthAndPairing (правка не коммитится). Снятие RequireAuthorization с группы пробой не годится: маршруты подхватывает FallbackPolicy, и тест законно остаётся зелёным.",
+      "evidence": "Зелёные EveryNonAnonymousRouteRejectsMissingToken и AnonymousRoutesAreExactlyHealthAndPairing; красный прогон пробы с GET /api/v1/state в сообщении — строкой в журнале задачи."
     },
     {
       "id": "A12-ratelimit",
