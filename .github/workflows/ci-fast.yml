@@ -193,6 +193,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/merge-wait.test.sh
 
+      - name: Сценарии статуса доски
+        if: ${{ !cancelled() }}
+        run: bash scripts/board.test.sh
+
       - name: Сценарии картинки прогресса
         if: ${{ !cancelled() }}
         run: bash scripts/status-progress.test.sh
