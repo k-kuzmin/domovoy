@@ -87,7 +87,7 @@ end_case() {
 #
 # Вид вызова — по тексту аргументов:
 #   board  — запрос доски (`repositoryOwner`), ответ — файл FAKE_BOARD_FILE;
-#   issue  — `issue view`, ответ — FAKE_ISSUE_ID;
+#   issue  — `issue view`, ответ — «FAKE_ISSUE_ID<TAB>FAKE_ISSUE_URL»;
 #   add    — `addProjectV2ItemById`, ответ — FAKE_ITEM_ID;
 #   update — `updateProjectV2ItemFieldValue`, ответ — FAKE_ITEM_ID;
 #   read   — `fieldValueByName`, ответ — FAKE_READ.
@@ -134,7 +134,7 @@ emit() {
 
 case "$kind" in
     board) emit < "$FAKE_BOARD_FILE" ;;
-    issue) printf '%s\n' "$FAKE_ISSUE_ID" | emit ;;
+    issue) printf '%s\t%s\n' "$FAKE_ISSUE_ID" "$FAKE_ISSUE_URL" | emit ;;
     add|update) printf '%s\n' "$FAKE_ITEM_ID" | emit ;;
     read) printf '%s\n' "$FAKE_READ" | emit ;;
 esac
@@ -164,7 +164,7 @@ printf 'proj-1\n\n' > "$BOARD_NO_FIELD"
 
 # Прогон проверяемого сценария. Настройка подставного gh — переменными
 # окружения вызывающего: FAKE_BOARD_FILE, FAKE_ISSUE_ID, FAKE_ITEM_ID,
-# FAKE_READ, FAKE_GH_FAIL_ON, FAKE_GH_FAIL_CODE, FAKE_CRLF, TEST_BOARD_NUMBER.
+# FAKE_ISSUE_URL, FAKE_READ, FAKE_GH_FAIL_ON, FAKE_GH_FAIL_CODE, FAKE_CRLF, TEST_BOARD_NUMBER.
 run_script() {
     : > "$CALLS"
     env "PATH=$BIN:$PATH" \
@@ -173,6 +173,7 @@ run_script() {
         "FAKE_GH_CALLS=$CALLS" \
         "FAKE_BOARD_FILE=${FAKE_BOARD_FILE:-$BOARD_FULL}" \
         "FAKE_ISSUE_ID=${FAKE_ISSUE_ID-I_issue159}" \
+        "FAKE_ISSUE_URL=${FAKE_ISSUE_URL-https://github.com/owner-x/repo-x/issues/159}" \
         "FAKE_ITEM_ID=${FAKE_ITEM_ID-ITEM_159}" \
         "FAKE_READ=${FAKE_READ-}" \
         "FAKE_GH_FAIL_ON=${FAKE_GH_FAIL_ON:-}" \
@@ -312,6 +313,7 @@ expect_call_has 1 'field(name: "Status")'
 expect_call_has 1 '[owner=owner-x]'
 expect_call_has 1 '[number=7]'
 expect_call_has 2 '[issue][view][159]'
+expect_call_has 2 '[id,url]'
 expect_call_has 3 'addProjectV2ItemById'
 expect_call_has 3 '[project=proj-1]'
 expect_call_has 3 '[content=I_issue159]'
@@ -400,6 +402,31 @@ expect_status 1
 expect_err '#159'
 expect_no_call_with 'addProjectV2ItemById'
 expect_no_call_with 'updateProjectV2ItemFieldValue'
+expect_out_empty
+end_case
+
+# ==================================================================
+# Сценарий 6а. Номер принадлежит PR, а не issue: `gh issue view` на номер PR
+# отдаёт node id PR с кодом 0. Отказ кодом 2 до add — иначе на доске
+# появилась бы отдельная карточка PR со статусом, а код был бы 0.
+# ==================================================================
+begin_case 'номер PR вместо issue — код 2, сказано, add и update не вызываются'
+FAKE_ISSUE_ID='PR_pr132' FAKE_ISSUE_URL='https://github.com/owner-x/repo-x/pull/132' \
+    run_script 132 Review
+expect_status 2
+expect_err '#132'
+expect_err 'PR'
+expect_calls 2
+expect_no_call_with 'addProjectV2ItemById'
+expect_no_call_with 'updateProjectV2ItemFieldValue'
+expect_out_empty
+end_case
+
+begin_case 'номер PR вместо issue, ответ с CRLF — код 2, add не вызывается'
+FAKE_CRLF=1 FAKE_ISSUE_ID='PR_pr132' FAKE_ISSUE_URL='https://github.com/owner-x/repo-x/pull/132' \
+    run_script 132 Review
+expect_status 2
+expect_no_call_with 'addProjectV2ItemById'
 expect_out_empty
 end_case
 
