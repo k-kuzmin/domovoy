@@ -25,6 +25,7 @@ public static class DataServiceCollectionExtensions
         services.AddScoped<IConversationStore, EfConversationStore>();
         services.AddScoped<IMemoryStore, EfMemoryStore>();
         services.AddScoped<IAuditLog, EfAuditLog>();
+        services.AddScoped<IDeviceStore, EfDeviceStore>();
         services.AddScoped<ITokenLedger, EfTokenLedger>();
         services.AddScoped<IHomeProfileStore, FileHomeProfileStore>();
         services.AddScoped<IComponentProbe, DatabaseProbe>();
