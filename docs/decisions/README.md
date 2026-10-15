@@ -50,3 +50,4 @@
 | [0030](0030-wsl-nat-portproxy.md) | Сеть движка в WSL — NAT и portproxy на петлю вместо mirrored | принято |
 | [0031](0031-yamldotnet-entity-registry.md) | Реестр сущностей разбирается YamlDotNet | принято |
 | [0032](0032-board-status-by-orchestrator.md) | Статусы доски ставит оркестратор сценарием `board.sh`, без workflow | принято |
+| [0033](0033-admin-endpoints-shared-secret.md) | Админ-эндпоинты устройств под `/api/v1/admin` с общим секретом, лимит обмена кода — общий раздел | принято |

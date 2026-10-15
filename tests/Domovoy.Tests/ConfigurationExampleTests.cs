@@ -30,6 +30,7 @@ public sealed class ConfigurationExampleTests
 
     private static readonly string[] SecretSettingPaths =
     [
+        "Auth:AdminToken",
         "Ha:Token",
         "Llm:ApiKey",
         "Ntfy:Topic",
@@ -102,6 +103,25 @@ public sealed class ConfigurationExampleTests
         value.Should().NotBeNullOrWhiteSpace("ключ перечислен с фиктивным значением, а не пустым");
         PlaceholderValues.IsUnset(value).Should().BeTrue(
             "фиктивное значение обязано распознаваться как плейсхолдер — иначе на чистой машине проба HA пойдёт с мусорным токеном");
+    }
+
+    [Fact(DisplayName = "Сценарий «утерян телефон» в README — одна строка curl с плейсхолдерами")]
+    public void ReadmeLostPhoneScenarioIsOneCurlLine()
+    {
+        // Строковая проверка без сборки приложения: сверка пути с маршрутом
+        // админ-эндпоинта — работа ревью диффа (#13, A13-readme).
+        List<string> lines = File.ReadAllLines(RepositoryLayout.Path("README.md"))
+            .Where(line => line.Contains("curl -X DELETE", StringComparison.Ordinal))
+            .ToList();
+
+        lines.Should().ContainSingle(
+            "отзыв утерянного устройства описан одной командой — вторая копия разъедется с первой");
+
+        string command = lines[0];
+
+        command.Should().Contain("https://api.example.com/", "в README только плейсхолдер хоста (запись 0001)");
+        command.Should().Contain("<admin-token>", "секрет в README — только плейсхолдером");
+        command.Should().Contain("/api/v1/admin/devices/<device-id>", "команда отзывает одно устройство по его id");
     }
 
     [Fact(DisplayName = "У каждого примера конфигурации есть закрытый .gitignore двойник")]

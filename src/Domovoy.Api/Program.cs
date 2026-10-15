@@ -39,20 +39,38 @@ builder.Services.AddLlm();
 builder.Services.AddVoice();
 builder.Services.AddNotifications();
 
-// Аутентификация устройств по Bearer-токену.
+// Две Bearer-схемы: устройство по токену и администратор по общему
+// секрету (запись 0033). Схемы по умолчанию нет: каждую зовёт только
+// политика, которая её называет, — админ-секрет не аутентифицирует
+// устройство, токен устройства не открывает админку.
 builder.Services
-    .AddAuthentication(DeviceTokenDefaults.SchemeName)
+    .AddAuthentication()
     .AddScheme<AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
         DeviceTokenDefaults.SchemeName,
+        configureOptions: null)
+    .AddScheme<AuthenticationSchemeOptions, AdminTokenAuthenticationHandler>(
+        DeviceTokenDefaults.AdminSchemeName,
         configureOptions: null);
 
 // Новый эндпоинт по умолчанию требует аутентификации. Анонимный доступ
 // возможен только явным AllowAnonymous — так решение видно в коде, а не
 // возникает из-за забытого атрибута.
 builder.Services.AddAuthorization(options =>
-    options.FallbackPolicy = new AuthorizationPolicyBuilder()
+{
+    AuthorizationPolicy device = new AuthorizationPolicyBuilder(DeviceTokenDefaults.SchemeName)
         .RequireAuthenticatedUser()
-        .Build());
+        .Build();
+
+    options.DefaultPolicy = device;
+    options.FallbackPolicy = device;
+    options.AddPolicy(
+        DeviceTokenDefaults.AdminPolicyName,
+        new AuthorizationPolicyBuilder(DeviceTokenDefaults.AdminSchemeName)
+            .RequireAuthenticatedUser()
+            .Build());
+});
+
+builder.Services.AddPairingRateLimit();
 
 builder.Services.AddHealthChecks()
     .AddCheck<ComponentsHealthCheck>("components", tags: ["components"]);
@@ -64,9 +82,11 @@ WebApplication app = builder.Build();
 app.UseSerilogRequestLogging();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapHealthEndpoints();
 app.MapApiV1Endpoints();
+app.MapAdminEndpoints();
 
 await app.RunAsync().ConfigureAwait(false);
 

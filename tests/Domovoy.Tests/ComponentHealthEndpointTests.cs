@@ -1,24 +1,16 @@
 using System.Net;
-using System.Security.Claims;
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using Domovoy.Tests.Auth;
 using FluentAssertions;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Domovoy.Tests;
 
 /// <summary>
 /// Подробный статус компонентов (NFR-OBS-3).
 ///
-/// Тест существует потому, что этот ответ иначе не увидит никто: доступ
-/// к нему закрыт Bearer-токеном, а выдача токенов появится только на
-/// этапе 5. Без теста агрегация состояний и сериализация ответа
-/// оставались бы непроверенными до тех пор.
+/// Ответ закрыт токеном устройства, поэтому тест идёт через настоящую
+/// привязку: админ выпускает код, устройство обменивает его на токен.
 /// </summary>
 public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFactory>
 {
@@ -29,15 +21,10 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
     [Fact(DisplayName = "Подробный /health отдаёт раздельный статус БД, Home Assistant и LLM")]
     public async Task ComponentsAreReportedSeparately()
     {
-        using WebApplicationFactory<Program> authorized = WithTestAuthentication();
-        using HttpClient client = authorized.CreateClient();
+        (HttpStatusCode status, string body) = await GetDetailedHealthAsync();
 
-        using HttpResponseMessage response = await client.GetAsync(
-            new Uri("/api/v1/health", UriKind.Relative));
+        status.Should().Be(HttpStatusCode.OK);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        string body = await response.Content.ReadAsStringAsync();
         using JsonDocument document = JsonDocument.Parse(body);
 
         document.RootElement.GetProperty("status").GetString()
@@ -60,13 +47,8 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
     [Fact(DisplayName = "Незаполненные секреты дают «не сконфигурировано», а не отказ")]
     public async Task UnfilledSecretsYieldNotConfigured()
     {
-        using WebApplicationFactory<Program> authorized = WithTestAuthentication();
-        using HttpClient client = authorized.CreateClient();
+        (_, string body) = await GetDetailedHealthAsync();
 
-        using HttpResponseMessage response = await client.GetAsync(
-            new Uri("/api/v1/health", UriKind.Relative));
-
-        string body = await response.Content.ReadAsStringAsync();
         using JsonDocument document = JsonDocument.Parse(body);
         JsonElement components = document.RootElement.GetProperty("components");
 
@@ -81,13 +63,8 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
     [Fact(DisplayName = "WebSocket-соединение с Home Assistant — отдельное поле ha_websocket рядом с ha")]
     public async Task HaWebSocketStatusIsSeparateComponent()
     {
-        using WebApplicationFactory<Program> authorized = WithTestAuthentication();
-        using HttpClient client = authorized.CreateClient();
+        (_, string body) = await GetDetailedHealthAsync();
 
-        using HttpResponseMessage response = await client.GetAsync(
-            new Uri("/api/v1/health", UriKind.Relative));
-
-        string body = await response.Content.ReadAsStringAsync();
         using JsonDocument document = JsonDocument.Parse(body);
         JsonElement components = document.RootElement.GetProperty("components");
 
@@ -105,12 +82,7 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
     [Fact(DisplayName = "В подробном ответе нет ни адресов, ни значений секретов")]
     public async Task DetailedAnswerLeaksNothing()
     {
-        using WebApplicationFactory<Program> authorized = WithTestAuthentication();
-        using HttpClient client = authorized.CreateClient();
-
-        using HttpResponseMessage response = await client.GetAsync(
-            new Uri("/api/v1/health", UriKind.Relative));
-        string body = await response.Content.ReadAsStringAsync();
+        (_, string body) = await GetDetailedHealthAsync();
 
         // Даже под токеном описание компонента — это диагностика, а не
         // дамп конфигурации: адрес базы и имя хоста в ответе не нужны.
@@ -121,38 +93,20 @@ public sealed class ComponentHealthEndpointTests : IClassFixture<DomovoyApiFacto
     }
 
     /// <summary>
-    /// Фабрика со схемой аутентификации, которая пропускает запрос.
-    /// Нужна только для доступа к защищённому эндпоинту: боевая схема
-    /// отклоняет всё, пока привязка устройств не реализована.
+    /// Подробный /health под настоящим токеном устройства: код выпускает
+    /// админ-эндпоинт, токен проверяет боевой хендлер по хранилищу в памяти
+    /// фабрики. Подменять схему аутентификации нельзя: политики явно
+    /// называют схему устройства, и подменённая схема не вызывается.
     /// </summary>
-    private WebApplicationFactory<Program> WithTestAuthentication() =>
-        _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
-            services
-                .AddAuthentication(TestAuthenticationHandler.SchemeName)
-                .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>(
-                    TestAuthenticationHandler.SchemeName,
-                    configureOptions: null)));
-
-    private sealed class TestAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
+    private async Task<(HttpStatusCode Status, string Body)> GetDetailedHealthAsync()
     {
-        public const string SchemeName = "TestScheme";
+        using WebApplicationFactory<Program> host = AuthTestApi.WithAdmin(_factory);
+        using HttpClient client = host.CreateClient();
+        string token = await AuthTestApi.PairAsync(client);
 
-        public TestAuthenticationHandler(
-            IOptionsMonitor<AuthenticationSchemeOptions> options,
-            ILoggerFactory logger,
-            UrlEncoder encoder)
-            : base(options, logger, encoder)
-        {
-        }
+        using HttpResponseMessage response = await AuthTestApi.SendAsync(
+            client, HttpMethod.Get, "/api/v1/health", token);
 
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            var identity = new ClaimsIdentity(
-                [new Claim(ClaimTypes.NameIdentifier, "test-device")],
-                SchemeName);
-
-            return Task.FromResult(AuthenticateResult.Success(
-                new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
-        }
+        return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
 }

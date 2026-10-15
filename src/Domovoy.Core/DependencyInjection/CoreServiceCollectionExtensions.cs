@@ -1,9 +1,12 @@
 using Domovoy.Core.Abstractions;
+using Domovoy.Core.Auth;
 using Domovoy.Core.Configuration;
 using Domovoy.Core.Routing;
 using Domovoy.Core.Routing.Templates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace Domovoy.Core.DependencyInjection;
 
@@ -32,6 +35,16 @@ public static class CoreServiceCollectionExtensions
         services.AddValidatedOptions<ProactivityOptions>(configuration, ProactivityOptions.SectionName);
         services.AddValidatedOptions<HomeProfileOptions>(configuration, HomeProfileOptions.SectionName);
         services.AddValidatedOptions<ResponseTemplateOptions>(configuration, ResponseTemplateOptions.SectionName);
+        services.AddValidatedOptions<AuthOptions>(configuration, AuthOptions.SectionName);
+
+        // Пустой админ-секрет — не ошибка старта (админка закрыта), а
+        // настоящий, но короткий — ошибка формы: ValidateOnStart выше
+        // прогоняет и этот валидатор.
+        services.AddSingleton<IValidateOptions<AuthOptions>, AuthOptionsValidator>();
+
+        // Часы привязки устройств (#12) — системные, если тест не подложил свои.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<DeviceAuthService>();
 
         // Быстрый путь (FR-CORE-2). Шаблоны перебираются в порядке
         // регистрации; новый шаблон — одна строка здесь, роутер не меняется.

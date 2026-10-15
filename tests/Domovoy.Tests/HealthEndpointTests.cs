@@ -101,7 +101,7 @@ public sealed class HealthEndpointTests : IClassFixture<DomovoyApiFactory>
             "новый эндпоинт по умолчанию требует аутентификации");
     }
 
-    [Fact(DisplayName = "Предъявленный токен отклоняется: привязка устройств не реализована")]
+    [Fact(DisplayName = "Неизвестный токен устройства отклоняется")]
     public async Task PresentedTokenIsRejected()
     {
         using HttpClient client = _factory.CreateClient();

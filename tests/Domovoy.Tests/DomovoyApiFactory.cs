@@ -1,8 +1,13 @@
+using Domovoy.Core.Abstractions;
+using Domovoy.Tests.Auth;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.EnvironmentVariables;
 using Microsoft.Extensions.Configuration.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Domovoy.Tests;
 
@@ -25,7 +30,7 @@ namespace Domovoy.Tests;
 /// после Build). То, что Program.cs читает до Build, — строка
 /// подключения — этой фабрикой не перекрывается.
 ///
-/// Два перекрытия поверх appsettings.json — <see cref="RepositoryOverrides"/>:
+/// Перекрытия поверх appsettings.json — <see cref="RepositoryOverrides"/>:
 /// реестр сущностей — пример из репозитория по абсолютному пути (реестр
 /// проверяется на старте, а относительный путь считался бы от каталога
 /// проекта Api, где файла нет), и адрес Home Assistant — закрытый порт на
@@ -35,9 +40,21 @@ namespace Domovoy.Tests;
 /// оказаться его настоящим HA, и туда ушёл бы тестовый токен. Тесты, которым
 /// нужен ответ HA, подменяют обработчик своего HTTP-клиента; адрес на это
 /// не влияет.
+///
+/// Хранилище устройств подменено <see cref="InMemoryDeviceStore"/>: с
+/// настоящим EF-хранилищем любой запрос с Bearer шёл бы в Postgres. Фейк один
+/// на фабрику — и на хосты, порождённые из неё <c>WithWebHostBuilder</c>, —
+/// и доступен тестам через <see cref="Store"/>. Предел обменов кода
+/// привязки поднят: лимитер общий на хост, и тесты класса, обменивающие
+/// коды, иначе упёрлись бы в него вне теста самого лимита. Админ-секрет
+/// фабрика не задаёт: админка по умолчанию закрыта, тест, которому она
+/// нужна, задаёт секрет сам.
 /// </summary>
 public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
 {
+    /// <summary>Хранилище устройств всех хостов этой фабрики.</summary>
+    public InMemoryDeviceStore Store { get; } = new();
+
     /// <summary>
     /// Адрес, на котором никто не слушает: порт 9 (discard) на loopback.
     /// Соединение отклоняется без выхода в сеть.
@@ -50,6 +67,7 @@ public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
         {
             ["Ha:EntityRegistryPath"] = RepositoryLayout.Path("config", "entities.example.yaml"),
             ["Ha:BaseUrl"] = UnreachableHaBaseUrl,
+            ["Auth:PairingAttemptsPerMinute"] = "1000",
         };
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -67,6 +85,12 @@ public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
             }
 
             configuration.AddInMemoryCollection(RepositoryOverrides);
+        });
+
+        builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IDeviceStore>();
+            services.AddSingleton<IDeviceStore>(Store);
         });
     }
 
