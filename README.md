@@ -754,7 +754,7 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 
 Выпуск кода привязки, список устройств и отзыв — под `/api/v1/admin`, со
 своей Bearer-схемой: общий секрет `Auth:AdminToken`
-([0032](docs/decisions/0032-admin-endpoints-shared-secret.md)). Токен
+([0033](docs/decisions/0033-admin-endpoints-shared-secret.md)). Токен
 устройства админку не открывает, админ-секрет не делает запрос устройством.
 
 | Метод | Путь | Ответ |
@@ -799,7 +799,7 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 Обмен ограничен `Auth:PairingAttemptsPerMinute` попытками в минуту (по
 умолчанию 5) на весь эндпоинт, а не на адрес: сверх предела — `429`
 `rate_limited` с заголовком `Retry-After`. Цена общего предела — запись
-[0032](docs/decisions/0032-admin-endpoints-shared-secret.md).
+[0033](docs/decisions/0033-admin-endpoints-shared-secret.md).
 
 ### Утерян телефон
 
@@ -829,7 +829,7 @@ curl -X DELETE -H "Authorization: Bearer <admin-token>" https://api.example.com/
 о компонентах — раздельного статуса БД в этот момент не получить. Анонимный
 `/health` отдаёт лишь общее слово состояния; причину называет предупреждение
 в логе «Хранилище устройств недоступно»
-([0032](docs/decisions/0032-admin-endpoints-shared-secret.md), «Следствия»).
+([0033](docs/decisions/0033-admin-endpoints-shared-secret.md), «Следствия»).
 
 Home Assistant в подробном ответе — два поля: `components.ha` — REST
 (`GET api/` с токеном), `components.ha_websocket` — постоянное

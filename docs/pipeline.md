@@ -102,6 +102,7 @@ CLI. Основная сессия — **оркестратор**: выбира�
 | `guard-lite.sh` | `bash scripts/guard-lite.sh origin/main HEAD` | гейт целостности: подавления, удалённые тесты, разрушительная миграция в `Up()`, мусор и подписи в диффе |
 | `review-comments.sh` | `bash scripts/review-comments.sh <номер PR>` | построчные замечания ревью — те, что `gh pr view --comments` не отдаёт |
 | `merge-wait.sh` | `bash scripts/merge-wait.sh <номер PR>` | ожидание мерджа: опрашивает состояние PR, пока оно `OPEN`, и печатает `MERGED` или `CLOSED`, а у открытого PR, отставшего от main, — `BEHIND` или `DIRTY` |
+| `board.sh` | `bash scripts/board.sh <номер issue> <статус>` | статус карточки issue на доске проекта: опция поля Status ищется по имени, карточка добавляется, если её нет, статус подтверждается чтением; точки вызова — `.claude/CLAUDE.md`, решение — [0032](decisions/0032-board-status-by-orchestrator.md) |
 
 **Конфиг риска читается с `origin/main`,** а не из дерева: дифф не ослабляет
 правило, по которому его оценивают. Пока файла на `origin/main` нет, берётся
