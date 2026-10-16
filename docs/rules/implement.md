@@ -191,7 +191,9 @@ PR этот этап не открывает: он открывается пос
 - голый `docker` и `docker compose` на хосте: на машине владельца голый
   `docker` ведёт в Docker Desktop. Docker-команды вне стенда — через
   `bash deploy/windows/docker-wsl.sh …`, команды боевого проекта — только
-  чтение (`compose ps`); `docker compose config` закрыт правами;
+  чтение (`compose ps`); `compose config` не запускается: он печатает
+  значения `.env`, а правами закрыта только голая форма
+  `docker compose config` — через обёртку держит правило, а не deny;
 - `dotnet run --project src/Domovoy.Api` на хосте как живая проверка: в
   `Development` он читает user-secrets владельца.
 
