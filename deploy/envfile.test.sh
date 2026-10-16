@@ -266,7 +266,7 @@ for k in COMPOSE_FILE DOMOVOY_IMAGE_REPO DOMOVOY_IMAGE_TAG; do
 done
 end_case
 
-begin_case 'sync --dry-run: строки с префиксом «будет », файл не меняется'
+begin_case 'sync --dry-run: «будет » только у действий, файл не меняется'
 new_env
 before="$(file_sum "$CASE_DIR/.env")"
 run sync --dry-run "$EXAMPLE" "$CASE_DIR/.env"
@@ -274,8 +274,10 @@ expect_status 0
 [ "$before" = "$(file_sum "$CASE_DIR/.env")" ] || fail_case 'файл изменён в --dry-run'
 expect_out_line 'будет добавлен PLAIN (из примера)'
 expect_out_line 'будет добавлен GEN (сгенерирован)'
-expect_out_line 'будет заполните OWN'
-expect_out_line 'будет лишний ключ EXTRA'
+expect_out_line 'заполните OWN'
+expect_out_line 'лишний ключ EXTRA'
+expect_no_out_line 'будет заполните OWN'
+expect_no_out_line 'будет лишний ключ EXTRA'
 expect_no_out_line 'добавлен PLAIN (из примера)'
 expect_no_leak "$EXAMPLE"
 expect_no_leak "$CASE_DIR/.env"

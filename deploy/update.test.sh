@@ -443,7 +443,8 @@ expect_out_has "example.invalid/owner/domovoy-api:sha-$C2"
 expect_out_has "example.invalid/owner/domovoy-migrate:sha-$C2"
 expect_out_has "bash $FAKE/backup.sh"
 expect_out_has 'update: .env: будет добавлен NEW_PLAIN (из примера)'
-expect_out_has 'update: .env: будет заполните NEW_OWN'
+expect_out_has 'update: .env: заполните NEW_OWN'
+expect_out_lacks 'будет заполните'
 expect_out_has 'update: чистка:'
 expect_out_prefixed
 expect_no_leak
