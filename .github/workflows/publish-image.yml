@@ -1,0 +1,114 @@
+name: Образы api и migrate
+
+# Образы коммита для каталога развёртывания (#162): deploy/update.sh тянет
+# <реестр>/domovoy-api:sha-<коммит> и domovoy-migrate:sha-<коммит>, а не
+# собирает их на месте. Сборка и скан слоёв — deploy/build-images.sh; на PR
+# образы собираются и сканируются без push, на push в main — ещё и
+# публикуются в GHCR с тегами sha-<коммит> и main.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  push:
+    branches: [main]
+
+# PR: новый коммит отменяет прогон старого. main: без отмены — образ нужен
+# каждому мерджу, иначе update.sh не найдёт образ промежуточного коммита.
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Та же версия, что в gitleaks.yml; поднимается отдельным коммитом.
+  GITLEAKS_VERSION: 8.30.1
+
+jobs:
+  scan:
+    name: Сборка и скан образов без push
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location "$url" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks gitleaks.tar.gz
+          gitleaks version
+
+      # Правила — с базы, а не из ветки PR, как в gitleaks.yml: иначе тот же
+      # PR ослабляет .gitleaks.toml и кладёт секрет в образ. Базы без
+      # конфига нет: шаг падает, а не откатывается на конфиг ветки.
+      - name: Правила gitleaks с базы
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show FETCH_HEAD:.gitleaks.toml > "$RUNNER_TEMP/gitleaks-config.toml"
+
+      - name: Сборка и скан
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          bash deploy/build-images.sh \
+            --repo "ghcr.io/${OWNER,,}" \
+            --sha "$SHA" \
+            --gitleaks-config "$RUNNER_TEMP/gitleaks-config.toml"
+
+  publish:
+    name: Сборка, скан и публикация образов
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Установка gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location "$url" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks gitleaks.tar.gz
+          gitleaks version
+
+      - name: Вход в GHCR
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
+      # Скан идёт до push внутри сценария: находка — код 1, ни один тег не
+      # уходит в реестр.
+      - name: Сборка, скан и push
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bash deploy/build-images.sh \
+            --repo "ghcr.io/${OWNER,,}" \
+            --sha "$SHA" \
+            --gitleaks-config .gitleaks.toml \
+            --push \
+            --also-tag main
+
+      - name: Выход из GHCR
+        if: always()
+        run: docker logout ghcr.io
