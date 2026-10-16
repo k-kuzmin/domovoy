@@ -445,7 +445,7 @@ rm -f "$STATE/prod_wd"
 foreign="$FAKE_HOME/domovoy-stand/7"
 mkdir -p "$foreign"
 printf 'owner\n' > "$foreign/.env"
-for sub in up down; do
+for sub in up down status logs; do
     : > "$LOG"
     run_stand "$WORKTREE" "$sub" --name 7
     expect_status 1
@@ -543,6 +543,28 @@ printf '%s\n' "$OUT" | grep -qF 'токен HA: не проверен — HA с�
     || fail_case 'status не печатает «не проверен — HA стенда не запущен»'
 log_has 'ps --status running -q homeassistant'
 log_lacks_re 'compose .* (cp|exec)( |$)'
+end_case
+
+begin_case 'status и logs: стенда нет — строка без compose'
+for path in fresh after-down; do
+    if [ "$path" = after-down ]; then
+        run_stand "$WORKTREE" up --name 7
+        expect_status 0
+        run_stand "$WORKTREE" down --name 7
+        expect_status 0
+    fi
+    : > "$LOG"
+    run_stand "$WORKTREE" status --name 7
+    expect_status 0
+    [ "$OUT" = 'stand: стенд domovoy-stand-7 не поднят' ] \
+        || fail_case "$path: status вывел «$OUT», ожидалась строка «стенд domovoy-stand-7 не поднят»"
+    [ -z "$ERR" ] || fail_case "$path: status пишет в stderr: $(printf '%s' "$ERR" | head -n 2 | tr '\n' ';')"
+    run_stand "$WORKTREE" logs --name 7 -- --tail 5 api
+    expect_status 1
+    expect_err_first 'стенд domovoy-stand-7 не поднят'
+    log_lacks_re 'compose -p'
+    [ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case "$path: status или logs создали каталог стенда"
+done
 end_case
 
 # --- Сборка ------------------------------------------------------------------

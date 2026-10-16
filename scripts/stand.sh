@@ -37,11 +37,13 @@
 # которые вытянул сам стенд, — по ID из pulled-images каталога стенда, без -f
 # и только если их не держит ни один контейнер. Общий кэш движка, образы
 # боевого стека и чужие объекты не трогаются: prune здесь нет. Каталог
-# стенда без метки .domovoy-stand, которую up пишет первой записью, up и down
-# не трогают: отказ.
+# стенда без метки .domovoy-stand, которую up пишет первой записью, не трогает
+# ни одна подкоманда: отказ.
 #
 # Коды: 0 — успех; 1 — отказ по существу, первая строка stderr начинается
-# с «stand: отказ: »; 2 — ошибка вызова.
+# с «stand: отказ: »; 2 — ошибка вызова. Стенда нет (нет каталога стенда):
+# status печатает «стенд domovoy-stand-<N> не поднят» и выходит с 0 — это
+# ответ о состоянии; logs отказывает с 1 — логов нет. Compose не вызывается.
 #
 # Весь docker идёт в движок через функцию engine(): Docker Desktop не
 # запускается никогда. DOMOVOY_ENGINE_DISTRO — другое имя дистрибутива, как
@@ -203,14 +205,20 @@ done <<< "$(printf '%s\n' "$prod_dirs" | sort -u)"
 
 # Метка working_dir есть, только пока у боевого проекта есть контейнеры
 # (ps -a видит и остановленные). Не зависит от них принадлежность самого
-# каталога стенда: up пишет метку первой записью, и каталог без неё up и down
-# не трогают — ни .env в него, ни rm -rf.
+# каталога стенда: up пишет метку первой записью, и каталог без неё ни одна
+# подкоманда не трогает — ни .env в него, ни rm -rf, ни compose с ним.
+# Каталога нет — status и logs отвечают без compose: compose без .env стенда
+# засыпал бы вывод предупреждениями о незаданных переменных.
 STAND_MARK='.domovoy-stand'
-if [ "$cmd" = up ] || [ "$cmd" = down ]; then
-    owner="$(in_distro 'if [ ! -e "$1" ]; then echo absent; elif [ -f "$1/$2" ]; then echo own; else echo foreign; fi' \
-        "$standdir" "$STAND_MARK")" || refuse "$engine_down_reason"
-    [ "$owner" = foreign ] \
-        && refuse "каталог $standdir существует, но не принадлежит стенду: нет метки $STAND_MARK"
+owner="$(in_distro 'if [ ! -e "$1" ]; then echo absent; elif [ -f "$1/$2" ]; then echo own; else echo foreign; fi' \
+    "$standdir" "$STAND_MARK")" || refuse "$engine_down_reason"
+[ "$owner" = foreign ] \
+    && refuse "каталог $standdir существует, но не принадлежит стенду: нет метки $STAND_MARK"
+if [ "$owner" = absent ]; then
+    case "$cmd" in
+        status) say "стенд $project не поднят"; exit 0 ;;
+        logs) refuse "стенд $project не поднят" ;;
+    esac
 fi
 
 # id реестра-примера: их ждёт api стенда, в них переименовываются сущности demo.
