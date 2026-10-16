@@ -11,10 +11,15 @@ on:
   push:
     branches: [main]
 
-# PR: новый коммит отменяет прогон старого. main: без отмены — образ нужен
-# каждому мерджу, иначе update.sh не найдёт образ промежуточного коммита.
+# PR: группа по ветке, новый коммит отменяет прогон старого. main: группа
+# по коммиту — у каждого мерджа свой прогон, и ни один не вытесняется
+# следующим: в общей группе GitHub держит лишь один ожидающий прогон и при
+# трёх мерджах подряд отменяет средний, оставляя его коммит без
+# sha-<коммит>. Цена — параллельные прогоны на main: если прогон прежнего
+# мерджа закончится позже, тег main останется на прежнем коммите до
+# следующего мерджа; update.sh тег main не читает.
 concurrency:
-  group: publish-image-${{ github.ref }}
+  group: publish-image-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -57,7 +62,9 @@ jobs:
       - name: Сборка и скан
         env:
           OWNER: ${{ github.repository_owner }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          # checkout на PR собирает merge-ref, и его коммит — github.sha, а
+          # не head.sha: метка revision называет то, что собрано.
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           bash deploy/build-images.sh \
