@@ -353,11 +353,20 @@ gitleaks git --staged --redact --no-banner       # то, что коммитит
 gitleaks git --redact --no-banner                # вся история
 gitleaks dir . --redact --no-banner              # рабочий каталог
 
-# Стек
-docker compose up -d --build --wait
-docker compose logs -f api
-docker compose down
+# Стек — docker только в движке domovoy-engine, через обёртку.
+# Боевой стек (проект domovoy) поднимает и сносит владелец; агенту — только чтение.
+bash deploy/windows/docker-wsl.sh compose up -d --build --wait
+bash deploy/windows/docker-wsl.sh compose logs -f api
+bash deploy/windows/docker-wsl.sh compose ps
+bash deploy/windows/docker-wsl.sh compose down
 curl -s http://localhost:18080/health
+
+# Стенд агента для живой проверки — docs/rules/implement.md,
+# «Живая проверка — на стенде»
+bash scripts/stand.sh up     [--name <N>]
+bash scripts/stand.sh status [--name <N>]
+bash scripts/stand.sh logs   [--name <N>] [--] [аргументы compose logs]
+bash scripts/stand.sh down   [--name <N>]
 
 # Обвязка: риск, план, совет, гейт, построчные замечания, ожидание мерджа,
 # статус доски
@@ -789,3 +798,14 @@ PR. Остановка с объяснением — нормальный рез
 - **Стриминг обязателен в адаптере LLM.** Если провайдер его не поддерживает,
   адаптер эмулирует поток одним событием `token`. Клиент не должен зависеть от
   того, реальный это стрим или эмуляция (FR-CORE-8).
+- **docker — только через движок `domovoy-engine`.** Голый `docker` на
+  машине владельца ведёт в Docker Desktop; его агент не запускает. Живая
+  проверка — стенд `bash scripts/stand.sh`, остальное — обёртка
+  `deploy/windows/docker-wsl.sh`. Правило и что на стенде нельзя —
+  [`docs/rules/implement.md`](../docs/rules/implement.md), «Живая проверка —
+  на стенде».
+- **WSL общий для стенда и боевого стека.** `wsl --shutdown`, `--terminate`,
+  `--unregister`, `--manage` и правку `.wslconfig` агент не делает: они
+  гасят или меняют боевой стек — это делает `engine-setup.ps1` или
+  владелец. `deny` в `.claude/settings.json` закрывает не все формы; пределы —
+  там же, в `docs/rules/implement.md`.
