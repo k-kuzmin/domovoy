@@ -6,6 +6,7 @@
 # работает.
 #
 #   docker build -f src/Domovoy.Api/Dockerfile .
+#   docker build -f src/Domovoy.Api/Dockerfile --target migrate .
 # ============================================================
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
@@ -31,6 +32,26 @@ RUN dotnet publish src/Domovoy.Api/Domovoy.Api.csproj \
         --no-restore \
         --output /app/publish
 
+# Идемпотентный SQL-скрипт миграций: образ migrate применяет его psql, без
+# SDK и без исходников. Версия dotnet-ef — та же, что EF Core в
+# Directory.Packages.props (#162).
+FROM build AS migrations
+RUN dotnet tool install --tool-path /tools dotnet-ef --version 8.0.11
+RUN /tools/dotnet-ef migrations script \
+        --idempotent \
+        --output /out/migrate.sql \
+        --project src/Domovoy.Data \
+        --startup-project src/Domovoy.Api \
+        --configuration Release
+
+# Образ применения миграций: только psql и скрипт. Подключение — переменные
+# PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD из окружения; значений в
+# образе нет. Весь скрипт — одна транзакция, первая ошибка её откатывает.
+FROM postgres:16-alpine AS migrate
+COPY --from=migrations /out/migrate.sql /migrations/migrate.sql
+ENTRYPOINT ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/migrations/migrate.sql"]
+
+# runtime — последняя стадия и цель сборки по умолчанию.
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 
 # curl нужен для healthcheck контейнера: в образе aspnet его нет.
