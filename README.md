@@ -213,17 +213,24 @@ HA на любой код, от первичной настройки он не 
 
 ### Схема базы данных
 
-Приложение миграций на старте не применяет: схему базы стека обновляет
-владелец, после первого подъёма и после каждого обновления, в котором
-появилась миграция. Без этого `/health` отвечает, но привязка устройств и
-админ-эндпоинты получают `503` `auth_unavailable` — таблиц ещё нет.
+Приложение миграций на старте не применяет. Без миграций `/health`
+отвечает, но привязка устройств и админ-эндпоинты получают `503`
+`auth_unavailable` — таблиц ещё нет.
 
-Порт базы наружу не опубликован, поэтому `dotnet ef database update` с хоста
-до неё не дотягивается. Миграции применяются идемпотентным SQL-скриптом через
-`psql` внутри контейнера; уже применённые скрипт пропускает. Скрипт
-генерируется на любой машине с SDK .NET 8 и инструментом `dotnet-ef` 8.x
+**В каталоге развёртывания миграции применяет обновление** (раздел
+«Обновление стека» ниже): образ `domovoy-migrate` коммита несёт
+идемпотентный SQL-скрипт, и одноразовый сервис `migrate` подаёт его в
+`psql` одной транзакцией (`--single-transaction`, `ON_ERROR_STOP`) — после
+бэкапа и до перезапуска `api`. Уже применённые миграции скрипт пропускает.
+Ни SDK, ни `dotnet-ef` на машине стека не нужны.
+
+**Ручной путь — запасной:** клон разработки (стек из исходников, без
+каталога развёртывания) или обновление, которое не прошло. Порт базы наружу
+не опубликован, поэтому `dotnet ef database update` с хоста до неё не
+дотягивается. Скрипт генерируется на любой машине с SDK .NET 8 и
+инструментом `dotnet-ef` 8.x
 (`dotnet tool install --global dotnet-ef --version 8.0.*`) из того же коммита,
-что развёрнут; на машине стека нужен только `docker compose exec`:
+что развёрнут, и подаётся в `psql` внутри контейнера:
 
 ```bash
 dotnet ef migrations script --idempotent --output migrate.sql \
@@ -235,7 +242,13 @@ rm migrate.sql
 
 Скрипт пишется в файл, а не в конвейер: в стандартный вывод `dotnet ef`
 печатает и строки сборки. Имя пользователя и базы `psql` берёт из окружения
-контейнера, `.env` хостовой оболочкой не читается.
+контейнера, `.env` хостовой оболочкой не читается. Для боевого стека
+`docker compose exec` идёт в каталоге развёртывания, из Git Bash:
+
+```bash
+MSYS_NO_PATHCONV=1 wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose exec -T postgres \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < migrate.sql
+```
 
 **Новая миграция.** Создаётся командой из таблицы «Команды» раздела
 «Локальная разработка». Сгенерированный основной файл миграции приводится к
@@ -268,23 +281,30 @@ dotnet format --include src/Domovoy.Data/Migrations/<метка>_<Имя>.cs
 заданий Windows. Её ставит последним шагом установщик движка
 `deploy/windows/engine-setup.ps1 -Install` (раздел «Автозапуск после
 перезагрузки»), отдельного шага нет. Задача идёт без входа пользователя (тип
-входа S4U, пароль не хранится):
+входа S4U, пароль не хранится), в каталоге развёртывания:
 
 ```
-wsl.exe -d domovoy-engine --cd <клон> --exec bash ops/backup/backup.sh
+wsl.exe -d domovoy-engine --cd "/srv/domovoy" --exec bash ops/backup/backup.sh
 ```
 
 `backup.sh` выполняется внутри дистрибутива движка, где `docker` — сам
 движок: ни интерактивной оболочки, ни обёртки задаче не нужно. `BACKUP_DIR`
-задаётся путём Windows вида `D:/domovoy-backups` — внутри дистрибутива его
-переводит `wslpath`. Правка `.env` переустановки не требует. Пропущенный
+и `BACKUP_MAX_SIZE_GB` он читает из `.env` каталога развёртывания;
+`BACKUP_DIR` задаётся путём Windows вида `D:/domovoy-backups` — внутри
+дистрибутива его переводит `wslpath`. Правка `.env` переустановки не
+требует. Пока каталога развёртывания нет (хост до переноса стека), задача
+идёт с `--cd <клон>` и `.env` клона — `-Install` и `-Check` пишут об этом
+строкой; после переноса — повторный `engine-setup.ps1 -Install` (раздел
+«Перенос стека в каталог развёртывания»). Пропущенный
 запуск (хост был выключен) Планировщик выполняет при первой возможности;
 если dockerd в этот момент ещё поднимается, прогон откажет строкой в
 `backup.log`, и следующий пойдёт в срок.
 
-Бэкап вне расписания на хосте с движком в WSL — из каталога клона:
-`wsl.exe -d domovoy-engine --exec bash ops/backup/backup.sh`. На Linux с
-docker в оболочке — `bash ops/backup/backup.sh`.
+Бэкап вне расписания на хосте с движком в WSL — в каталоге развёртывания:
+`wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash ops/backup/backup.sh`
+(из Git Bash — с `MSYS_NO_PATHCONV=1` впереди, раздел «docker из Git
+Bash»). На Linux с docker в оболочке — `bash ops/backup/backup.sh` из
+каталога стека.
 Состояние задачи (тип входа, последний результат) и хвост `backup.log`:
 
 ```powershell
@@ -300,8 +320,8 @@ powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check
 
 ```bash
 bash ops/backup/restore.sh --check
-# хост с движком в WSL — из каталога клона:
-wsl.exe -d domovoy-engine --exec bash ops/backup/restore.sh --check
+# хост с движком в WSL — в каталоге развёртывания (PowerShell):
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash ops/backup/restore.sh --check
 ```
 
 **Полное восстановление после потери данных** —
@@ -318,6 +338,16 @@ WSL2-дистрибутива `domovoy-engine`. Дистрибутив подн�
 portproxy вместо mirrored — [0030](docs/decisions/0030-wsl-nat-portproxy.md).
 Сценарии — в [`deploy/windows/`](deploy/windows/), подробности — в их
 шапках.
+
+Стек запускается из **каталога развёртывания** `/srv/domovoy` — отдельного
+git-клона в файловой системе дистрибутива, только для запуска; образы `api`
+и `migrate` он тянет из GHCR
+([0034](docs/decisions/0034-deploy-directory-ghcr-update.md)). Клон Windows
+остаётся для разработки и хост-сценариев (`engine-setup.ps1`,
+`install-schedule.ps1`, `update.ps1`): их владелец запускает из него, а
+настройки стека они читают из `.env` каталога развёртывания. Перенос
+работающего стека — раздел «Перенос стека в каталог развёртывания»,
+обновление — «Обновление стека».
 
 **Предусловия** — сценарий их не проверяет:
 
@@ -340,8 +370,13 @@ portproxy вместо mirrored — [0030](docs/decisions/0030-wsl-nat-portproxy
   сети, и в общественной сети порты стека закрыты, только пока это так;
 - служба IP Helper (`iphlpsvc`) запускается автоматически.
 
-**Сеть и порты** — `API_HTTP_PORT` и `HA_HTTP_PORT` из `.env` (по умолчанию
-18080 и 8123). Движок работает в сети WSL NAT (`networkingMode=nat`): с
+**Сеть и порты** — `API_HTTP_PORT` и `HA_HTTP_PORT` из `.env` каталога
+развёртывания (по умолчанию 18080 и 8123). Сценарии читают его внутри
+дистрибутива через `deploy/envfile.sh get` — только несекретные ключи;
+`.env` клона Windows на настройку хоста не влияет. Каталога развёртывания
+ещё нет — значения по умолчанию из `docker-compose.yml`, строка
+`settings.source` сухого прогона и звено SKIP «настройки каталога
+развёртывания» в `-Check` называют причину. Движок работает в сети WSL NAT (`networkingMode=nat`): с
 самого ПК стек открывается и по `http://localhost:<порт>`, и по
 `http://127.0.0.1:<порт>` — петлю принимает `wslrelay` WSL. Из ЛВС —
 по адресу хоста: постоянная запись `portproxy` (`netsh interface portproxy`)
@@ -370,36 +405,52 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
    SHA256 с `SHA256SUMS` того же сервера. Это проверка целостности загрузки,
    а не подлинности: подпись `SHA256SUMS` не проверяется, и образ,
    подменённый на сервере вместе с суммой, проверку пройдёт;
-2. ставит внутрь Docker Engine под systemd;
-3. регистрирует задачи `domovoy-engine` (держалка дистрибутива) и
-   `domovoy-measure-boot` (замер);
-4. пишет `networkingMode=nat` в `%USERPROFILE%\.wslconfig` — прежний
-   файл сохраняется рядом как `.wslconfig.domovoy-backup`. mirrored,
-   записанный установкой прежней версии, переписывается на nat; чужая
-   настройка сети — отказ;
-5. снимает правило Hyper-V прежней версии и добавляет правило межсетевого
+2. делает диск дистрибутива разреженным —
+   `wsl --manage domovoy-engine --set-sparse true`: сразу после импорта, а у
+   уже зарегистрированного без атрибута `SparseFile` у `ext4.vhdx` — пока
+   дистрибутив остановлен на перезапуске провижининга. Флаг `--allow-unsafe`
+   сценарий не ставит. Если WSL отказал, `-Install` не обрывается:
+   остальные шаги доводятся, в конце — ненулевой код с текстом отказа WSL,
+   и звено `-Check` «диск дистрибутива разреженный» красное, пока диск не
+   разрежен. Решение за владельцем: `wsl --version`, при остановленном
+   дистрибутиве — `wsl --manage domovoy-engine --set-sparse true` вручную
+   или повторный `-Install`;
+3. ставит внутрь Docker Engine под systemd;
+4. регистрирует задачи `domovoy-engine` (держалка дистрибутива) и
+   `domovoy-measure-boot` (замер; зонд идёт в каталоге развёртывания);
+5. пишет в `%USERPROFILE%\.wslconfig` `networkingMode=nat` и секцию
+   `[experimental]`: `sparseVhd=true` (новые диски разреженные) и
+   `autoMemoryReclaim=gradual` (ВМ отдаёт хосту освободившуюся память) —
+   прежний файл сохраняется рядом как `.wslconfig.domovoy-backup`.
+   mirrored, записанный установкой прежней версии, переписывается на nat;
+   чужая настройка сети или другое значение `sparseVhd` и
+   `autoMemoryReclaim` — отказ;
+6. снимает правило Hyper-V прежней версии и добавляет правило межсетевого
    экрана Windows — только к слушателю `portproxy`, службе IP Helper;
-6. ставит записи `portproxy` с адреса хоста в ЛВС на `127.0.0.1` — свои
+7. ставит записи `portproxy` с адреса хоста в ЛВС на `127.0.0.1` — свои
    записи прежнего адреса снимаются; служба IP Helper (`iphlpsvc`) должна
    запускаться автоматически;
-7. ставит расписание бэкапа.
+8. ставит расписание бэкапа в каталоге развёртывания.
 
 `wsl --shutdown` установка не выполняет: он гасит все дистрибутивы
-пользователя. `networkingMode=nat` применяется после него — его
-выполняет владелец (путь нового ПК ниже, шаг 4) — и на уже работающем
-хосте после первой установки.
+пользователя. `.wslconfig` (`networkingMode=nat`, `sparseVhd`,
+`autoMemoryReclaim`) применяется после него — его выполняет владелец (путь
+нового ПК ниже, шаг 4) — и на уже работающем хосте после установки, которая
+меняла `.wslconfig`; затем `Start-ScheduledTask -TaskName domovoy-engine`.
 
-**Новый ПК.** Путь один: установка движка, затем восстановление из
-последнего бэкапа. Команды шагов 4–6 — в терминале PowerShell от
-администратора, в каталоге клона.
+**Новый ПК.** Путь один: установка движка, каталог развёртывания,
+восстановление из последнего бэкапа, обновление на образы реестра.
+Команды — в терминале PowerShell от администратора, в каталоге клона
+Windows.
 
 1. Предусловия выше выполнены; установлен Git for Windows (Git Bash).
-2. Клон и файлы, которых нет в бэкапе: `git clone`, затем `.env` и
-   `config/*` (`entities.yaml`, `home-profile.md`, `proactive-rules.yaml`,
-   `response-templates.yaml`) — из своего хранилища: бэкап их не содержит
-   (шапка [`ops/backup/restore.sh`](ops/backup/restore.sh)). В `.env` —
-   `COMPOSE_PROJECT_NAME` прежнего хоста и `BACKUP_DIR` путём Windows вида
-   `D:/domovoy-backups`.
+2. Клон Windows — для хост-сценариев: `git clone`. Файлы, которых нет в
+   бэкапе, — `.env` и `config/*` (`entities.yaml`, `home-profile.md`,
+   `proactive-rules.yaml`, `response-templates.yaml`) — достать из своего
+   хранилища: бэкап их не содержит (шапка
+   [`ops/backup/restore.sh`](ops/backup/restore.sh)). Они понадобятся на
+   шаге 5. В `.env` — `COMPOSE_PROJECT_NAME` прежнего хоста и `BACKUP_DIR`
+   путём Windows вида `D:/domovoy-backups`.
 3. Подключить носитель с бэкапами: каталог `BACKUP_DIR` виден в
    Проводнике.
 4. Установка движка:
@@ -407,39 +458,63 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
    ```powershell
    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install -DryRun  # что будет сделано
    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install
-   wsl --shutdown                               # применяет NAT, гасит все дистрибутивы
+   wsl --shutdown                               # применяет .wslconfig, гасит все дистрибутивы
    Start-ScheduledTask -TaskName domovoy-engine # держалка: дистрибутив и docker поднимаются
    ```
 
-   `restore.sh` не ждёт docker и на только что поднятом дистрибутиве
-   отказывает «docker недоступен». Перед шагом 5 дождаться `active`:
+   Каталога развёртывания ещё нет, поэтому порты и проект — по умолчанию,
+   а задача бэкапа — с `--cd <клон>`; шаг 8 переводит их на каталог
+   развёртывания. `restore.sh` не ждёт docker и на только что поднятом
+   дистрибутиве отказывает «docker недоступен». Перед шагом 6 дождаться
+   `active`:
 
    ```powershell
    while ((wsl.exe -d domovoy-engine -u root --exec systemctl is-active docker) -ne 'active') { Start-Sleep -Seconds 5 }
    ```
 
-   Цикл не кончается за пару минут — `-Check` из шага 6 назовёт звено,
+   Цикл не кончается за пару минут — `-Check` из шага 9 назовёт звено,
    которое не поднялось.
 
-5. Восстановление внутри дистрибутива из последнего бэкапа — каталог
+5. Каталог развёртывания — шаги 1 и 2 раздела «Перенос стека в каталог
+   развёртывания»: `git clone` в `/srv/domovoy` от root, затем `.env` и
+   `config/*` из шага 2 — в него.
+6. Восстановление в каталоге развёртывания из последнего бэкапа — каталог
    `domovoy-backup-<UTC-метка>` в `BACKUP_DIR` с самой поздней меткой
    (`.partial` — незаконченный, не годится). `restore.sh` сам поднимает
    стек и ждёт `/health`:
 
    ```powershell
-   wsl.exe -d domovoy-engine -u root --exec bash ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<domovoy-backup-последний>
+   wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash ops/backup/restore.sh --project <COMPOSE_PROJECT_NAME> --from <BACKUP_DIR>/<domovoy-backup-последний>
    ```
 
    Путь `--from` — в записи Windows, как `BACKUP_DIR` (`D:/domovoy-backups/…`):
-   внутри дистрибутива его переводит `wslpath`.
-6. Проверка всех звеньев — `-Check`, код 0:
+   внутри дистрибутива его переводит `wslpath`. `restore.sh` собирает `api`
+   из исходников каталога развёртывания.
+7. Перевод стека на образы реестра — обновление (раздел «Обновление
+   стека»); локальную сборку `api` из шага 6 оно убирает:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1
+   ```
+
+8. Повторная установка — настройки хоста, задача бэкапа и зонд замера
+   переходят на каталог развёртывания:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install
+   ```
+
+9. Проверка всех звеньев — `-Check`, код 0:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
    ```
 
-7. Функция `docker()` в `~/.bashrc` Git Bash (раздел «docker из Git Bash»
-   ниже) — чтобы команды `docker` из этого README шли в движок.
+10. Функция `docker()` в `~/.bashrc` Git Bash (раздел «docker из Git Bash»
+    ниже) — для команд `docker` клона разработки. Если на этом ПК идёт
+    разработка, в `.env` клона Windows — другое `COMPOSE_PROJECT_NAME`
+    (например `domovoy-dev`), иначе стек клона пересоздаст боевые
+    контейнеры.
 
 Затем руками:
 
@@ -450,12 +525,20 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
   `/health` на `127.0.0.1`, `[::1]` и адресе в ЛВС, записи `portproxy` и их
   слушателя, но не роутер и не Wi-Fi телефона;
 - восстановление после ранней недоступности базы: `docker compose stop
-  postgres` (через функцию ниже) — `/health` отдаёт 503; `docker compose
-  start postgres` — не позже чем через 60 с снова 200, без перезапуска api.
+  postgres` в каталоге развёртывания
+  (`wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose stop postgres`)
+  — `/health` отдаёт 503; `docker compose start postgres` там же — не позже
+  чем через 60 с снова 200, без перезапуска api.
 
 `-Check` только читает: дистрибутив не запускает и не останавливает. Звенья
 внутри остановленного дистрибутива помечаются «не проверено», и код тогда
-ненулевой. Адрес хоста в ЛВС `-Check` не печатает.
+ненулевой. Адрес хоста в ЛВС `-Check` не печатает. Звенья диска и
+каталога развёртывания: «диск дистрибутива разреженный» (атрибут
+`SparseFile` у `ext4.vhdx`), `.wslconfig: sparseVhd=true` и
+`.wslconfig: autoMemoryReclaim=gradual` — каждый ключ своим звеном,
+«настройки каталога развёртывания» и «стек поднят из каталога
+развёртывания» (метка `com.docker.compose.project.working_dir` контейнеров
+проекта — FAIL, если стек поднят, например, из клона разработки).
 
 **Сбой пути к стеку никто не сообщает сам.** Сигналы — `measure-boot.log`
 (задача замера пишет его при каждом старте; `result=нет ответа 200` — стек
@@ -479,8 +562,18 @@ Windows там виден как `/mnt/<диск>/…`, и относитель�
 - `-it` у `docker exec` зависит от TTY Git Bash;
 - функция есть только в интерактивной оболочке, поэтому сценарии
   `ops/backup/*.sh` запускаются внутри дистрибутива
-  (`wsl.exe -d domovoy-engine --cd <клон> --exec bash ops/backup/…`, так их
-  зовут задача бэкапа и путь нового ПК), а не через неё.
+  (`wsl.exe -d domovoy-engine --cd /srv/domovoy --exec bash ops/backup/…`,
+  так их зовут задача бэкапа и путь нового ПК), а не через неё;
+- функция работает в текущем каталоге Windows — то есть с проектом клона
+  разработки. Команды по боевому стеку идут в каталоге развёртывания:
+
+  ```bash
+  MSYS_NO_PATHCONV=1 wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose ps
+  ```
+
+  `MSYS_NO_PATHCONV=1` нужен только в Git Bash: без него `/srv/domovoy`
+  превращается в путь Windows раньше, чем его увидит `wsl.exe`. В
+  PowerShell та же команда — без него.
 
 **Логи и хронология загрузки.** Перезагрузка или выключение Windows гасит
 ВМ WSL без остановки контейнеров
@@ -507,8 +600,8 @@ wsl.exe -d domovoy-engine -u root --exec journalctl CONTAINER_NAME=<контей
 существующие контейнеры стека остаются на прежнем драйвере, пока их не
 пересоздать — один раз, тома не трогаются:
 
-```bash
-docker compose --profile ha up -d --force-recreate   # Git Bash, в каталоге клона, через функцию docker()
+```powershell
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose --profile ha up -d --force-recreate
 ```
 
 До этого `-Check` отдаёт FAIL у звена «логи контейнеров проекта в journald»
@@ -580,9 +673,10 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninst
 powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Uninstall
 ```
 
-`-Uninstall` останавливает стек внутри движка (`stop`, тома целы), снимает
-задачи `domovoy-engine` и `domovoy-measure-boot` и расписание бэкапа
-`domovoy-backup` (без движка оно ночью будило бы WSL), гасит дистрибутив,
+`-Uninstall` останавливает стек внутри движка в каталоге развёртывания
+(`stop`, тома целы), снимает задачи `domovoy-engine` и
+`domovoy-measure-boot` и расписание бэкапа `domovoy-backup` (без движка
+оно ночью будило бы WSL), гасит дистрибутив,
 снимает свои записи `portproxy`, правило межсетевого экрана Windows и
 правило Hyper-V прежней версии и возвращает `.wslconfig` из копии или
 удаляет его по отметке. Никакого другого движка он не поднимает и никуда не
@@ -596,6 +690,194 @@ domovoy-engine` уничтожает их — только решением вл
 [0030](docs/decisions/0030-wsl-nat-portproxy.md): он снова пишет mirrored и
 пересоздаёт правило Hyper-V; затем `wsl --shutdown` и задача
 `domovoy-engine`. Прямой `-Install` прежней версии поверх nat отказывает.
+
+## Каталог развёртывания и обновление (Windows, WSL2)
+
+Боевой стек живёт в `/srv/domovoy` внутри дистрибутива `domovoy-engine`:
+это отдельный git-клон только для запуска — в нём не правят и не собирают.
+Образы `api` и `migrate` каждого коммита `main` публикует CI в GHCR
+(`ghcr.io/<владелец>/domovoy-api` и `ghcr.io/<владелец>/domovoy-migrate`, тег
+`sha-<коммит>`); до публикации каждый образ проходит скан секретов. Почему
+так и что отвергнуто —
+[0034](docs/decisions/0034-deploy-directory-ghcr-update.md).
+
+Команды раздела — в терминале PowerShell от администратора, в каталоге
+клона Windows: хост-сценарии запускаются оттуда, а действуют на каталог
+развёртывания.
+
+### Перенос стека в каталог развёртывания
+
+Разово — на хосте, где стек уже работает из клона Windows. Тома не
+переносятся: имя проекта в каталоге развёртывания то же
+(`COMPOSE_PROJECT_NAME` из перенесённого `.env`), и стек подхватывает
+прежние тома. Шаги — в этом порядке.
+
+**Перед шагом 3 — видимость пакетов GHCR.** Первая публикация создаёт
+пакеты `domovoy-api` и `domovoy-migrate` приватными, а каталог
+развёртывания тянет образы без входа в реестр. Разовый шаг владельца после
+первой публикации: на GitHub, в настройках каждого из двух пакетов
+(Packages → пакет → Package settings → Change visibility) — Public. Пока
+пакеты приватные, обновление отказывает до первого изменения: «образа …
+нет в реестре».
+
+1. Клон в каталог развёртывания — внутри дистрибутива, от root: тем же
+   пользователем `update.ps1` зовёт `update.sh`, и git не отказывает по
+   владельцу каталога:
+
+   ```powershell
+   wsl.exe -d domovoy-engine -u root --exec git clone https://github.com/<владелец>/domovoy.git /srv/domovoy
+   ```
+
+2. Копия `.env` и `config/` из клона Windows — только файлы владельца:
+   `.env`, четыре файла `config/` и `docker-compose.override.yml`, если он
+   есть. Каталог `config/` целиком не копируется: примеры в нём
+   отслеживаются git, и их копия другой версии сделала бы рабочее дерево
+   каталога развёртывания грязным — обновление на нём отказывает.
+
+   ```powershell
+   wsl.exe -d domovoy-engine -u root --cd "<клон>" --exec cp .env /srv/domovoy/.env
+   wsl.exe -d domovoy-engine -u root --cd "<клон>" --exec cp config/entities.yaml config/home-profile.md config/proactive-rules.yaml config/response-templates.yaml /srv/domovoy/config/
+   ```
+
+   `COMPOSE_PROJECT_NAME` в `.env` каталога развёртывания — то же, что у
+   работающего стека (`domovoy`). `BACKUP_DIR` остаётся путём Windows вида
+   `D:/domovoy-backups`.
+3. Первое обновление из каталога развёртывания — с `-Adopt`: стек ещё
+   поднят из клона Windows, и без него обновление отказывает. Нужны
+   запущенные `postgres` и `homeassistant`, доступный `BACKUP_DIR` и
+   опубликованные образы. Сначала сухой прогон:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 -Adopt -DryRun
+   powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 -Adopt
+   ```
+
+   Обновление снимает бэкап, применяет миграции и пересоздаёт контейнеры
+   из каталога развёртывания на образах реестра. Код 5 на этом шаге
+   ожидаем: задача замера и `.wslconfig` ещё по-старому — их переводит
+   шаг 4.
+4. Повторная установка — задача бэкапа (`--cd "/srv/domovoy"`), задача
+   замера, порты firewall и portproxy переходят на каталог развёртывания,
+   диск дистрибутива становится разреженным, в `.wslconfig` появляется
+   `[experimental]`:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Install
+   wsl --shutdown                               # если -Install менял .wslconfig: применяет его, гасит все дистрибутивы
+   Start-ScheduledTask -TaskName domovoy-engine
+   powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Check
+   powershell -ExecutionPolicy Bypass -File ops/backup/install-schedule.ps1 -Check
+   ```
+
+   В `-Check` звено «стек поднят из каталога развёртывания» — OK; задача
+   бэкапа — с `--cd "/srv/domovoy"`.
+5. **Только после шага 4** — в `.env` клона Windows другое имя проекта,
+   например `COMPOSE_PROJECT_NAME=domovoy-dev`. Тогда `docker compose` в
+   клоне разработки поднимает свой стек и не пересоздаёт боевые контейнеры.
+   Раньше нельзя: до шага 4 ночная задача бэкапа идёт с `--cd <клон>`,
+   искала бы проект `domovoy-dev` и отказала.
+
+`.env` и `config/` в клоне Windows после переноса на боевой стек не
+влияют; удалять их или нет — решение владельца.
+
+### Обновление стека
+
+Одна команда — переводит каталог развёртывания на голову `main`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 -DryRun   # план, ничего не меняет
+powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1
+```
+
+`-DryRun` печатает целевой коммит, образы, команду бэкапа, какие ключи
+`.env` будут дописаны и какие образы удалены — и не меняет ни каталог, ни
+`.env`, ни контейнеры, ни образы. `-Ref <коммит>` — другой целевой коммит
+(40 шестнадцатеричных символов).
+
+Обёртка `update.ps1` проверяет, что дистрибутив зарегистрирован и
+работает (остановленный она не поднимает — раздел «Автозапуск после
+перезагрузки») и что каталог развёртывания на месте, затем зовёт внутри
+дистрибутива `deploy/update.sh`. Он:
+
+1. проверяет до первого изменения: движок, compose, чистое рабочее дерево,
+   `.env`, запущенные `postgres` и `homeassistant` из этого каталога,
+   целевой коммит, наличие обоих образов в реестре, `BACKUP_DIR`;
+   параллельный запуск отбивает блокировка;
+2. снимает бэкап `ops/backup/backup.sh` и печатает его путь строкой
+   `update: бэкап: <путь>`;
+3. переключает каталог на целевой коммит;
+4. досинхронизирует `.env` по `.env.example`: новый ключ без разметки
+   дописывается значением примера, генерируемый секрет — случайным
+   значением, ключ от владельца называется строкой
+   `.env: заполните <KEY>` — его вписать в `/srv/domovoy/.env` руками
+   (`wsl.exe -d domovoy-engine -u root --exec nano /srv/domovoy/.env`), и
+   стек получит значение при следующем
+   `docker compose --profile ha up -d --wait` в каталоге развёртывания.
+   Значения в вывод не попадают;
+5. пишет в `.env` тег образа коммита, тянет образы `api` и `migrate`;
+6. применяет миграции — сервис `migrate`, одной транзакцией `psql`;
+7. перезапускает стек (`up -d --wait`) и проверяет `/health` на
+   `127.0.0.1:<API_HTTP_PORT>`;
+8. чистит: из образов `domovoy-api` и `domovoy-migrate` остаются текущий и
+   предыдущий, кэш сборки движка удаляется (`docker builder prune --all` —
+   следующая сборка в клоне разработки пойдёт без кэша).
+
+После успеха обёртка запускает `engine-setup.ps1 -Check`.
+
+| Код | Что значит |
+|---|---|
+| 0 | обновлено (или сухой прогон) |
+| 1 | отказ до первого изменения — причина в строке `отказ:`; стек не тронут |
+| 2 | ошибка вызова |
+| 3 | провал после изменения, откат выполнен: стек на прежнем коммите и образе отвечает |
+| 4 | провал и отказ отката — нужен человек; путь бэкапа в выводе |
+| 5 | обновлено, но `engine-setup.ps1 -Check` красный — звенья в его выводе |
+
+**Откат.** Провал после первого изменения — `checkout`, `.env`, pull,
+миграция, `up --wait` или `/health` — возвращает прежний коммит, прежние
+ключи образа в `.env` и прежний образ и проверяет `/health` (код 3).
+**Схема базы не откатывается:** прежний код работает на новой схеме,
+пока миграции следуют expand/contract. Красный `-Check` после обновления
+образ не откатывает — его звенья (firewall, portproxy, задачи,
+`.wslconfig`) от образа не зависят: код 5, стек остаётся обновлённым.
+
+**Прерванное обновление.** Состояние отката лежит файлом
+`/srv/domovoy/.git/domovoy-update.state` с начала изменений до конца.
+Оборвался процесс — закрыто окно, `wsl --shutdown`, перезагрузка, — файл
+остаётся, и следующий запуск `update.ps1` сначала доводит откат по нему
+(код 3 или 4), а не начинает новое обновление; `-DryRun` о нём сообщает.
+После кода 4 файл тоже остаётся: следующий запуск повторит откат.
+
+Обновление не запускать в окне ночного бэкапа (03:30): общей блокировки с
+бэкапом нет.
+
+**Ручные шаги — запасной путь:** обновление отказывает по причине, которую
+не снять сразу, или нужен человек после кода 4. Всё — в каталоге
+развёртывания, в PowerShell (из Git Bash — с `MSYS_NO_PATHCONV=1`
+впереди):
+
+```powershell
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash ops/backup/backup.sh
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec git fetch origin
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec git checkout --detach <коммит>
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash deploy/envfile.sh sync .env.example .env
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash deploy/envfile.sh set .env DOMOVOY_IMAGE_TAG sha-<коммит>
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose --profile migrate pull api migrate
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose --profile migrate run --rm migrate
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose --profile ha up -d --wait
+curl.exe -s http://127.0.0.1:<API_HTTP_PORT>/health
+```
+
+Реестр недоступен — образ `api` собирается на месте, без надстройки
+каталога развёртывания (`-f docker-compose.yml`, и
+`-f docker-compose.override.yml`, если он есть), а миграции применяются
+ручным путём раздела «Схема базы данных»:
+
+```powershell
+wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose -f docker-compose.yml --profile ha up -d --build --wait
+```
+
+Следующее обновление одной командой возвращает стек на образы реестра.
 
 ## Локальная разработка
 
@@ -866,7 +1148,13 @@ WebSocket-соединение с подпиской на `state_changed`. Со�
 
 **Два рубежа защиты.** Основной — `gitleaks` в pre-commit хуке: блокирует
 коммит до попадания данных в историю. Дублирующий — `gitleaks` в CI на каждый
-push и PR, на случай коммита в обход хуков. Помимо стандартных правил
+push и PR, на случай коммита в обход хуков. Образы `api` и `migrate` до
+публикации в GHCR проходят тот же `gitleaks` (`deploy/build-images.sh`):
+сканируются пути, которые добавляет наш Dockerfile (`/app`, `/migrations`),
+и JSON конфига образа; базовые слои upstream-образов не сканируются — на
+файлах ОС правила проекта дают ложные срабатывания. Новая точка `COPY` в
+финальной стадии Dockerfile добавляется в список путей скана той же
+правкой. Помимо стандартных правил
 провайдеров закрыты токен Home Assistant, ключи GigaChat и Yandex Cloud,
 топик ntfy, приватные IPv4, MAC-адреса и реальные имена хостов. В настройках
 репозитория включены secret scanning и push protection.
