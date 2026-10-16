@@ -104,6 +104,60 @@ TRACKED_CONFIG = (
 FILE_TOOLS = ("Read", "Edit")
 READ_COMMANDS = ("cat", "type", "Get-Content")
 
+# Остановка движка domovoy-engine гасит и боевой стек (#164). Шаблоны wsl без ведущего `*`:
+# с ним правило закрыло бы `git commit -m` и `grep` с тем же текстом. Пределы — то, что
+# шаблоном не закрыть (имя через переменную, Start-Process, bash -c, -EncodedCommand,
+# Stop-Service LxssManager, сценарий под allow), — пробами не утверждаются ни в одну сторону:
+# права — страховка, а не граница (запись 0026, «Пределы»).
+WSL_ENGINE_CONTROLS = (
+    "wsl --shutdown",
+    "wsl.exe --shutdown",
+    "wsl.exe --terminate domovoy-engine",
+    "wsl.exe -d domovoy-engine --shutdown",
+    "wsl --distribution x --terminate x",
+    "wsl -t domovoy-engine",
+    "wsl.exe -t domovoy-engine",
+    "wsl --unregister domovoy-engine",
+    "wsl.exe --unregister x",
+    "wsl --manage domovoy-engine --resize 10GB",
+    "powershell -Command \"wsl --shutdown\"",
+    "powershell.exe -c 'wsl.exe -d x --terminate x'",
+    "pwsh -Command wsl --shutdown",
+    "cmd /c wsl --unregister x",
+    "cmd.exe /c wsl.exe --terminate x",
+    "/c/Windows/System32/wsl.exe --shutdown",
+    "C:\\Windows\\System32\\wsl.exe --terminate x",
+    "wslconfig /t x",
+    "wslconfig.exe /u x",
+)
+
+WSLCONFIG_WRITES = (
+    "echo x > /c/Users/user/.wslconfig",
+    "echo x >> ~/.wslconfig",
+    "echo x > \"$TEMP/probe.wslconfig\"",
+    "printf x | tee /c/Users/user/.wslconfig",
+    "Set-Content $HOME/.wslconfig x",
+    "Add-Content $HOME/.wslconfig x",
+    "Out-File -FilePath $HOME/.wslconfig",
+    "cp /tmp/x /c/Users/user/.wslconfig",
+    "Copy-Item x $HOME/.wslconfig",
+)
+
+WSLCONFIG_PATHS = (".wslconfig", "/c/Users/user/.wslconfig", "/home/user/.wslconfig")
+
+# Рабочие команды, которые правила движка задеть не вправе.
+WSL_OPEN = (
+    "bash deploy/windows/docker-wsl.sh compose ps",
+    "wsl.exe -d domovoy-engine --exec docker logs -t api",
+    "powershell -File deploy/windows/engine-setup.ps1 -Check",
+    "git commit -m 'docs: запрет wsl --shutdown'",
+    "grep -n 'wsl --shutdown' docs/rules/implement.md",
+    "git commit -m 'docs: правка .wslconfig'",
+    "bash scripts/stand.sh up --name 7",
+)
+
+STAND_SCRIPT = "bash scripts/stand.sh up --name 7"
+
 
 def both_forms(rel):
     """Относительная форма и та же, вынесенная под абсолютный путь клона."""
@@ -234,6 +288,33 @@ class SettingsPermissions(unittest.TestCase):
                     command = "%s %s" % (cmd, rel)
                     with self.subTest(shell=shell, command=command):
                         self.assertCommandOpen(shell, command)
+
+    # #164: движок domovoy-engine общий у стенда и боевого стека.
+    def test_wsl_engine_controls_denied(self):
+        for shell in SHELLS:
+            for command in WSL_ENGINE_CONTROLS + WSLCONFIG_WRITES:
+                with self.subTest(shell=shell, command=command):
+                    self.assertCommandDenied(shell, command)
+        for tool in ("Edit", "Write"):
+            for path in WSLCONFIG_PATHS:
+                with self.subTest(tool=tool, path=path):
+                    self.assertPathDenied(tool, path)
+
+    def test_wsl_working_commands_open(self):
+        for shell in SHELLS:
+            for command in WSL_OPEN:
+                with self.subTest(shell=shell, command=command):
+                    self.assertCommandOpen(shell, command)
+
+    def test_stand_script_allowed(self):
+        allow = load_rules("allow")
+        self.assertTrue(command_hits(allow, "Bash", STAND_SCRIPT),
+                        "Bash(%s) не попадает под allow" % STAND_SCRIPT)
+        self.assertEqual(command_hits(self.deny, "Bash", STAND_SCRIPT), [])
+        # allow узкий: другие сценарии и сам движок им не открыты.
+        for command in ("bash scripts/risk.sh plan x", "wsl.exe -d domovoy-engine --exec docker ps"):
+            with self.subTest(command=command):
+                self.assertEqual(command_hits(allow, "Bash", command), [])
 
 
 class MatcherModel(unittest.TestCase):
