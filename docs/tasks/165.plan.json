@@ -1,0 +1,355 @@
+{
+  "issue": 165,
+  "current_state": [
+    {
+      "path": "scripts/plan.sh",
+      "line": 162,
+      "observation": "usage() знает только два режима: «<validate|render> <файл плана> [--at <ref>]»; case на строках 170–173 отвергает любой другой режим кодом 2"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 177,
+      "observation": "после режима и плана идёт shift 2 и цикл ключей, где допустим только --at <ref>; любой другой аргумент — usage, код 2. Позиционных аргументов сверх плана разбор сейчас не принимает"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 191,
+      "observation": "отсутствующий план и план, не разбирающийся как JSON (строка 195), уже отказывают через die кодом 2 — общий вход для всех режимов"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 198,
+      "observation": "скрипт переходит в ROOT — корень репозитория, в котором лежит сам скрипт; поэтому все git-вызовы идут в этом дереве, и копия скрипта во временном репозитории работает с ним, а не с деревом проекта"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 240,
+      "observation": "glob_to_regex переводит маску вида docs/tasks/** в регулярное выражение; check_slices (строка 524) уже исключает журнал и план задачи этой маской"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 292,
+      "observation": "pjq — единственный способ звать jq, срезает CR от jq на Windows; SEP/JOIN на строках 302–303 — разделитель полей для построчного разбора файлов и тестов плана"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 389,
+      "observation": "check_form проверяет план по схеме и печатает нарушения через report; validate при провале формы содержательные проверки не запускает (строки 681–685)"
+    },
+    {
+      "path": "scripts/plan.sh",
+      "line": 905,
+      "observation": "диспетчер режимов: validate → do_validate, render → do_render; механической сверки плана с диффом нет ни здесь, ни в scripts/risk.sh и scripts/guard-lite.sh — они план не читают"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 1004,
+      "observation": "hist_git — git во временном репозитории песочницы с отключённой глобальной и системной конфигурацией, хуками и подписью; рядом (строка 1002) копия plan.sh и схемы кладётся в scripts/ временного репозитория — готовый образец для сценариев сверки без сети"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "line": 200,
+      "observation": "CANON — согласованный план-фикстура, mutate (строка 341) портит его одной программой jq; begin_case/expect_status/expect_output/expect_no_output (строки 86–139) — общий каркас сценариев"
+    },
+    {
+      "path": "docs/rules/review-correctness.md",
+      "line": 66,
+      "observation": "п. 2 «Сверка с планом» в «На что смотреть» велит сверить файлы, подход и тесты с планом только чтением; запуска сценария и разбора его вывода в нём нет"
+    },
+    {
+      "path": "docs/rules/README.md",
+      "line": 126,
+      "observation": "таблица «Вход» для режима diff перечисляет diff.patch, diffstat.txt, guard-lite.txt, risk.txt, history.txt; строки drift.txt нет. Абзац на строке 149 требует, чтобы каждый файл режима существовал и был не пуст (wc -c), и называет красными только validate.txt, risk.txt, guard-lite.txt"
+    },
+    {
+      "path": ".claude/agents/advisor-engineer.md",
+      "line": 33,
+      "observation": "определение советника перечисляет вход режима diff: «дифф — diff.patch, состав — diffstat.txt, выводы проверок — risk.txt и guard-lite.txt»; та же строка в advisor-constitution.md:36, advisor-pragmatist.md:31, advisor-skeptic.md:31"
+    },
+    {
+      "path": ".claude/agents/step-review-correctness.md",
+      "line": 4,
+      "observation": "шаг ревью корректности имеет инструмент Bash и сам читает git diff по ветке — сценарий сверки он может прогнать сам"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 366,
+      "observation": "раздел «Команды», блок обвязки: plan.sh validate и plan.sh render, режима сверки с диффом нет"
+    }
+  ],
+  "approach": {
+    "summary": "Новый режим drift в scripts/plan.sh: «bash scripts/plan.sh drift <файл плана> <base> <head>». Разбор: режим drift требует ровно два позиционных аргумента после плана; нехватка, лишний аргумент или --at — usage, код 2. Оба ref проверяются git rev-parse --verify <ref>^{commit}, неразрешимый — die кодом 2. Отсутствующий и не-JSON план отказывают общим входом (код 2); план, не проходящий форму схемы (check_form), — die кодом 2 с указанием сначала прогнать validate, нарушения формы печатаются в stderr. Диапазон — «<base>...<head>» (три точки, от merge-base, как в ревью: git diff origin/main...HEAD), git diff --name-status --no-renames -z: переименование видно как удаление старого и добавление нового пути, пути с не-ASCII не экранируются кавычками. Сверка в три стороны: (1) файл плана с action create или modify отсутствует в диффе — «расхождение: файл плана не изменён в диффе: <path> (в плане <action>)», а если он в диффе удалён — «расхождение: файл плана удалён, а в плане <action>: <path>»; файл с action delete не удалён — «расхождение: файл на удаление не удалён: <path>»; (2) путь из диффа, которого нет среди files[].path, — «расхождение: файл изменён вне плана: <path>», кроме журнала и плана самой задачи — маска docs/tasks/<issue>.* через glob_to_regex, номер из поля issue плана (журналы других задач не исключаются); (3) тест с new: true, чьё имя (name, сравнение как строки, grep -F) не встречается среди добавленных строк (начинаются с «+», кроме заголовка «+++») git diff -U0 <base>...<head> -- <file> — «расхождение: новый тест не найден в добавленных строках <file>: «<name>»». Итог последней строкой: «Расхождений нет.» при нуле, иначе «Расхождений: <число>.»; код 0 при любом числе расхождений. Явная строка «Расхождений нет.» нужна ещё и потому, что вход совета проверяется на непустоту (wc -c, docs/rules/README.md, «Вход»): пустой drift.txt совет бы не собрал. Сценарий ничего не блокирует и в число красных выводов входа (validate.txt, risk.txt, guard-lite.txt) не добавляется. Правила: в п. 2 review-correctness.md — прогнать «bash scripts/plan.sh drift docs/tasks/<N>.plan.json origin/main HEAD» и назвать каждую строку «расхождение:» вслух — записанное в журнале или необъяснённое (major); в таблицу «Вход» README.md — строка drift.txt для режима diff; в четыре определения advisor-*.md — drift.txt в перечень входа режима diff; в «Команды» CLAUDE.md — команда drift. Тесты — новые сценарии в scripts/plan.test.sh на временном git-репозитории (образец hist_git), без сети; существующие сценарии validate и render остаются зелёными.",
+    "rejected": [
+      {
+        "option": "Отдельный сценарий scripts/plan-drift.sh",
+        "reason": "issue предлагает режим plan.sh; отдельный файл повторил бы разбор плана, pjq, проверку формы и glob_to_regex, а копия разъезжается молча"
+      },
+      {
+        "option": "Отдельный scripts/plan-drift.test.sh",
+        "reason": "нужен новый шаг в .github/workflows/ci-fast.yml и своя фикстура плана; plan.test.sh уже несёт согласованный план, каркас сценариев и образец временного репозитория"
+      },
+      {
+        "option": "Две точки base..head вместо трёх",
+        "reason": "при ушедшем вперёд main в дифф попали бы чужие изменения main, и каждое стало бы «вне плана»; ревью читает git diff origin/main...HEAD"
+      },
+      {
+        "option": "Ненулевой код при наличии расхождений",
+        "reason": "issue прямо требует кода 0 при любом числе расхождений: расхождение не дефект само по себе, сценарий не блокирует"
+      },
+      {
+        "option": "Исключать из «вне плана» весь docs/tasks/**",
+        "reason": "issue называет только журнал и план задачи (docs/tasks/<N>.*); правка чужого журнала в ветке — как раз то расхождение, которое стоит назвать"
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да: режим сценария, три вида расхождений, строка «расхождений нет», код 0 при расхождениях и 2 при ошибке, сценарии на временном репозитории, правки review-correctness.md п. 2, таблицы «Вход» и «Команд». Имя режима — drift, его выбор триаж отдал плану. Сверх критерия — drift.txt в перечне входа четырёх определений советников: без этого советник не знает, что файл есть.",
+    "alternative": "Нет реалистичного второго способа с иным наблюдаемым результатом: отдельный скрипт или отдельный тест-файл дали бы ту же команду и тот же вывод с другим именем и ценой дублирования (отвергнуто в подходе).",
+    "ripple": "grep «guard-lite.txt» по scripts, docs/rules, .claude: перечень входа режима diff стоит в docs/rules/README.md:126–135 и в четырёх .claude/agents/advisor-*.md (строки 31–37) — все пять правятся; grep «in/\\|validate.txt\\|risk.txt» по scripts/council.sh даёт только ложные совпадения — шебанг (строка 1, «bin/») и комментарий о диапазоне git (строка 13, «origin/main»): входные файлы in/ council.sh не читает, правки не нужно. grep «plan.sh» по .claude/hooks/rules-map.json и rule-injector.sh пуст — впрыск правил от нового режима не зависит. Вызовы plan.sh validate/render (CLAUDE.md, docs/rules/plan.md, README.md, step-plan.md, step-review-correctness.md) не меняются: разбор режимов validate и render остаётся прежним, это держат существующие сценарии plan.test.sh.",
+    "workaround": "Нет: новая функциональность обвязки, без HACK.",
+    "council_signs": [
+      "правка обвязки — scripts/plan.sh, scripts/plan.test.sh, docs/rules/**, .claude/CLAUDE.md, .claude/agents/** (группа harness_quality в scripts/risk.json)",
+      "новая функциональность — новый режим сценария plan.sh"
+    ],
+    "executor": "Субагент: по задаче целиком 9 файлов и сотни строк (режим в plan.sh и сценарии в plan.test.sh) — порог «до 3 файлов и ~40 строк» превышен. Срез «правила» — короткие правки текста, может сделать и оркестратор после среза «сценарий».",
+    "slices": [
+      {
+        "name": "сценарий",
+        "files": [
+          "scripts/plan.sh",
+          "scripts/plan.test.sh"
+        ],
+        "contract": "Команда: bash scripts/plan.sh drift <файл плана> <base> <head>. Строки вывода в stdout, каждая с префиксом «расхождение: »: «файл плана не изменён в диффе: <path> (в плане <action>)», «файл плана удалён, а в плане <action>: <path>», «файл на удаление не удалён: <path>», «файл изменён вне плана: <path>», «новый тест не найден в добавленных строках <file>: «<name>»». Последняя строка — «Расхождений нет.» или «Расхождений: <число>.». Код 0 при любом числе расхождений; код 2 — ошибка вызова (нет base/head, лишний аргумент, --at), неразрешимый ref, отсутствующий, не-JSON или не проходящий форму схемы план. usage() и шапка «КАК ЗАПУСКАТЬ» называют режим drift.",
+        "after": []
+      },
+      {
+        "name": "правила",
+        "files": [
+          "docs/rules/review-correctness.md",
+          "docs/rules/README.md",
+          ".claude/CLAUDE.md",
+          ".claude/agents/advisor-constitution.md",
+          ".claude/agents/advisor-engineer.md",
+          ".claude/agents/advisor-pragmatist.md",
+          ".claude/agents/advisor-skeptic.md"
+        ],
+        "contract": "Цитирует команду и префикс «расхождение:» из контракта среза «сценарий» дословно: «bash scripts/plan.sh drift docs/tasks/<N>.plan.json origin/main HEAD». README.md: строка «| `drift.txt` | `diff` | <команда> |» в таблице «Вход»; в список красных выводов абзаца о пустом входе drift.txt не добавляется. Определения советников: drift.txt в перечне входа режима diff.",
+        "after": [
+          "сценарий"
+        ]
+      }
+    ],
+    "single_slice_reason": "",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "scripts/plan.sh",
+      "action": "modify",
+      "why": "режим drift: разбор аргументов, проверка ref и формы плана, сверка files[] и tests[] с диффом base...head, итоговая строка; usage() и шапка (ЧТО ПРОВЕРЯЕТСЯ, ЧЕГО НЕ ЛОВИТ, КАК ЗАПУСКАТЬ, коды возврата). Группа harness_quality"
+    },
+    {
+      "path": "scripts/plan.test.sh",
+      "action": "modify",
+      "why": "сценарии drift на временном git-репозитории: каждый вид расхождения, совпадение, исключение журнала и плана задачи, отказы. Группа harness_quality"
+    },
+    {
+      "path": "docs/rules/review-correctness.md",
+      "action": "modify",
+      "why": "«На что смотреть», п. 2 — прогнать drift и разобрать каждую строку вывода: записанное в журнале или необъяснённое (major). Группа harness_quality"
+    },
+    {
+      "path": "docs/rules/README.md",
+      "action": "modify",
+      "why": "таблица «Вход» — строка drift.txt для режима diff. Группа harness_quality"
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "раздел «Команды» — команда plan.sh drift. Группа harness_quality"
+    },
+    {
+      "path": ".claude/agents/advisor-constitution.md",
+      "action": "modify",
+      "why": "перечень входа режима diff — drift.txt, иначе советник не знает о файле. Группа harness_quality"
+    },
+    {
+      "path": ".claude/agents/advisor-engineer.md",
+      "action": "modify",
+      "why": "перечень входа режима diff — drift.txt. Группа harness_quality"
+    },
+    {
+      "path": ".claude/agents/advisor-pragmatist.md",
+      "action": "modify",
+      "why": "перечень входа режима diff — drift.txt. Группа harness_quality"
+    },
+    {
+      "path": ".claude/agents/advisor-skeptic.md",
+      "action": "modify",
+      "why": "перечень входа режима diff — drift.txt. Группа harness_quality"
+    },
+    {
+      "path": "docs/tasks/165.md",
+      "action": "modify",
+      "why": "журнал задачи — ведёт оркестратор"
+    }
+  ],
+  "boundaries": [
+    "scripts/plan.sh",
+    "scripts/plan.test.sh",
+    "docs/rules/review-correctness.md",
+    "docs/rules/README.md",
+    ".claude/CLAUDE.md",
+    ".claude/agents/advisor-*.md",
+    "docs/tasks/165.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "Сверка с диффом: файл плана без правки и удалённый вместо правки",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D1", "D3"],
+      "behavior": "во временном репозитории план называет a.txt (modify), b.txt (create), c.txt (modify) и файл с кириллическим именем «файл.txt» (modify); в диффе base...head a.txt не тронут, b.txt добавлен, c.txt удалён, «файл.txt» изменён. Код 0; в выводе «расхождение: файл плана не изменён в диффе: a.txt (в плане modify)» и «расхождение: файл плана удалён, а в плане modify: c.txt»; строк про b.txt и «файл.txt» нет (кириллический путь сопоставлен без экранирования); последняя строка «Расхождений: 2.»"
+    },
+    {
+      "name": "Сверка с диффом: файл на удаление не удалён",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D1", "D3"],
+      "behavior": "план называет old.txt с action delete, в диффе old.txt изменён, а не удалён. Код 0; в выводе «расхождение: файл на удаление не удалён: old.txt»; на варианте, где old.txt удалён, этой строки нет"
+    },
+    {
+      "name": "Сверка с диффом: файл вне плана, журнал и план своей задачи не в счёт",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D1", "D3"],
+      "behavior": "в диффе изменены файл из плана, extra.txt, docs/tasks/<issue>.md, docs/tasks/<issue>.plan.json и журнал чужой задачи docs/tasks/<другой номер>.md; кроме того, ветка base после точки ветвления получает свой коммит с файлом main-only.txt вне плана. Код 0; есть «расхождение: файл изменён вне плана: extra.txt» и такая же строка для журнала чужой задачи; строк про журнал и план своей задачи нет; строки про main-only.txt нет — диапазон считается от merge-base (три точки), а не base..head"
+    },
+    {
+      "name": "Сверка с диффом: новый тест без имени в добавленных строках",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D1", "D3"],
+      "behavior": "тест с new: true объявлен в tests/x.test.sh; имя есть в этом файле на base и удалено на head (в диффе -U0 — только строка «-»), добавлены другие строки. Код 0; в выводе «расхождение: новый тест не найден в добавленных строках tests/x.test.sh: «<имя>»» — удалённая строка за добавленную не считается; на варианте, где имя добавлено строкой «+», расхождения нет; тест с new: false с отсутствующим именем строки не даёт"
+    },
+    {
+      "name": "Сверка с диффом: полное совпадение печатает «Расхождений нет.»",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D1", "D3"],
+      "behavior": "план и дифф совпадают: каждый файл плана изменён по своему action, других путей нет, имя нового теста — в добавленной строке своего файла. Код 0, вывод не пуст, ни одной строки «расхождение:», последняя строка «Расхождений нет.»"
+    },
+    {
+      "name": "Сверка с диффом: отказы вызова и плана кодом 2",
+      "file": "scripts/plan.test.sh",
+      "new": true,
+      "covers": ["D2", "D3"],
+      "behavior": "каждый из случаев даёт код 2 и не печатает «Расхождений»: нет head; лишний аргумент; ключ --at; неразрешимый base; отсутствующий файл плана; план не JSON; план без обязательного поля files (форма схемы). Отдельно: сценарий с расхождениями из соседних случаев завершается кодом 0 — код не зависит от их числа"
+    },
+    {
+      "name": "сверка п. 2 review-correctness.md",
+      "file": "docs/rules/review-correctness.md",
+      "new": false,
+      "covers": ["D4"],
+      "behavior": "ручная сверка: Read п. 2 «Сверка с планом» раздела «На что смотреть» — в нём команда «bash scripts/plan.sh drift docs/tasks/<N>.plan.json origin/main HEAD» и указание назвать вслух каждую строку «расхождение:» как записанную в журнале или необъяснённую (major). Текст правила машиной не исполняется, проверяется его наличие и место"
+    },
+    {
+      "name": "сверка таблицы «Вход» и определений советников",
+      "file": "docs/rules/README.md",
+      "new": false,
+      "covers": ["D5"],
+      "behavior": "ручная сверка: grep -n 'drift.txt' docs/rules/README.md попадает в таблицу «Вход» строкой режима diff с командой drift; grep -c 'drift.txt' по четырём .claude/agents/advisor-*.md даёт 1 в каждом; в абзаце о красных выводах drift.txt не назван"
+    },
+    {
+      "name": "сверка раздела «Команды» CLAUDE.md",
+      "file": ".claude/CLAUDE.md",
+      "new": false,
+      "covers": ["D6"],
+      "behavior": "ручная сверка: grep -n 'plan.sh drift' .claude/CLAUDE.md попадает в блок «Обвязка» раздела «Команды», рядом с plan.sh validate и render"
+    },
+    {
+      "name": "прогон drift по ветке задачи",
+      "file": "scripts/plan.sh",
+      "new": false,
+      "covers": ["D7"],
+      "behavior": "ручная проверка после реализации: bash scripts/plan.sh drift docs/tasks/165.plan.json origin/main HEAD на ветке feat/165-plan-drift — код 0 и «Расхождений нет.» либо каждая строка «расхождение:» объяснена в журнале"
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "D1",
+      "criterion": "Сценарий печатает три вида расхождений из раздела выше. При полном совпадении плана и диффа печатает явную строку «расхождений нет», а не пустой вывод.",
+      "method": "bash scripts/plan.test.sh — код 0, пройдены пять сценариев «Сверка с диффом:» о видах расхождений и о совпадении",
+      "evidence": "вывод plan.test.sh: строки «[ ok  ] Сверка с диффом: …» для каждого вида и для совпадения, итог «Пройдено: N, провалено: 0»"
+    },
+    {
+      "id": "D2",
+      "criterion": "Сценарий завершается с кодом 0 при любом числе расхождений и ненулевым кодом при ошибке вызова, отсутствующем или неразбираемом плане.",
+      "method": "bash scripts/plan.test.sh — сценарий «Сверка с диффом: отказы вызова и плана кодом 2» пройден, сценарии с расхождениями проверяют код 0",
+      "evidence": "вывод plan.test.sh: «[ ok  ] Сверка с диффом: отказы вызова и плана кодом 2» и ok у сценариев с расхождениями"
+    },
+    {
+      "id": "D3",
+      "criterion": "scripts/plan.test.sh (или отдельный *.test.sh) покрывает каждый вид расхождения, совпадение и отказы на временном git-репозитории без сети.",
+      "method": "bash scripts/plan.test.sh — код 0; чтение новых сценариев: репозиторий создаётся в mktemp-песочнице, git без remote, fetch и push",
+      "evidence": "итог «провалено: 0»; grep -nE 'fetch|push|clone|remote' по новым сценариям в scripts/plan.test.sh пуст"
+    },
+    {
+      "id": "D4",
+      "criterion": "docs/rules/review-correctness.md, «На что смотреть», п. 2 — указание прогнать сценарий и разобрать каждую строку вывода.",
+      "method": "Read п. 2 «Сверка с планом» в docs/rules/review-correctness.md",
+      "evidence": "цитата review-correctness.md:<строка> с командой plan.sh drift и указанием разобрать каждую строку «расхождение:»"
+    },
+    {
+      "id": "D5",
+      "criterion": "docs/rules/README.md, таблица «Вход» — строка drift.txt для режима diff.",
+      "method": "grep -n 'drift.txt' docs/rules/README.md — одна строка в таблице «Вход» с режимом diff",
+      "evidence": "цитата README.md:<строка> вида «| `drift.txt` | `diff` | `bash scripts/plan.sh drift …` |»"
+    },
+    {
+      "id": "D6",
+      "criterion": "Команда — в разделе «Команды» .claude/CLAUDE.md.",
+      "method": "grep -n 'plan.sh drift' .claude/CLAUDE.md — строка в блоке «Обвязка» раздела «Команды»",
+      "evidence": "цитата CLAUDE.md:<строка> с командой bash scripts/plan.sh drift docs/tasks/<N>.plan.json origin/main HEAD"
+    },
+    {
+      "id": "D7",
+      "criterion": "Сверх критерия: сценарий работает на настоящей ветке, а не только на песочнице.",
+      "method": "bash scripts/plan.sh drift docs/tasks/165.plan.json origin/main HEAD на ветке задачи — код 0",
+      "evidence": "вывод команды: «Расхождений нет.» либо строки «расхождение:», каждая объяснённая в журнале docs/tasks/165.md; имена новых сценариев в plan.test.sh совпадают с tests[].name плана дословно, иначе drift сам назовёт их ненайденными"
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Разбор аргументов drift ломает validate и render: сейчас после плана допустим только --at, а drift вводит позиционные base и head.",
+      "mitigation": "ветка разбора для drift отдельная, validate и render разбираются прежним циклом; существующие сценарии plan.test.sh (включая --at и неразрешимый ref) обязаны остаться зелёными — итог «провалено: 0»"
+    },
+    {
+      "risk": "Windows: CRLF в выводе git и экранирование не-ASCII путей кавычками дают ложные «не изменён» и «вне плана».",
+      "mitigation": "git diff -z и -c core.quotepath=false, разбор через read -d '', срез CR как в pjq; кириллический путь — в сценарии «Сверка с диффом: файл плана без правки и удалённый вместо правки»; plan.test.sh гоняется локально в Git Bash и в CI на Linux"
+    },
+    {
+      "risk": "Сценарий на временном репозитории зависит от конфигурации git машины (хуки, подпись, имя автора, autocrlf) и краснеет не по делу.",
+      "mitigation": "тот же обёрточный вызов, что hist_git: GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1, core.hooksPath=/dev/null, commit.gpgsign=false, core.autocrlf=false; провал сборки репозитория — fail_case, а не пропуск"
+    },
+    {
+      "risk": "Имя теста, совпавшее с частью другой добавленной строки, даёт ложное «найден»; имя с символами регулярных выражений — ложное «не найден».",
+      "mitigation": "сравнение grep -F по строкам только файла tests[].file и только добавленным; ложное «найден» на подстроке принимается как предел и называется в шапке «ЧЕГО НЕ ЛОВИТ» — сценарий подсказывает ревью, а не доказывает наличие теста"
+    },
+    {
+      "risk": "Пустой или упавший drift.txt во входе совета: совет не соберётся или соберётся на пустом месте.",
+      "mitigation": "итоговая строка печатается всегда, поэтому wc -c на успешном прогоне не 0; при коде 2 вывод в stderr, drift.txt пуст — абзац «Вход» уже требует непустоты каждого файла режима, совет не собирается до починки вызова"
+    }
+  ],
+  "out_of_scope": [
+    "блокировка или изменение уровня риска по расхождениям — сценарий только печатает",
+    "сверка подхода и содержания правок с планом — остаётся чтению ревью",
+    "правка scripts/council.sh, scripts/risk.sh, scripts/guard-lite.sh и CI — сценарий запускается вручную оркестратором и ревьюером, шаг в ci-fast.yml не нужен: plan.test.sh там уже гоняется",
+    "включение drift.txt в список красных выводов входа совета — drift не бывает красным",
+    "сверка current_state и acceptance с диффом — критерий называет только files[] и tests[]"
+  ]
+}
