@@ -121,6 +121,11 @@ PROBES = {
         [edit(".claude/settings.local.json"), edit("docs/tasks/131.md"),
          edit("C:/Users/u/.claude/projects/D--r/memory/m.md"), edit("src/Domovoy.Api/Program.cs"),
          edit("/elsewhere/.claude/settings.json"), bash("sed -i 's/a/b/' scripts/risk.sh")]),
+    "docker-engine-only": (
+        [bash("docker compose up -d"), bash("cd x && docker ps"), bash("docker.exe ps", "PowerShell"),
+         bash("docker compose logs -f api", "PowerShell")],
+        [bash("bash deploy/windows/docker-wsl.sh compose ps"), bash("bash scripts/stand.sh up --name 7"),
+         bash("grep docker README.md"), bash("echo 'docker ps'")]),
     "rule-wiring": (
         [edit("docs/rules/new-rule.md", "x", "Write"),
          bash("cat > docs/rules/other-rule.md <<'E'\nx\nE")],

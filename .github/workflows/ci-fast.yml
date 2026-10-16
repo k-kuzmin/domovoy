@@ -201,6 +201,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/status-progress.test.sh
 
+      # Движка здесь нет: wsl.exe, cygpath, ss, netstat и git worktree list
+      # подменяются подделками в PATH, команды движку сверяются по журналу.
+      - name: Сценарий стенда агента
+        if: ${{ !cancelled() }}
+        run: bash scripts/stand.test.sh
+
       - name: Тесты впрыска правил
         # Только stdlib unittest: зависимость ради тестов хука не ставится.
         if: ${{ !cancelled() }}

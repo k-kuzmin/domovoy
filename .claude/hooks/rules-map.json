@@ -153,6 +153,17 @@
       "note": "Команда заводит задачу в трекере. Открой .claude/CLAUDE.md, раздел «Находки»: когда агент вправе заводить задачу."
     },
     {
+      "name": "docker-engine-only",
+      "doc": "docs/rules/implement.md",
+      "tools": [
+        "Bash",
+        "PowerShell"
+      ],
+      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*docker(?:\\.exe)?(?=[\\s|;&)]|$)",
+      "repeat": true,
+      "note": "Голый docker на хосте. Открой docs/rules/implement.md, раздел «Живая проверка — на стенде»: docker — только в движке domovoy-engine, живая проверка — через bash scripts/stand.sh."
+    },
+    {
       "name": "step-rules-triage",
       "doc": "docs/rules/triage.md",
       "for_subagents": [
