@@ -36,7 +36,9 @@
 # --keep-state (контейнер и том состояния с кэшем сборки), базовые образы,
 # которые вытянул сам стенд, — по ID из pulled-images каталога стенда, без -f
 # и только если их не держит ни один контейнер. Общий кэш движка, образы
-# боевого стека и чужие объекты не трогаются: prune здесь нет.
+# боевого стека и чужие объекты не трогаются: prune здесь нет. Каталог
+# стенда без метки .domovoy-stand, которую up пишет первой записью, up и down
+# не трогают: отказ.
 #
 # Коды: 0 — успех; 1 — отказ по существу, первая строка stderr начинается
 # с «stand: отказ: »; 2 — ошибка вызова.
@@ -199,6 +201,18 @@ done <<< "$(printf '%s\n' "$prod_dirs" | sort -u)"
 # запускается из worktree задачи.
 [ "$source_lx" = "${main_lx%/}" ] && refuse "каталог проекта — каталог боевого стека: $main_lx"
 
+# Метка working_dir есть, только пока у боевого проекта есть контейнеры
+# (ps -a видит и остановленные). Не зависит от них принадлежность самого
+# каталога стенда: up пишет метку первой записью, и каталог без неё up и down
+# не трогают — ни .env в него, ни rm -rf.
+STAND_MARK='.domovoy-stand'
+if [ "$cmd" = up ] || [ "$cmd" = down ]; then
+    owner="$(in_distro 'if [ ! -e "$1" ]; then echo absent; elif [ -f "$1/$2" ]; then echo own; else echo foreign; fi' \
+        "$standdir" "$STAND_MARK")" || refuse "$engine_down_reason"
+    [ "$owner" = foreign ] \
+        && refuse "каталог $standdir существует, но не принадлежит стенду: нет метки $STAND_MARK"
+fi
+
 # id реестра-примера: их ждёт api стенда, в них переименовываются сущности demo.
 mapfile -t wanted_ids < <(sed -nE \
     's/^[[:space:]]*-?[[:space:]]*(entity_id|script_id):[[:space:]]*([^[:space:]#]+).*/\2/p' \
@@ -318,8 +332,8 @@ cmd_up() {
     # config/ — копии примеров, секретов в них нет; читать их должен
     # непривилегированный пользователь контейнера api, поэтому umask 022.
     # .env — 077: его читает только compose.
-    in_distro 'umask 022; mkdir -p "$1/config" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
-        "$standdir" "$source_lx" || fail_up 'каталог стенда не создан'
+    in_distro 'umask 022; mkdir -p "$1/config" && printf "%s\n" "$3" > "$1/$4" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
+        "$standdir" "$source_lx" "$project" "$STAND_MARK" || fail_up 'каталог стенда не создан'
     build_env | in_distro 'umask 077; cat > "$1"' "$standdir/.env" || fail_up '.env стенда не записан'
 
     stand_compose create homeassistant || fail_up 'контейнер HA не создан'

@@ -431,6 +431,28 @@ begin_case 'контроль: worktree вне обоих каталогов пр
 run_stand "$WORKTREE" up --name 7
 expect_status 0
 log_has 'compose -p domovoy-stand-7'
+# -a: остановленный боевой стек метку working_dir сохраняет.
+log_has 'ps -a --filter label=com.docker.compose.project=domovoy'
+[ -f "$FAKE_HOME/domovoy-stand/7/.domovoy-stand" ] || fail_case 'нет метки .domovoy-stand в каталоге стенда'
+end_case
+
+begin_case 'отказ: каталог стенда без метки при пустом боевом проекте'
+# Контейнеров боевого проекта нет — метка working_dir пуста; каталог стенда
+# занят чужим содержимым.
+rm -f "$STATE/prod_wd"
+foreign="$FAKE_HOME/domovoy-stand/7"
+mkdir -p "$foreign"
+printf 'owner\n' > "$foreign/.env"
+for sub in up down; do
+    : > "$LOG"
+    run_stand "$WORKTREE" "$sub" --name 7
+    expect_status 1
+    expect_err_first "каталог $foreign существует, но не принадлежит стенду"
+    log_lacks_re 'compose .* (up|create|cp|run|build|down)( |$)'
+    log_lacks_re 'buildx (create|rm)'
+    log_lacks_re 'image rm|mkdir|cat >|rm -rf'
+    [ "$(cat "$foreign/.env" 2>/dev/null)" = owner ] || fail_case "$sub: чужой .env в каталоге стенда изменён или удалён"
+done
 end_case
 
 # --- Имя, порты, проект ------------------------------------------------------
