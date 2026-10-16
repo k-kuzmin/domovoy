@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Домовой — проверочные сценарии deploy/update.sh, deploy/build-images.sh и
+# Домовой — проверочные сценарии deploy/update.sh, deploy/publish.sh и
 # deploy/windows/update.ps1 (#162).
 #
 # ЗАЧЕМ
@@ -37,7 +37,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
-for f in "$SCRIPT_DIR/update.sh" "$SCRIPT_DIR/envfile.sh" "$SCRIPT_DIR/build-images.sh" \
+for f in "$SCRIPT_DIR/update.sh" "$SCRIPT_DIR/envfile.sh" "$SCRIPT_DIR/publish.sh" \
     "$SCRIPT_DIR/docker-compose.deploy.yml" "$REPO/ops/backup/dotenv.sh" "$REPO/docker-compose.yml"; do
     if [ ! -f "$f" ]; then
         printf 'Не найден %s\n' "$f" >&2
@@ -958,7 +958,7 @@ else
 fi
 
 # ------------------------------------------------------------------
-# deploy/build-images.sh
+# deploy/publish.sh
 # ------------------------------------------------------------------
 make_build_fakes() {
     FAKE="$CASE/fake"
@@ -1003,7 +1003,7 @@ EOF
 }
 
 run_build() {
-    PATH="$FAKE/bin:$PATH" FAKE_DIR="$FAKE" bash "$SCRIPT_DIR/build-images.sh" "$@" \
+    PATH="$FAKE/bin:$PATH" FAKE_DIR="$FAKE" bash "$SCRIPT_DIR/publish.sh" "$@" \
         </dev/null >"$CASE/out" 2>"$CASE/err"
     STATUS=$?
     OUT="$(cat "$CASE/out")"
@@ -1012,7 +1012,7 @@ run_build() {
 
 BSHA="$(printf '%040d' 0 | tr 0 a)"
 
-begin_case 'build_images_scans_before_push (находка на втором образе)'
+begin_case 'publish_scans_before_push (находка на втором образе)'
 make_build_fakes
 printf '2' >"$FAKE/gl_fail_on"
 run_build --repo example.invalid/owner --sha "$BSHA" --push
@@ -1022,7 +1022,7 @@ grep -q '^docker push' "$FAKE/calls.log" && fail_case 'push после нахо�
 grep -q '^gitleaks dir files=0' "$FAKE/calls.log" && fail_case 'gitleaks вызван с пустым каталогом'
 end_case
 
-begin_case 'build_images_scans_before_push (чистый скан)'
+begin_case 'publish_scans_before_push (чистый скан)'
 make_build_fakes
 run_build --repo example.invalid/owner --sha "$BSHA" --push
 expect_status 0
@@ -1040,7 +1040,7 @@ grep -E '^docker build ' "$FAKE/calls.log" | grep -qF -- '--target migrate' || f
     || fail_case 'метка revision не у обоих образов'
 end_case
 
-begin_case 'build_images_scans_before_push (--also-tag main)'
+begin_case 'publish_scans_before_push (--also-tag main)'
 make_build_fakes
 run_build --repo example.invalid/owner --sha "$BSHA" --push --also-tag main
 expect_status 0
@@ -1172,5 +1172,5 @@ if [ "$FAILED" -ne 0 ]; then
     done
     exit 1
 fi
-printf 'update.sh, build-images.sh и update.ps1 держат контракт.\n'
+printf 'update.sh, publish.sh и update.ps1 держат контракт.\n'
 exit 0

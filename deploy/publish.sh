@@ -5,13 +5,13 @@
 # ЗАЧЕМ
 #
 # Каталог развёртывания не собирает образ сам: он тянет готовые образы
-# коммита из реестра. Образы собираются здесь — в workflow publish-image.yml
+# коммита из реестра. Образы собираются здесь — в workflow ci-publish.yml
 # и на стенде агента, — и до любого push каждый проходит gitleaks по
 # распакованным слоям: секрет, попавший в слой, не уходит в реестр.
 #
 # КАК ЗАПУСКАТЬ
 #
-#   bash deploy/build-images.sh --repo <реестр>/<владелец> --sha <40 hex> \
+#   bash deploy/publish.sh --repo <реестр>/<владелец> --sha <40 hex> \
 #       [--push] [--also-tag <тег>] [--gitleaks-config <путь>]
 #
 # Собирает из корня клона, в котором лежит сценарий (каталог текущей
@@ -70,11 +70,11 @@ scan_paths='runtime:app migrate:migrations'
 
 set -euo pipefail
 
-say() { printf 'build-images: %s\n' "$*"; }
-fail() { printf 'build-images: отказ: %s\n' "$*" >&2; exit 1; }
+say() { printf 'publish: %s\n' "$*"; }
+fail() { printf 'publish: отказ: %s\n' "$*" >&2; exit 1; }
 usage() {
-  printf 'build-images: %s\n' "$*" >&2
-  printf 'использование: bash deploy/build-images.sh --repo <реестр>/<владелец> --sha <40 hex> [--push] [--also-tag <тег>] [--gitleaks-config <путь>]\n' >&2
+  printf 'publish: %s\n' "$*" >&2
+  printf 'использование: bash deploy/publish.sh --repo <реестр>/<владелец> --sha <40 hex> [--push] [--also-tag <тег>] [--gitleaks-config <путь>]\n' >&2
   exit 2
 }
 
@@ -126,7 +126,7 @@ labels=(--label "org.opencontainers.image.revision=$sha")
 if [ -n "$source_url" ]; then
   labels+=(--label "org.opencontainers.image.source=$source_url")
 else
-  printf 'build-images: remote origin не найден — метка org.opencontainers.image.source не ставится\n' >&2
+  printf 'publish: remote origin не найден — метка org.opencontainers.image.source не ставится\n' >&2
 fi
 
 work="$(mktemp -d)"

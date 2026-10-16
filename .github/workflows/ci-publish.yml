@@ -2,7 +2,7 @@ name: Образы api и migrate
 
 # Образы коммита для каталога развёртывания (#162): deploy/update.sh тянет
 # <реестр>/domovoy-api:sha-<коммит> и domovoy-migrate:sha-<коммит>, а не
-# собирает их на месте. Сборка и скан слоёв — deploy/build-images.sh; на PR
+# собирает их на месте. Сборка и скан слоёв — deploy/publish.sh; на PR
 # образы собираются и сканируются без push, на push в main — ещё и
 # публикуются в GHCR с тегами sha-<коммит> и main.
 on:
@@ -19,7 +19,7 @@ on:
 # мерджа закончится позже, тег main останется на прежнем коммите до
 # следующего мерджа; update.sh тег main не читает.
 concurrency:
-  group: publish-image-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-publish-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -70,7 +70,7 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          bash deploy/build-images.sh \
+          bash deploy/publish.sh \
             --repo "ghcr.io/${OWNER,,}" \
             --sha "$SHA" \
             --gitleaks-config "$RUNNER_TEMP/gitleaks-config.toml"
@@ -115,7 +115,7 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          bash deploy/build-images.sh \
+          bash deploy/publish.sh \
             --repo "ghcr.io/${OWNER,,}" \
             --sha "$SHA" \
             --gitleaks-config .gitleaks.toml \
