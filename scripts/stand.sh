@@ -369,10 +369,15 @@ cmd_up() {
         fail_up 'стек стенда не поднялся'
     fi
 
+    # Без curl — строка, а не отказ: здоровье api уже подтвердил compose up
+    # --wait по healthcheck, а снос поднятого стенда из-за инструмента хоста
+    # отнял бы проверку целиком.
     if command -v curl >/dev/null 2>&1; then
         code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:$api_port/health")"
         [ "$code" = 200 ] || fail_up "/health стенда ответил $code"
         say "/health стенда: $code"
+    else
+        say '/health стенда: не проверен — нет curl'
     fi
     say "стенд поднят: api http://127.0.0.1:$api_port, HA http://127.0.0.1:$ha_port"
 }
@@ -381,8 +386,13 @@ cmd_status() {
     local report code renamed missing
     say "проект $project, api :$api_port, HA :$ha_port"
     stand_compose ps -a --format '{{.Service}} {{.State}} {{.Health}}'
-    if ! stand_compose cp "$source_lx/deploy/stand/ha-onboard.py" homeassistant:/tmp/ha-onboard.py >/dev/null 2>&1; then
+    # cp проходит и в остановленный контейнер, поэтому «запущен» — по ps.
+    if [ -z "$(stand_compose ps --status running -q homeassistant 2>/dev/null)" ]; then
         say 'токен HA: не проверен — HA стенда не запущен'
+        return 0
+    fi
+    if ! stand_compose cp "$source_lx/deploy/stand/ha-onboard.py" homeassistant:/tmp/ha-onboard.py >/dev/null 2>&1; then
+        say 'токен HA: не проверен — ha-onboard.py не скопирован в HA стенда'
         return 0
     fi
     report="$(in_distro 'sed -n "s/^HA_TOKEN=//p" "$1"' "$standdir/.env" \

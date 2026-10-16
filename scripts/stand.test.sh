@@ -192,6 +192,8 @@ case "$1" in
                 if [ "$t" = "$FAKE_TOKEN" ]; then echo 'http 200'; else echo 'http 401'; fi
                 echo 'renamed 11'
                 echo 'missing binary_sensor.example_kitchen_window' ;;
+            *' ps --status running -q homeassistant '*)
+                [ -f "$S/ha_stopped" ] || echo 'c-stand-ha' ;;
             *' ps '*)
                 printf 'api running healthy\npostgres running healthy\nhomeassistant running healthy\n' ;;
             *' logs '*) echo 'api-1  | Now listening on: http://[::]:8080' ;;
@@ -528,6 +530,19 @@ all="$all$OUT$ERR"
 log_has 'logs --tail 5 api'
 case "$all" in *"$TOKEN"*) fail_case 'токен HA в выводе подкоманды' ;; esac
 grep -qF "$TOKEN" "$LOG" && fail_case 'токен HA в аргументах команд движка'
+end_case
+
+begin_case 'status: HA стенда остановлен — токен не проверяется'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+: > "$STATE/ha_stopped"
+: > "$LOG"
+run_stand "$WORKTREE" status --name 7
+expect_status 0
+printf '%s\n' "$OUT" | grep -qF 'токен HA: не проверен — HA стенда не запущен' \
+    || fail_case 'status не печатает «не проверен — HA стенда не запущен»'
+log_has 'ps --status running -q homeassistant'
+log_lacks_re 'compose .* (cp|exec)( |$)'
 end_case
 
 # --- Сборка ------------------------------------------------------------------
