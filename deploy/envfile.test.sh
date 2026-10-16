@@ -404,9 +404,11 @@ begin_case 'get: ключ вне белого списка — код 2 без �
 run get "$SANDBOX/get.env" POSTGRES_PASSWORD
 expect_status 2
 expect_out_empty
+[ -z "$ERR" ] || fail_case 'stderr не пуст'
 run get "$SANDBOX/get.env" API_HTTP_PORT POSTGRES_PASSWORD
 expect_status 2
 expect_out_empty
+[ -z "$ERR" ] || fail_case 'stderr не пуст'
 grep -qF VAL_get_secret_pg <<<"$OUT$ERR" && fail_case 'значение секрета попало в вывод'
 end_case
 

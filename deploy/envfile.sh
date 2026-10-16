@@ -31,7 +31,7 @@
 # С --dry-run каждая строка с префиксом «будет », файл не меняется.
 #
 # get печатает KEY=значение только для ключей белого списка (ниже); ключ
-# вне списка — код 2 без вывода в stdout. Значение разбирает dotenv_value
+# вне списка — код 2 без вывода (ни stdout, ни stderr). Значение разбирает dotenv_value
 # из ops/backup/dotenv.sh; значение с плейсхолдером <…> — пустое,
 # отсутствующий ключ — тоже.
 #
@@ -213,10 +213,12 @@ cmd_get() {
     local env="$1" key
     shift
     for key in "$@"; do
-        in_list "$key" "${GET_KEYS[@]}" || usage_error "get: ключ $key вне белого списка"
+        # Вне списка — молча: контракт «код 2 без вывода», а вызывающий
+        # (engine-setup.ps1 через wsl.exe) разбирает весь вывод.
+        in_list "$key" "${GET_KEYS[@]}" || exit 2
     done
     require_readable "$env"
-    # shellcheck source=../ops/backup/dotenv.sh
+    # shellcheck source=ops/backup/dotenv.sh
     . "$SCRIPT_DIR/../ops/backup/dotenv.sh" || io_error 'не прочитан ops/backup/dotenv.sh'
     local value out=''
     for key in "$@"; do
