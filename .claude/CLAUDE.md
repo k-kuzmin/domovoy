@@ -354,11 +354,10 @@ gitleaks git --redact --no-banner                # вся история
 gitleaks dir . --redact --no-banner              # рабочий каталог
 
 # Стек — docker только в движке domovoy-engine, через обёртку.
-# Боевой стек (проект domovoy) поднимает и сносит владелец; агенту — только чтение.
-bash deploy/windows/docker-wsl.sh compose up -d --build --wait
+# Боевой стек (проект domovoy) поднимает и сносит владелец — «Команды
+# человека» ниже; агенту — только чтение.
 bash deploy/windows/docker-wsl.sh compose logs -f api
 bash deploy/windows/docker-wsl.sh compose ps
-bash deploy/windows/docker-wsl.sh compose down
 curl -s http://localhost:18080/health
 
 # Стенд агента для живой проверки — docs/rules/implement.md,
@@ -388,12 +387,19 @@ python3 -m unittest discover -s .claude/hooks/tests -v
 
 **Команды человека.** Применение миграций к базе и секреты агенту закрыты
 правами `.claude/settings.json`: их человек запускает сам, в сессии — через
-`!`. Секреты локально — только так, никогда в файлах проекта.
+`!`. Секреты локально — только так, никогда в файлах проекта. Подъём и
+снос боевого стека правами не закрыты, но тоже команды человека: агенту —
+стенд (`docs/rules/implement.md`, «Живая проверка — на стенде»).
 
 ```bash
 dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api
 cd src/Domovoy.Api && dotnet user-secrets set "Ha:Token" "<значение>"
 cd src/Domovoy.Api && dotnet user-secrets list
+
+# Подъём и снос боевого стека (проект domovoy) — из каталога боевого стека:
+# из worktree без .env обёртка подняла бы или снесла тот же проект domovoy.
+bash deploy/windows/docker-wsl.sh compose up -d --build --wait
+bash deploy/windows/docker-wsl.sh compose down
 ```
 
 ### Поиск по коду
