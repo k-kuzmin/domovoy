@@ -242,7 +242,7 @@
       "Write(//**/.wslconfig)"
     ],
     "allow": [
-      "Bash(bash scripts/stand.sh*)"
+      "Bash(bash scripts/stand.sh *)"
     ],
     "ask": [
       "Bash(gh issue create*)",

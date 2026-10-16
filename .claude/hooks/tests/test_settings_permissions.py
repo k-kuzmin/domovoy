@@ -312,7 +312,9 @@ class SettingsPermissions(unittest.TestCase):
                         "Bash(%s) не попадает под allow" % STAND_SCRIPT)
         self.assertEqual(command_hits(self.deny, "Bash", STAND_SCRIPT), [])
         # allow узкий: другие сценарии и сам движок им не открыты.
-        for command in ("bash scripts/risk.sh plan x", "wsl.exe -d domovoy-engine --exec docker ps"):
+        # Пробел после .sh: соседние имена (копия, другое расширение) allow не открывает.
+        for command in ("bash scripts/risk.sh plan x", "wsl.exe -d domovoy-engine --exec docker ps",
+                        "bash scripts/stand.sh.bak up --name 7", "bash scripts/stand.shx up"):
             with self.subTest(command=command):
                 self.assertEqual(command_hits(allow, "Bash", command), [])
 
