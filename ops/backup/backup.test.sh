@@ -639,7 +639,7 @@ test_install_schedule_dry_run() {
   engine_arg="-d domovoy-engine --cd \"$(cygpath -w "$work/clone")\" --exec bash ops/backup/backup.sh"
   local first=''
   for shell in "${shells[@]}"; do
-    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
     if [ "$rc" -ne 0 ]; then fail "$name/$shell" "код $rc"; show_out; return; fi
     tr -d '\r' <"$work/out" >"$work/out.$shell"
     grep -qx 'Task: domovoy-backup' "$work/out.$shell" || { fail "$name/$shell" "нет имени задачи"; show_out; return; }
@@ -670,7 +670,7 @@ test_install_schedule_dry_run() {
   for shell in "${shells[@]}"; do
     for i in "${!dotenv_raw[@]}"; do
       fake_clone "$(printf 'HA_TOKEN=x\r\nBACKUP_DIR=%s\r\n' "${dotenv_raw[i]}")"
-      run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
       if ! tr -d '\r' <"$work/out" | grep -qxF "BACKUP_DIR: ${dotenv_expected[i]}"; then
         fail "$name/$shell" "«${dotenv_raw[i]}» не разобран в «${dotenv_expected[i]}»"; show_out; return
       fi
@@ -680,9 +680,9 @@ test_install_schedule_dry_run() {
   fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
 
   name=install_schedule_custom_time
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 04:15
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent -At 04:15
   tr -d '\r' <"$work/out" | grep -qx 'Daily: 04:15' || { fail "$name" "-At не применён"; show_out; return; }
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 25:00
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent -At 25:00
   if [ "$rc" -eq 0 ]; then fail "$name" "-At 25:00 принят"; return; fi
   ok "$name"
 
@@ -692,7 +692,7 @@ test_install_schedule_dry_run() {
   for shell in "${shells[@]}"; do
     for env_text in $'HA_TOKEN=x\r\n' $'BACKUP_DIR=\r\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\r\n'; do
       fake_clone "$env_text"
-      BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
       if [ "$rc" -eq 0 ]; then fail "$name/$shell" "«${env_text%%$'\r'*}»: задача собрана без BACKUP_DIR в .env"; show_out; return; fi
       grep -q 'BACKUP_DIR' "$work/out" || { fail "$name/$shell" "в выводе нет BACKUP_DIR"; show_out; return; }
     done
