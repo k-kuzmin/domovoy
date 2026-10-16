@@ -548,6 +548,29 @@ log_has 'down -v --rmi local --remove-orphans'
 [ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
 end_case
 
+begin_case 'шаг вытянул образ и упал — образ сносится вместе со стендом'
+cat > "$SANDBOX/engine-docker-bkfail" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+    *' buildx create '*) "$FAKE_BIN/engine-docker.orig" "$@"; exit 1 ;;
+esac
+exec "$FAKE_BIN/engine-docker.orig" "$@"
+EOF
+mv "$BIN/engine-docker" "$BIN/engine-docker.orig"
+cp "$SANDBOX/engine-docker-bkfail" "$BIN/engine-docker"
+chmod +x "$BIN/engine-docker"
+run_stand "$WORKTREE" up --name 7
+mv "$BIN/engine-docker.orig" "$BIN/engine-docker"
+expect_status 1
+printf '%s\n' "$ERR" | grep -qF 'строитель domovoy-stand-7-build не создан' || fail_case 'нет причины про строитель'
+# ID той же формулой, что id_of подделки: состояние и pulled-images к этому
+# моменту уже снесены.
+bk_id="sha256:id-$(printf '%s' "$BUILDKIT" | tr -c 'a-z0-9' '-')"
+log_has "image rm $bk_id"
+grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'образ buildkit, вытянутый стендом, остался в движке'
+[ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
+end_case
+
 # --- down --------------------------------------------------------------------
 
 begin_case 'down удаляет только своё'
