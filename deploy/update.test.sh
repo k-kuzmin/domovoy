@@ -1117,8 +1117,23 @@ if is_windows && command -v powershell.exe >/dev/null 2>&1 && command -v cygpath
         grep -qF 'update.sh' "$W/calls.log" && fail_case "$state: update.sh вызван"
     done
     end_case
+
+    # Шаблон -DeployDir — тот же, что в engine-setup.ps1: сегменты . и ..
+    # не проходят до первого вызова wsl.exe.
+    begin_case 'update_ps1_refuses_dot_segments_in_deploy_dir'
+    W="$CASE/wsl"
+    for dir in /srv/../etc /srv/./example-deploy /srv/example-deploy/; do
+        make_fake_wsl "$W"
+        printf 'example-engine\r\n' >"$W/registered"
+        printf 'example-engine\r\n' >"$W/running"
+        run_ps1 powershell.exe -WslExe "$(cygpath -w "$W/wsl.cmd")" -Distro example-engine -DeployDir "$dir"
+        [ "$STATUS" -ne 0 ] || fail_case "$dir: код 0"
+        [ -s "$W/calls.log" ] && fail_case "$dir: был вызов wsl.exe"
+    done
+    end_case
 else
     skip_case 'update_ps1_refuses_stopped_engine' 'только Windows: нужен powershell.exe'
+    skip_case 'update_ps1_refuses_dot_segments_in_deploy_dir' 'только Windows: нужен powershell.exe'
 fi
 
 begin_case 'update.ps1: UTF-8 BOM, нет порта контейнера и localhost'

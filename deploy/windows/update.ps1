@@ -49,7 +49,10 @@ param(
     [string]$Ref = '',
     # Первый запуск из каталога развёртывания: стек ещё поднят из клона Windows.
     [switch]$Adopt,
-    [ValidatePattern('^/[A-Za-z0-9._/-]+$')]
+    # Тот же шаблон, что у -DeployDir в engine-setup.ps1: абсолютный путь
+    # без пробелов, кавычек и сегментов . и .. — он уходит в --cd wsl.exe и
+    # в -Check.
+    [ValidatePattern('^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$')]
     [string]$DeployDir = '/srv/domovoy',
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string]$Distro = 'domovoy-engine',
