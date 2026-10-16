@@ -82,6 +82,25 @@
 #   человека», а не дефект плана. Жёсткий предел на размер краснел бы на плане,
 #   который человек уже одобрил, то есть запрещал бы то, что решает человек.
 #
+# ЧТО СВЕРЯЕТ DRIFT
+#
+#   Режим drift сверяет план с диффом <base>...<head> — три точки, от
+#   merge-base, как читает ветку ревью, — и печатает расхождения строками с
+#   префиксом «расхождение: »:
+#     1. файл плана на create или modify в диффе не изменён — или удалён;
+#        файл на delete не удалён;
+#     2. путь из диффа не назван в files плана — кроме журнала и плана самой
+#        задачи, docs/tasks/<issue>.*; журналы других задач не исключаются;
+#     3. имени теста с new: true нет среди добавленных строк его файла
+#        (git diff -U0, строки «+»; удалённая строка за добавленную не идёт).
+#   Последняя строка — «Расхождений нет.» или «Расхождений: <число>.»: вывод
+#   никогда не пуст, и пустой файл с ним во входе совета значит упавший вызов.
+#   Расхождение — не дефект само по себе, его объясняет журнал, поэтому код 0
+#   при любом их числе. Форма плана проверяется по схеме до сверки; не
+#   сошлась — отказ с нарушениями в stderr, содержательные проверки validate
+#   drift не запускает. Переименование видно удалением старого пути и
+#   добавлением нового (--no-renames).
+#
 # ЧЕГО НЕ ЛОВИТ
 #
 #   Замысел. Верен ли подход, полны ли границы, тот ли способ проверки выбран
@@ -121,19 +140,30 @@
 #   Многострочные значения. Разбор идёт построчно, и перевод строки внутри
 #   значения план сломает. Поля плана — одна строка каждое.
 #
+#   В drift — наличие теста. Имя ищется как подстрока (grep -F) в добавленных
+#   строках файла теста: совпадение с частью другой строки даёт ложное
+#   «найден». Сценарий подсказывает ревью, где смотреть, а не доказывает, что
+#   тест написан. Подход и содержание правок drift не сверяет вовсе — это
+#   остаётся чтению ревью.
+#
 # КАК ЗАПУСКАТЬ
 #
 #   bash scripts/plan.sh validate docs/tasks/<N>.plan.json
 #   bash scripts/plan.sh validate scripts/fixtures/plans/93.json --at <ref>
 #   bash scripts/plan.sh render   docs/tasks/<N>.plan.json
+#   bash scripts/plan.sh drift    docs/tasks/<N>.plan.json origin/main HEAD
 #
 # Флаг --at <ref> проверяет план против того дерева, для которого он писался:
 # существование путей и поиск тестов идут по ref, а не по рабочему каталогу.
 # Без него план закрытой задачи краснел бы на путях, которых тогда ещё не
-# было, и на тестах, которые с тех пор появились.
+# было, и на тестах, которые с тех пор появились. У drift ключа --at нет:
+# деревья ему задают base и head.
 #
-# Код возврата: 0 — сходится (предупреждения не в счёт), 1 — есть нарушения,
-# 2 — ошибка запуска.
+# Код возврата validate и render: 0 — сходится (предупреждения не в счёт),
+# 1 — есть нарушения, 2 — ошибка запуска. Код возврата drift: 0 — сверка
+# выполнена, при любом числе расхождений; 2 — ошибка вызова, неразрешимый ref,
+# нет общего предка base и head, сбой git, отсутствующий, не-JSON или не
+# проходящий форму схемы план.
 #
 set -uo pipefail
 
@@ -160,21 +190,34 @@ die() {
 
 usage() {
     printf 'Использование: %s <validate|render> <файл плана> [--at <ref>]\n' "$0" >&2
+    printf '               %s drift <файл плана> <base> <head>\n' "$0" >&2
     exit 2
 }
 
 COMMAND="${1:-}"
 PLAN="${2:-}"
 REF=''
+DRIFT_BASE=''
+DRIFT_HEAD=''
 
 case "$COMMAND" in
-    validate|render) ;;
+    validate|render|drift) ;;
     *) usage ;;
 esac
 
 [ -n "$PLAN" ] || usage
 
 shift 2
+# У drift разбор свой: ровно два позиционных ref после плана, ключей нет.
+# Цикл ниже — для validate и render, и его поведение drift не трогает.
+if [ "$COMMAND" = 'drift' ]; then
+    [ "$#" -eq 2 ] || usage
+    DRIFT_BASE="$1"
+    DRIFT_HEAD="$2"
+    case "$DRIFT_BASE" in ''|-*) usage ;; esac
+    case "$DRIFT_HEAD" in ''|-*) usage ;; esac
+    shift 2
+fi
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --at)
@@ -902,7 +945,107 @@ do_render() {
     exit 0
 }
 
+# ------------------------------------------------------------------
+# Сверка плана с диффом. Что сверяется и чего нет — шапка, «ЧТО СВЕРЯЕТ
+# DRIFT» и «ЧЕГО НЕ ЛОВИТ».
+# ------------------------------------------------------------------
+DRIFT_COUNT=0
+DRIFT_TMP=''
+
+drift() {
+    printf 'расхождение: %s\n' "$1"
+    DRIFT_COUNT=$((DRIFT_COUNT + 1))
+}
+
+# git для сверки: без экранирования не-ASCII путей кавычками, без цвета и
+# внешнего diff из конфигурации машины — иначе путь в выводе не совпал бы с
+# путём плана.
+drift_git() {
+    git -c core.quotepath=false "$@"
+}
+
+do_drift() {
+    local ref range issue journal_re st path action rows name file new added
+    local -A changed=()
+    local -A planned=()
+
+    for ref in "$DRIFT_BASE" "$DRIFT_HEAD"; do
+        git rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1 \
+            || die "Ref не разрешается: $ref"
+    done
+    # Без общего предка диапазон от merge-base не строится; молчаливый пустой
+    # дифф напечатал бы «не изменён» на каждый файл плана.
+    git merge-base "$DRIFT_BASE" "$DRIFT_HEAD" >/dev/null 2>&1 \
+        || die "У $DRIFT_BASE и $DRIFT_HEAD нет общего предка: диапазон $DRIFT_BASE...$DRIFT_HEAD не строится."
+
+    # Нарушения формы — в stderr: stdout drift несёт только сверку.
+    check_form >&2 \
+        || die 'Форма плана не сходится со схемой — сначала bash scripts/plan.sh validate <файл плана>.'
+
+    range="$DRIFT_BASE...$DRIFT_HEAD"
+    issue="$(pjq '.issue' "$PLAN")" || die 'Разбор плана не отработал (issue).'
+    journal_re="$(glob_to_regex "docs/tasks/$issue.*")"
+
+    # -z пишет NUL, а NUL в переменную bash не ложится — отсюда временный
+    # файл. Код git проверяется до разбора: сбой — отказ, а не пустой список.
+    DRIFT_TMP="$(mktemp)" || die 'Не удалось создать временный файл.'
+    trap 'rm -f "$DRIFT_TMP"' EXIT
+    drift_git diff --no-color --no-ext-diff --name-status --no-renames -z "$range" > "$DRIFT_TMP" 2>/dev/null \
+        || die "git diff не отработал на диапазоне $range."
+    while IFS= read -r -d '' st && IFS= read -r -d '' path; do
+        changed["$path"]="$st"
+    done < "$DRIFT_TMP"
+
+    rows="$(pjq ".files[] | [.path, .action] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (files).'
+    while IFS="$SEP" read -r path action; do
+        [ -z "$path" ] && continue
+        planned["$path"]=1
+        st="${changed[$path]-}"
+        if [ "$action" = 'delete' ]; then
+            [ "$st" = 'D' ] || drift "файл на удаление не удалён: $path"
+        elif [ -z "$st" ]; then
+            drift "файл плана не изменён в диффе: $path (в плане $action)"
+        elif [ "$st" = 'D' ]; then
+            drift "файл плана удалён, а в плане $action: $path"
+        fi
+    done <<< "$rows"
+
+    while IFS= read -r -d '' st && IFS= read -r -d '' path; do
+        [ -n "${planned[$path]-}" ] && continue
+        matches "$path" "$journal_re" && continue
+        drift "файл изменён вне плана: $path"
+    done < "$DRIFT_TMP"
+
+    rows="$(pjq ".tests[] | [.name, .file, (.new | tostring)] | $JOIN" "$PLAN")" \
+        || die 'Разбор плана не отработал (tests).'
+    while IFS="$SEP" read -r name file new; do
+        [ -z "$name" ] && continue
+        [ "$new" = 'true' ] || continue
+        # Добавленные строки — только внутри ханков: заголовок «+++» стоит до
+        # первого «@@» и строкой файла не считается.
+        added="$(drift_git diff --no-color --no-ext-diff --no-renames -U0 "$range" -- "$file" 2>/dev/null)" \
+            || die "git diff не отработал на диапазоне $range для $file."
+        added="$(printf '%s\n' "$added" | tr -d '\r' \
+            | awk '/^@@/ { hunk = 1; next } hunk && /^\+/ { print substr($0, 2) }')"
+        # grep -q читает из строки, а не из конвейера: под pipefail ранний
+        # выход grep обрывал бы писателя, и найденное имя читалось бы как
+        # ненайденное.
+        grep -qF -- "$name" <<< "$added" \
+            || drift "новый тест не найден в добавленных строках $file: «$name»"
+    done <<< "$rows"
+
+    printf '\n'
+    if [ "$DRIFT_COUNT" -eq 0 ]; then
+        printf 'Расхождений нет.\n'
+    else
+        printf 'Расхождений: %d.\n' "$DRIFT_COUNT"
+    fi
+    exit 0
+}
+
 case "$COMMAND" in
     validate) do_validate ;;
     render) do_render ;;
+    drift) do_drift ;;
 esac

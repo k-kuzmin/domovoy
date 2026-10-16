@@ -1090,6 +1090,302 @@ expect_output 'не разбирается как JSON'
 end_case
 
 # ------------------------------------------------------------------
+# Сверка плана с диффом — режим drift. Каждый сценарий строит свой временный
+# репозиторий в песочнице: без сети, без удалённых репозиториев, git с
+# отключённой глобальной и системной конфигурацией — как hist_git выше. Копия
+# plan.sh и схемы ложится в первый коммит, поэтому в дифф она не попадает и
+# «вне плана» не становится.
+# ------------------------------------------------------------------
+DRIFT_DIR=''
+DRIFT_OK=1
+REV=''
+
+drift_git() {
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$DRIFT_DIR" \
+        -c user.name=plan-test -c user.email=plan-test@example.invalid \
+        -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+        -c core.autocrlf=false -c init.defaultBranch=main "$@"
+}
+
+drift_init() {
+    DRIFT_DIR="$SANDBOX/drift-$1"
+    DRIFT_OK=1
+    mkdir -p "$DRIFT_DIR/scripts"
+    cp "$CHECK" "$SCHEMA" "$DRIFT_DIR/scripts/"
+    drift_git init -q >/dev/null 2>&1 || DRIFT_OK=0
+}
+
+# Коммит всего дерева; SHA — в REV. Провал сборки репозитория — провал
+# сценария, а не пропуск: DRIFT_OK проверяется перед утверждениями.
+drift_commit() {
+    { drift_git add -A && drift_git commit -q --allow-empty -m "$1"; } >/dev/null 2>&1 || DRIFT_OK=0
+    REV="$(drift_git rev-parse HEAD 2>/dev/null | tr -d '\r')"
+    [ -n "$REV" ] || DRIFT_OK=0
+}
+
+drift_put() {
+    mkdir -p "$(dirname "$DRIFT_DIR/$1")"
+    printf '%s\n' "$2" > "$DRIFT_DIR/$1"
+}
+
+# План сценария — рядом с его репозиторием, а не через mutate: mutate зовётся
+# в подстановке, его счётчик в родителе не растёт, и следующая мутация
+# перезаписала бы план, который сценарий ещё держит.
+drift_plan() {
+    local out="$DRIFT_DIR.plan.json"
+    jq "$1" "$CANON" > "$out" || return 1
+    printf '%s' "$out"
+}
+
+run_drift() {
+    OUTPUT="$(bash "$DRIFT_DIR/scripts/plan.sh" drift "$@" 2>&1)"
+    STATUS=$?
+}
+
+drift_ready() {
+    if [ "$DRIFT_OK" -ne 1 ]; then
+        fail_case 'временный репозиторий не собрался — сценарий провален, а не пропущен'
+        return 1
+    fi
+    return 0
+}
+
+expect_last_line() {
+    local last
+    last="$(printf '%s\n' "$OUTPUT" | tail -n 1 | tr -d '\r')"
+    if [ "$last" != "$1" ]; then
+        fail_case "последняя строка «$last», ожидалась «$1»"
+    fi
+}
+
+# Тест-заглушка для планов, где тесты не сверяются: схема требует хотя бы один.
+DRIFT_OLD_TEST='{"name": "старый сценарий", "file": "scripts/plan.test.sh", "new": false, "covers": ["marker-reason"], "behavior": "уже есть"}'
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: файл плана без правки и удалённый вместо правки'
+drift_init deleted
+drift_put a.txt 'a'
+drift_put c.txt 'c'
+drift_put 'файл.txt' 'было'
+drift_commit base
+D_BASE="$REV"
+drift_put b.txt 'b'
+rm -f "$DRIFT_DIR/c.txt"
+drift_put 'файл.txt' 'стало'
+drift_commit head
+D_HEAD="$REV"
+D_PLAN="$(drift_plan '.files = [
+        {"path": "a.txt", "action": "modify", "why": "x"},
+        {"path": "b.txt", "action": "create", "why": "x"},
+        {"path": "c.txt", "action": "modify", "why": "x"},
+        {"path": "файл.txt", "action": "modify", "why": "x"}
+      ] | .tests = ['"$DRIFT_OLD_TEST"']')"
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE" "$D_HEAD"
+    expect_status 0
+    expect_output 'расхождение: файл плана не изменён в диффе: a.txt (в плане modify)'
+    expect_output 'расхождение: файл плана удалён, а в плане modify: c.txt'
+    expect_no_output 'b.txt'
+    expect_no_output 'файл.txt'
+    expect_last_line 'Расхождений: 2.'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: файл на удаление не удалён'
+drift_init delete
+drift_put old.txt 'было'
+drift_commit base
+D_BASE="$REV"
+drift_put old.txt 'стало'
+drift_commit modified
+D_MODIFIED="$REV"
+rm -f "$DRIFT_DIR/old.txt"
+drift_commit deleted
+D_DELETED="$REV"
+D_PLAN="$(drift_plan '.files = [{"path": "old.txt", "action": "delete", "why": "x"}]
+      | .tests = ['"$DRIFT_OLD_TEST"']')"
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE" "$D_MODIFIED"
+    expect_status 0
+    expect_output 'расхождение: файл на удаление не удалён: old.txt'
+
+    run_drift "$D_PLAN" "$D_BASE" "$D_DELETED"
+    expect_status 0
+    expect_no_output 'расхождение: файл на удаление не удалён'
+    expect_last_line 'Расхождений нет.'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: файл вне плана, журнал и план своей задачи не в счёт'
+# Ветка base после точки ветвления получает свой коммит: при диапазоне от
+# merge-base (три точки) его файл в дифф не попадает, при base..head — попал бы.
+drift_init outside
+drift_put p.txt 'было'
+drift_commit fork
+drift_git checkout -q -b feature >/dev/null 2>&1 || DRIFT_OK=0
+drift_put p.txt 'стало'
+drift_put extra.txt 'лишнее'
+drift_put docs/tasks/4242.md 'журнал своей задачи'
+drift_put docs/tasks/4242.plan.json '{}'
+drift_put docs/tasks/77.md 'журнал чужой задачи'
+drift_commit feature
+D_HEAD="$REV"
+drift_git checkout -q main >/dev/null 2>&1 || DRIFT_OK=0
+drift_put main-only.txt 'ушло в main после ветвления'
+drift_commit main
+D_BASE="$REV"
+D_PLAN="$(drift_plan '.files = [{"path": "p.txt", "action": "modify", "why": "x"}]
+      | .tests = ['"$DRIFT_OLD_TEST"']')"
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE" "$D_HEAD"
+    expect_status 0
+    expect_output 'расхождение: файл изменён вне плана: extra.txt'
+    expect_output 'расхождение: файл изменён вне плана: docs/tasks/77.md'
+    expect_no_output 'docs/tasks/4242.md'
+    expect_no_output 'docs/tasks/4242.plan.json'
+    expect_no_output 'main-only.txt'
+    expect_no_output 'p.txt'
+    expect_last_line 'Расхождений: 2.'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: новый тест без имени в добавленных строках'
+# Имя есть в файле на base и удалено на head: в диффе -U0 оно только в строке
+# «-», и удалённая строка за добавленную не считается.
+drift_init tests
+drift_put tests/x.test.sh "begin_case 'сценарий икс'"
+drift_commit base
+D_BASE="$REV"
+drift_put tests/x.test.sh "begin_case 'другой сценарий'"
+drift_commit removed
+D_REMOVED="$REV"
+drift_put tests/x.test.sh "begin_case 'другой сценарий'
+begin_case 'сценарий икс'"
+drift_commit readded
+D_READDED="$REV"
+D_PLAN="$(drift_plan '.files = [{"path": "tests/x.test.sh", "action": "modify", "why": "x"}]
+      | .tests = [
+          {"name": "сценарий икс", "file": "tests/x.test.sh", "new": true, "covers": ["marker-reason"], "behavior": "x"},
+          {"name": "сценарий, которого нет нигде", "file": "tests/x.test.sh", "new": false, "covers": ["marker-expiry"], "behavior": "x"}
+        ]')"
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE" "$D_REMOVED"
+    expect_status 0
+    expect_output 'расхождение: новый тест не найден в добавленных строках tests/x.test.sh: «сценарий икс»'
+    expect_no_output 'сценарий, которого нет нигде'
+    expect_last_line 'Расхождений: 1.'
+
+    run_drift "$D_PLAN" "$D_REMOVED" "$D_READDED"
+    expect_status 0
+    expect_no_output 'расхождение:'
+    expect_last_line 'Расхождений нет.'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: полное совпадение печатает «Расхождений нет.»'
+drift_init match
+drift_put m.txt 'было'
+drift_put gone.txt 'уйдёт'
+drift_commit base
+D_BASE="$REV"
+drift_put m.txt 'стало'
+drift_put new.txt 'новое'
+rm -f "$DRIFT_DIR/gone.txt"
+drift_put tests/y.test.sh "begin_case 'сценарий игрек'"
+drift_put docs/tasks/4242.md 'журнал'
+drift_commit head
+D_HEAD="$REV"
+D_PLAN="$(drift_plan '.files = [
+        {"path": "m.txt", "action": "modify", "why": "x"},
+        {"path": "new.txt", "action": "create", "why": "x"},
+        {"path": "gone.txt", "action": "delete", "why": "x"},
+        {"path": "tests/y.test.sh", "action": "create", "why": "x"}
+      ] | .tests = [{"name": "сценарий игрек", "file": "tests/y.test.sh", "new": true, "covers": ["marker-reason"], "behavior": "x"}]')"
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE" "$D_HEAD"
+    expect_status 0
+    if [ -z "$OUTPUT" ]; then
+        fail_case 'вывод пуст, а должен нести итоговую строку'
+    fi
+    expect_no_output 'расхождение:'
+    expect_last_line 'Расхождений нет.'
+fi
+end_case
+
+# ------------------------------------------------------------------
+begin_case 'Сверка с диффом: отказы вызова и плана кодом 2'
+# Репозиторий и план — из сценария о полном совпадении. У каждого отказа
+# проверяется и причина: неизвестный режим тоже даёт код 2, и без текста
+# сценарий проходил бы на скрипте, который drift не знает вовсе.
+if drift_ready; then
+    run_drift "$D_PLAN" "$D_BASE"
+    expect_status 2
+    expect_output 'drift <файл плана> <base> <head>'
+    expect_no_output 'Расхождений'
+
+    run_drift "$D_PLAN" "$D_BASE" "$D_HEAD" лишний
+    expect_status 2
+    expect_output 'drift <файл плана> <base> <head>'
+    expect_no_output 'Расхождений'
+
+    run_drift "$D_PLAN" "$D_BASE" "$D_HEAD" --at "$D_BASE"
+    expect_status 2
+    expect_output 'drift <файл плана> <base> <head>'
+    expect_no_output 'Расхождений'
+
+    run_drift "$D_PLAN" "$D_BASE" --at
+    expect_status 2
+    expect_output 'drift <файл плана> <base> <head>'
+    expect_no_output 'Расхождений'
+
+    run_drift "$D_PLAN" '0000000000000000000000000000000000000000' "$D_HEAD"
+    expect_status 2
+    expect_output 'Ref не разрешается: 0000000000000000000000000000000000000000'
+    expect_no_output 'Расхождений'
+
+    # Коммит без родителей с тем же деревом: общего предка с head у него нет,
+    # и диапазон от merge-base не строится — это отказ, а не пустой дифф.
+    D_LONELY="$(drift_git commit-tree "$D_BASE^{tree}" -m lonely 2>/dev/null | tr -d '\r')"
+    if [ -z "$D_LONELY" ]; then
+        fail_case 'коммит без родителей не собрался — сценарий провален, а не пропущен'
+    else
+        run_drift "$D_PLAN" "$D_LONELY" "$D_HEAD"
+        expect_status 2
+        expect_output 'нет общего предка'
+        expect_no_output 'Расхождений'
+    fi
+
+    run_drift "$SANDBOX/drift-нет-такого-плана.json" "$D_BASE" "$D_HEAD"
+    expect_status 2
+    expect_output 'Не найден файл плана'
+    expect_no_output 'Расхождений'
+
+    printf 'это не json\n' > "$SANDBOX/drift-broken.json"
+    run_drift "$SANDBOX/drift-broken.json" "$D_BASE" "$D_HEAD"
+    expect_status 2
+    expect_output 'не разбирается как JSON'
+    expect_no_output 'Расхождений'
+
+    run_drift "$(mutate 'del(.files)')" "$D_BASE" "$D_HEAD"
+    expect_status 2
+    expect_output 'план.files: обязательное поле схемы отсутствует'
+    expect_output 'bash scripts/plan.sh validate'
+    expect_no_output 'Расхождений'
+
+    # Код не зависит от числа расхождений: тот же план на обращённом
+    # диапазоне расходится в каждом файле и всё равно завершается кодом 0.
+    run_drift "$D_PLAN" "$D_HEAD" "$D_BASE"
+    expect_status 0
+    expect_output 'расхождение:'
+    expect_no_output 'Расхождений нет.'
+fi
+end_case
+
+# ------------------------------------------------------------------
 printf '\n'
 if [ "$FAILED" -gt 0 ]; then
     printf 'Провалившиеся сценарии:\n'

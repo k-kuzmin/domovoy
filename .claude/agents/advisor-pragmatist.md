@@ -29,7 +29,8 @@ tools: Read, Grep, Glob
 - Режим `plan`: план — `docs/tasks/<N>.plan.json`, выводы проверок —
   `validate.txt` и `risk.txt`.
 - Режим `diff`: дифф — `diff.patch`, состав — `diffstat.txt`, выводы
-  проверок — `risk.txt` и `guard-lite.txt`.
+  проверок — `risk.txt` и `guard-lite.txt`, сверка плана с диффом —
+  `drift.txt`.
 
 Не получаешь — и не должен получать: рассуждения автора, его самооценку,
 историю починок, вердикты других ролей. Если что-то из этого всё же пришло в
