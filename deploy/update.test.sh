@@ -148,7 +148,10 @@ expect_out_prefixed() {
 # Журнал всех вызовов подделок — $FAKE/calls.log, одна строка на вызов.
 # Управление подделками — файлы в $FAKE:
 #   info_fail             docker info отвечает ошибкой (движок не работает)
-#   ps                    вывод docker ps (служба<TAB>working_dir<TAB>образ)
+#   ps                    вывод docker ps (служба<TAB>working_dir<TAB>образ);
+#                         успешный compose up переписывает working_dir на
+#                         каталог вызова — у api всегда, у прочих служб
+#                         только с --force-recreate
 #   missing               образы, на которые manifest inspect отвечает ошибкой
 #   images.<имя>          вывод docker image ls по репозиторию …/<имя>
 #   up_fail_tags          теги, на которых compose up падает
@@ -189,6 +192,21 @@ case "${1-}" in
                 if [ -f "$F/up_fail_tags" ] && grep -qxF -- "$tag" "$F/up_fail_tags"; then
                     echo 'container example-api is unhealthy' >&2
                     exit 1
+                fi
+                # Метки контейнеров, как у compose: up пересоздаёт только
+                # службы с изменённой конфигурацией — здесь api (тег), а
+                # postgres и homeassistant (именованные тома, те же env)
+                # остаются с прежней меткой working_dir, пока не дан
+                # --force-recreate.
+                if [ -f "$F/ps" ]; then
+                    wd_now="$(pwd -P)"
+                    force=0
+                    case " $* " in *' --force-recreate '*) force=1 ;; esac
+                    while IFS=$'\t' read -r s w i; do
+                        if [ "$s" = api ] || [ "$force" -eq 1 ]; then w="$wd_now"; fi
+                        printf '%s\t%s\t%s\n' "$s" "$w" "$i"
+                    done <"$F/ps" >"$F/ps.new"
+                    mv -f "$F/ps.new" "$F/ps"
                 fi
                 ;;
         esac
@@ -497,6 +515,65 @@ expect_no_state
 run_update --adopt --image-repo example.invalid/owner
 expect_status 0
 expect_out_has "update: готово: $C2 (образ sha-$C2)"
+end_case
+
+# Все службы проекта в $FAKE/ps подняты из каталога развёртывания.
+expect_all_from_deploy() {
+    local s w i
+    while IFS=$'\t' read -r s w i; do
+        [ -n "$s" ] || continue
+        [ "$w" = "$DEPLOY_P" ] || fail_case "$1: $s поднят не из каталога развёртывания"
+    done <"$FAKE/ps"
+}
+
+begin_case 'update_adopt_moves_every_service'
+make_fixture adopt
+commit_c2
+run_update --adopt --image-repo example.invalid/owner
+expect_status 0
+expect_all_from_deploy 'после --adopt'
+grep -E '^docker compose .* up ' "$FAKE/calls.log" | grep -qF -- '--force-recreate' \
+    || fail_case 'up при --adopt без --force-recreate'
+g -C "$WORK" commit -q --allow-empty -m C3
+g -C "$WORK" push -q origin main
+C3="$(g -C "$WORK" rev-parse HEAD)"
+: >"$FAKE/calls.log"
+run_update
+expect_status 0
+expect_out_has "update: готово: $C3 (образ sha-$C3)"
+grep -E '^docker compose .* up ' "$FAKE/calls.log" | grep -qF -- '--force-recreate' \
+    && fail_case 'up без --adopt пересоздаёт все службы'
+expect_no_state
+end_case
+
+begin_case 'update_adopt_rollback_moves_every_service'
+make_fixture adopt
+commit_c2
+printf 'sha-%s\n' "$C2" >"$FAKE/up_fail_tags"
+run_update --adopt --image-repo example.invalid/owner
+expect_status 3
+expect_all_from_deploy 'после отката --adopt'
+rm -f "$FAKE/up_fail_tags"
+run_update --image-repo example.invalid/owner
+expect_status 0
+expect_out_has "update: готово: $C2 (образ sha-$C2)"
+end_case
+
+# Откат прерванного --adopt — по файлу состояния, флага в командной строке
+# нет: признак --adopt берётся из файла.
+begin_case 'update_adopt_interrupted_rollback_moves_every_service'
+make_fixture adopt
+commit_c2
+g -C "$DEPLOY" fetch -q origin
+g -C "$DEPLOY" checkout -q --detach "$C2"
+printf 'prev_commit=%s\ntarget_commit=%s\nbackup=\nadopt=1\n' "$C1" "$C2" >"$(state_file)"
+printf 'prev.%s.absent=1\n' COMPOSE_FILE DOMOVOY_IMAGE_REPO DOMOVOY_IMAGE_TAG >>"$(state_file)"
+run_update
+expect_status 3
+expect_out_has "update: откат прерванного обновления $C2"
+[ "$(head_of)" = "$C1" ] || fail_case 'HEAD не прежний коммит'
+expect_all_from_deploy 'после отката прерванного --adopt'
+expect_no_state
 end_case
 
 begin_case 'update_backup_before_migrate_prints_path'

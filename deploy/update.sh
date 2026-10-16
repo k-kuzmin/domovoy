@@ -54,7 +54,12 @@
 #   7. compose --profile migrate run --rm migrate — схема (psql
 #      --single-transaction: провал не оставляет половины);
 #   8. compose --profile ha up -d --wait и /health на
-#      127.0.0.1:<API_HTTP_PORT> — 200 с телом формы стека;
+#      127.0.0.1:<API_HTTP_PORT> — 200 с телом формы стека; с --adopt —
+#      up --force-recreate: пересоздаются все службы, и метка working_dir
+#      каждого контейнера становится каталогом развёртывания (без него
+#      compose пересоздал бы только api, а postgres и homeassistant
+#      остались бы с меткой прежнего каталога); тома именованные — данные
+#      сохраняются;
 #   9. чистка: из образов <repo>/domovoy-api и <repo>/domovoy-migrate
 #      остаются текущий тег и тот, на котором стек работал до обновления;
 #      локальный образ <проект>-api прежней сборки удаляется, если стек
@@ -64,7 +69,8 @@
 #
 # Провал шагов 2–8 — откат: прежние значения управляемых ключей (и их
 # отсутствие после первого --adopt), git checkout прежнего коммита,
-# compose --profile ha up -d --wait, /health. Схема не откатывается
+# compose --profile ha up -d --wait (после --adopt — с --force-recreate,
+# по строке adopt файла состояния), /health. Схема не откатывается
 # (expand/contract: прежний код работает на новой схеме). Ключи, дописанные
 # синхронизацией .env, не снимаются: прежний код их не читает.
 #
@@ -73,8 +79,8 @@
 # <каталог>/.git/domovoy-update.state — внутри .git: checkout его не
 # трогает. Пишется после бэкапа и до checkout, атомарно (временный файл
 # рядом, umask 077, mv). Строки KEY=значение: prev_commit, target_commit,
-# backup, и на каждый управляемый ключ prev.<KEY>=<значение> или
-# prev.<KEY>.absent=1. Прочих ключей .env и секретов в нём нет. Удаляется
+# backup, adopt=1 (только при --adopt), и на каждый управляемый ключ
+# prev.<KEY>=<значение> или prev.<KEY>.absent=1. Прочих ключей .env и секретов в нём нет. Удаляется
 # после успеха и после завершённого отката.
 #
 # Процесс оборвался (закрыто окно WSL, wsl --shutdown, kill) — файл
@@ -111,7 +117,7 @@
 #     docker manifest inspect [--insecure] <образ>
 #     docker compose --profile migrate pull api migrate
 #     docker compose --profile migrate run --rm migrate
-#     docker compose --profile ha up -d --wait
+#     docker compose --profile ha up -d --wait [--force-recreate]
 #     docker image ls --format '{{.Repository}}:{{.Tag}}' <репозиторий>
 #     docker image rm <образ>
 #     docker builder prune --all --force
@@ -155,6 +161,7 @@ BACKUP_PATH=''
 PREV_COMMIT=''
 TARGET=''
 REPO=''
+ADOPT=0
 
 # git каталога развёртывания; вывод — в stderr, кроме явно читаемого.
 dgit() { git -C "$DIR" "$@"; }
@@ -221,6 +228,7 @@ write_state() {
             printf 'prev_commit=%s\n' "$PREV_COMMIT"
             printf 'target_commit=%s\n' "$TARGET"
             printf 'backup=%s\n' "$BACKUP_PATH"
+            if [ "$ADOPT" -eq 1 ]; then printf 'adopt=1\n'; fi
             for key in "${MANAGED_KEYS[@]}"; do
                 if env_has "$key"; then
                     value="$(env_get "$key")"
@@ -270,8 +278,13 @@ rollback() {
     say "$label: checkout $prev"
     dgit checkout --quiet --detach "$prev" >&2 || { warn "$label: checkout $prev не удался"; return 1; }
 
+    # После --adopt часть контейнеров могла остаться с меткой прежнего
+    # каталога: пересоздаются все, как и в самом обновлении.
+    local recreate=()
+    if [ "$(state_value adopt || true)" = 1 ]; then recreate=(--force-recreate); fi
     say "$label: перезапуск стека"
-    dc --profile ha up -d --wait >&2 || { warn "$label: compose up прежнего образа не удался"; return 1; }
+    dc --profile ha up -d --wait "${recreate[@]+"${recreate[@]}"}" >&2 \
+        || { warn "$label: compose up прежнего образа не удался"; return 1; }
     check_health || { warn "$label: /health прежнего образа не отвечает"; return 1; }
 
     rm -f "$STATE" || { warn "$label: файл состояния не удалён"; return 1; }
@@ -341,7 +354,7 @@ main() {
             --ref) [ $# -ge 2 ] || usage '--ref без значения'; ref="$2"; shift 2 ;;
             --image-repo) [ $# -ge 2 ] || usage '--image-repo без значения'; repo_arg="$2"; shift 2 ;;
             --dry-run) dry_run=1; shift ;;
-            --adopt) adopt=1; shift ;;
+            --adopt) adopt=1; ADOPT=1; shift ;;
             *) usage "неизвестный аргумент: $1" ;;
         esac
     done
@@ -598,8 +611,15 @@ main() {
     dc --profile migrate run --rm migrate >&2 || fail_after_change 'миграция не удалась (psql откатил свою транзакцию)'
 
     # --- 8. перезапуск и /health ---
+    # compose up пересоздаёт только службы с изменённой конфигурацией: у
+    # postgres и homeassistant при --adopt она та же (именованные тома, те
+    # же env), и их метка working_dir осталась бы прежним каталогом —
+    # следующий запуск без --adopt отказал бы. При --adopt пересоздаются
+    # все службы; тома именованные и сохраняются.
+    local recreate=()
+    if [ "$adopt" -eq 1 ]; then recreate=(--force-recreate); fi
     say 'перезапуск стека'
-    dc --profile ha up -d --wait >&2 || fail_after_change "compose up -d --wait на sha-$TARGET не удался"
+    dc --profile ha up -d --wait "${recreate[@]+"${recreate[@]}"}" >&2 || fail_after_change "compose up -d --wait на sha-$TARGET не удался"
     check_health || fail_after_change "/health на 127.0.0.1:$PORT не отвечает 200 формы стека"
 
     # --- 9. чистка ---
