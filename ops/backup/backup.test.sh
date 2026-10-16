@@ -887,6 +887,10 @@ SQL
   if grep -qE '(-wal|-shm)$' <<<"$listing"; then fail "$name" "в архиве -wal/-shm"; return 1; fi
   grep -qxF 'domovoy-marker.txt' <<<"$listing" || { fail "$name" "в архиве нет файла-маркера"; return 1; }
   grep -q 'успех' "$work/dest/backup.log" || { fail "$name" "в backup.log нет строки успеха"; return 1; }
+  # deploy/update.sh берёт свой каталог из этой строки вывода, а не из
+  # содержимого каталога назначения.
+  [ "$(grep -cE "^успех: ${backup##*/}( |$)" "$work/out")" = 1 ] \
+    || { fail "$name" "в выводе нет ровно одной строки «успех: ${backup##*/}»"; return 1; }
   if grep -qE 'example_|Bearer|Password=' "$work/dest/backup.log" "$work/out" "$backup/manifest.txt"; then
     fail "$name" "в выводе, логе или манифесте entity_id или секрет"; return 1
   fi

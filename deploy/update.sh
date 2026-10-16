@@ -40,8 +40,11 @@
 # inspect); каталог бэкапов BACKUP_DIR; git fetch цели.
 #
 # Изменения, строго в этом порядке:
-#   1. бэкап — команда DOMOVOY_UPDATE_BACKUP; путь нового каталога
-#      domovoy-backup-* в BACKUP_DIR печатается: «update: бэкап: <путь>»;
+#   1. бэкап — команда DOMOVOY_UPDATE_BACKUP; свой каталог — тот, что она
+#      назвала строкой «успех: domovoy-backup-<метка>» (ops/backup/backup.sh),
+#      а не новый каталог в BACKUP_DIR: плановый бэкап мог положить туда
+#      свой. Путь печатается: «update: бэкап: <путь>». Строки нет, их
+#      больше одной или каталога нет — код 1, обновление не начато;
 #   2. файл состояния отката;
 #   3. git checkout --detach <цель>;
 #   4. deploy/envfile.sh sync .env.example → .env;
@@ -108,7 +111,9 @@
 #
 #   DOMOVOY_UPDATE_BACKUP — команда бэкапа (по умолчанию
 #                           bash ops/backup/backup.sh), исполняется bash -c
-#                           из каталога развёртывания;
+#                           из каталога развёртывания; обязана напечатать
+#                           ровно одну строку «успех: <имя каталога>», как
+#                           backup.sh;
 #   docker, curl, git, flock — из PATH. Формы вызовов docker:
 #     docker info
 #     docker compose version --short
@@ -561,24 +566,31 @@ main() {
     fi
 
     # --- 1. бэкап ---
-    local before after entry
-    before="$(cd "$backup_dir" && ls -1d domovoy-backup-* 2>/dev/null)"
+    local entry
     say "бэкап: $backup_cmd"
-    # Вывод бэкапа — в stderr после него: при отказе первая строка stderr —
-    # строка отказа (контракт кода 1).
+    # Вывод бэкапа — в stderr после строки отказа: при отказе первая строка
+    # stderr — строка отказа (контракт кода 1).
     if ! (cd "$DIR" && bash -c "$backup_cmd") >"$TOOLS/backup.log" 2>&1; then
         printf 'update: отказ: бэкап не удался (%s) — обновление не начато\n' "$backup_cmd" >&2
         cat "$TOOLS/backup.log" >&2
         exit 1
     fi
-    cat "$TOOLS/backup.log" >&2
-    after="$(cd "$backup_dir" && ls -1d domovoy-backup-* 2>/dev/null)"
+    # Свой бэкап — тот, который назвала команда строкой «успех: <имя>»
+    # (ops/backup/backup.sh), а не новый каталог в BACKUP_DIR: плановый
+    # бэкап за то же время кладёт туда свой.
+    local named
+    named="$(tr -d '\r' <"$TOOLS/backup.log" \
+        | sed -nE 's/^успех: (domovoy-backup-[0-9]{8}T[0-9]{6}Z)( .*)?$/\1/p')"
     BACKUP_PATH=''
-    while IFS= read -r entry; do
-        [ -n "$entry" ] || continue
-        if ! grep -qxF -- "$entry" <<<"$before"; then BACKUP_PATH="$backup_dir/$entry"; fi
-    done <<<"$after"
-    [ -n "$BACKUP_PATH" ] || refuse "бэкап не создал новый каталог domovoy-backup-* в $backup_dir"
+    if [ -n "$named" ] && [ "$(wc -l <<<"$named")" -eq 1 ] && [ -d "$backup_dir/$named" ]; then
+        BACKUP_PATH="$backup_dir/$named"
+    fi
+    if [ -z "$BACKUP_PATH" ]; then
+        printf 'update: отказ: бэкап не назвал свой каталог строкой «успех: domovoy-backup-<метка>» или его нет в %s — обновление не начато\n' "$backup_dir" >&2
+        cat "$TOOLS/backup.log" >&2
+        exit 1
+    fi
+    cat "$TOOLS/backup.log" >&2
     say "бэкап: $BACKUP_PATH"
 
     # --- 2. файл состояния ---

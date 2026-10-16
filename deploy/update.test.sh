@@ -282,8 +282,13 @@ printf 'backup\n' >>"$F/calls.log"
 [ -e "$F/backup_fail" ] && { echo 'backup: носитель недоступен' >&2; exit 1; }
 n=$(( $(cat "$F/backup.count" 2>/dev/null || echo 0) + 1 ))
 printf '%s' "$n" >"$F/backup.count"
-mkdir -p "$FAKE_BACKUP_DIR/domovoy-backup-2026010${n}T000000Z"
-echo "backup: готово"
+name="domovoy-backup-2026010${n}T000000Z"
+mkdir -p "$FAKE_BACKUP_DIR/$name"
+# backup_also: плановый бэкап, создавший свой каталог за время прогона
+# (его имя позже по алфавиту).
+[ -e "$F/backup_also" ] && mkdir -p "$FAKE_BACKUP_DIR/domovoy-backup-2026019${n}T000000Z"
+# Строка успеха — в формате ops/backup/backup.sh; backup_silent её снимает.
+[ -e "$F/backup_silent" ] || echo "успех: $name — таблиц БД: 1, не отключённых сущностей HA: 1"
 EOF
 
 # ------------------------------------------------------------------
@@ -593,6 +598,28 @@ fi
 new_dir="$(comm -13 <(printf '%s\n' "$before_dirs") <(ls "$BACKUPS"))"
 [ -n "$new_dir" ] || fail_case 'бэкап не создал каталог'
 expect_out_has "update: бэкап: $BACKUPS/$new_dir"
+expect_no_state
+end_case
+
+begin_case 'update_backup_path_from_backup_output (плановый бэкап рядом)'
+make_fixture
+commit_c2
+: >"$FAKE/backup_also"
+run_update
+expect_status 0
+expect_out_has "update: бэкап: $BACKUPS/domovoy-backup-20260101T000000Z"
+grep -qF 'domovoy-backup-20260191T000000Z' <<<"$OUT" && fail_case 'за свой принят чужой каталог бэкапа'
+end_case
+
+begin_case 'update_backup_without_success_line_refuses'
+make_fixture
+commit_c2
+: >"$FAKE/backup_silent"
+run_update
+expect_status 1
+expect_err_first 'update: отказ: '
+grep -qE "$GIT_CO" "$FAKE/calls.log" && fail_case 'checkout без пути бэкапа'
+[ "$C1" = "$(head_of)" ] || fail_case 'HEAD изменился'
 expect_no_state
 end_case
 
