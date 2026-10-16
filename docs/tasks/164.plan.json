@@ -1,0 +1,523 @@
+{
+  "issue": 164,
+  "current_state": [
+    {
+      "path": "docker-compose.yml",
+      "line": 23,
+      "observation": "Имя проекта — ${COMPOSE_PROJECT_NAME:-domovoy}: боевой проект называется domovoy, и второй стек с другим именем получает свои контейнеры, сеть и тома автоматически (тома postgres-data и homeassistant-config — именованные, с префиксом проекта)."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 65,
+      "observation": "У api env_file: .env, а у api volumes — ./config:/app/config:ro (строка 108). Оба пути считаются от каталога проекта compose: стенд, запущенный с каталогом проекта в клоне владельца, получил бы его .env и config/entities.yaml. Это главное свойство безопасности стенда."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 104,
+      "observation": "Порты на хост — ${API_HTTP_PORT:-18080} и ${HA_HTTP_PORT:-8123} (строка 134); HA объявлен под profiles: ['ha'] (строка 123). Сдвиг портов стенда задаётся этими же переменными в .env стенда, правка docker-compose.yml не нужна."
+    },
+    {
+      "path": ".env.example",
+      "line": 18,
+      "observation": "COMPOSE_PROJECT_NAME=domovoy, API_HTTP_PORT=18080 (строка 22), AUTH_ADMIN_TOKEN=<admin-token> (45), HA_TOKEN=<ha-long-lived-token> (59), HA_HTTP_PORT=8123 (64). Значения в угловых скобках — незаполненные; .env стенда строится заменой этих ключей, остальное берётся из примера как есть."
+    },
+    {
+      "path": "deploy/windows/docker-wsl.sh",
+      "line": 37,
+      "observation": "Обёртка исполняет docker внутри дистрибутива domovoy-engine через wsl.exe -d <distro> --cd <каталог Windows> --exec docker. Пределы в шапке (строки 13–14): абсолютные пути Windows в аргументах не переводятся. Стенду нужны пути внутри дистрибутива — их даёт wslpath в том же дистрибутиве."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 20,
+      "observation": "Сценарии deploy/windows проверяются без WSL: подделки wsl.exe и cygpath кладутся первыми в PATH. Тем же приёмом идёт scripts/stand.test.sh."
+    },
+    {
+      "path": ".claude/settings.json",
+      "line": 140,
+      "observation": "В permissions есть deny и ask, блока allow нет; запретов на wsl --shutdown/--terminate/--unregister/--manage и на правку .wslconfig нет."
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "line": 266,
+      "observation": "Предфильтр ветки Bash/PowerShell пропускает в python только push/checkout -b/switch -c, gh issue create, gh pr checks --watch/merge-wait.sh и правку защищённых путей командой. Команда docker до движка правил не доходит: строка таблицы про docker без строки предфильтра молча не сработает."
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "line": 0,
+      "observation": "Строки про docker или движок domovoy-engine нет; Bash-строки используют command_regex с общим префиксом начала команды (one-task-one-branch, merge-wait)."
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "line": 58,
+      "observation": "PROBES — пробы срабатывания и молчания на каждую строку таблицы; новая строка без пробы роняет test_names_unique_and_every_rule_has_probe."
+    },
+    {
+      "path": ".claude/hooks/tests/test_settings_permissions.py",
+      "line": 60,
+      "observation": "command_hits сопоставляет шаблоны прав целиком, * — любая последовательность; на этой модели уже проверяются запреты ef и .env. Новые deny и allow проверяются тем же способом."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 357,
+      "observation": "В разделе «Команды» блок «# Стек» — голые docker compose up/logs/down: на машине владельца голый docker ведёт в Docker Desktop, а не в движок."
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "line": 125,
+      "observation": "Раздел «Живая проверка» предлагает docker compose up -d --build --wait и curl на 18080 — то есть боевой проект и боевой порт; про стенд, движок и запреты на стенде ничего нет."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
+      "line": 93,
+      "observation": "Обход маршрутов (Routes) и обе проверки — EveryNonAnonymousRouteRejectsMissingOrUnknownToken (строка 32) и AnonymousRoutesAreExactlyHealthAndPairing (строка 59) — зашиты в класс теста и работают только на хосте фабрики; список отказов наружу не отдаётся, поэтому на хосте с подменой их не переиспользовать."
+    },
+    {
+      "path": "docs/tasks/12.md",
+      "line": 218,
+      "observation": "Проба A12-all-routes делалась прогоном владельца: временный .AllowAnonymous() на GET /api/v1/state в src/ отсоединённого worktree; красный — 3 из 3, «GET /api/v1/state: 501 not_implemented»."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 65,
+      "observation": "options.FallbackPolicy = device: снятие RequireAuthorization с группы маршруты не открывает — их подхватывает FallbackPolicy (вывод #12). Подмена в тестовом хосте должна открывать маршрут после решения авторизации, а не снимать политику группы."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "line": 44,
+      "observation": "GET /api/v1/state — заглушка, отвечает 501 not_implemented; маршрут, на котором проба #12 давала красный."
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "line": 35,
+      "observation": "Реестр-пример — вымышленная квартира с id вида light.example_kitchen_ceiling, lock.example_front_door, script.example_good_night. Его загружают тесты: DomovoyApiFactory (строка 68 своего файла), EntityRegistryTests (строка 85 — light.example_kitchen_ceiling), Routing/ExampleApartment.cs, FastPathEndToEndTests, fast-router-control-set.json, HaHostStartupTests; на те же id опираются config/proactive-rules.example.yaml и ops/backup/fixtures."
+    },
+    {
+      "path": "tests/Domovoy.Tests/DomovoyApiFactory.cs",
+      "line": 68,
+      "observation": "Тестовый хост берёт реестр config/entities.example.yaml и подменяет сервисы в ConfigureTestServices — точка, где тест пробы подменяет обработчик результата авторизации, не трогая src/."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "line": 202,
+      "observation": "Сценарии scripts/*.test.sh прогоняются в CI поимённо, шагом на сценарий; scripts/stand.test.sh туда нужно дописать, иначе его зелёный — только локальный."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "line": 174,
+      "observation": "Дополнение 2026-10-13: путь через Docker Desktop снят, на новом ПК будет только движок. Стенд Docker Desktop не использует и не запускает."
+    }
+  ],
+  "approach": {
+    "summary": "Стенд — сценарий scripts/stand.sh, который весь docker исполняет в движке domovoy-engine (wsl.exe -d domovoy-engine --exec docker …, как deploy/windows/docker-wsl.sh) и никогда не зовёт голый docker. Проект compose — domovoy-stand-<N>; N — целое 1…999, по умолчанию имя каталога worktree .claude/worktrees/<N>. Порты: API_HTTP_PORT = 19000 + N, HA_HTTP_PORT = 9000 + N (диапазоны 19001–19999 и 9001–9999 не пересекаются друг с другом и с боевыми 18080 и 8123). Каталог стенда — внутри файловой системы дистрибутива, ~/domovoy-stand/<N> пользователя дистрибутива, вне дерева и не на /mnt. В нём: .env, собранный из .env.example заменой ключей (COMPOSE_PROJECT_NAME, порты, COMPOSE_PROFILES=ha, случайные POSTGRES_PASSWORD и AUTH_ADMIN_TOKEN не короче 32 символов, HA_TOKEN после онбординга; значений владельца нет — источник только пример); config/ — копии config/*.example.* под рабочими именами; снимок образов и записей кэша сборки до up. Compose запускается с --project-directory <каталог стенда> и двумя файлами: docker-compose.yml из worktree и deploy/stand/docker-compose.stand.yml, который задаёт build.context api на путь worktree внутри дистрибутива. Так env_file: .env и ./config считаются от каталога стенда, а .env и config/ владельца стенду недостижимы при любом каталоге запуска. Порядок up: проверки отказа до первого изменения → postgres и homeassistant → затравка configuration.yaml HA (demo: и пустой script example_good_night) до первого старта HA → онбординг сценарием deploy/stand/ha-onboard.py, исполняемым python3 внутри контейнера HA (aiohttp в образе есть, новой зависимости нет): пользователь онбординга, токен доступа, долгоживущий токен через WebSocket auth/long_lived_access_token, переименование сущностей demo в id реестра-примера через config/entity_registry/update (вариант развилки) → токен пишется в .env стенда без вывода → up api → /health стенда. Отказы до первого изменения, каждый с текстом причины и кодом 1: имя domovoy или проект, совпадающий с боевым; каталог проекта стенда совпадает с основным деревом репозитория (первая строка git worktree list) или с working_dir из метки com.docker.compose.project.working_dir контейнеров проекта domovoy в движке (метки читаются docker ps — только чтение; это и есть каталог развёртывания боевого стека до и после #162, без константы пути); занятый порт (ss -ltn в движке и netstat на хосте Windows); движок недоступен (wsl.exe не видит дистрибутив или docker info в нём не отвечает) — с указанием, что Docker Desktop не запускается. down: docker compose down -v --rmi local --remove-orphans для проекта стенда, удаление образов, которых не было в снимке и которыми не пользуется ни один контейнер, удаление записей кэша сборки, которых не было в снимке, и каталога стенда. status и logs печатают состояние и логи контейнеров стенда; токен и секреты .env стенда не печатаются никогда. Проба A12 переводится в тест: обход маршрутов выносится в помощник RouteAuthenticationAudit, возвращающий список отказов; существующие тесты проверяют, что он пуст на обычном хосте, а новый тест на хосте с подменой IAuthorizationMiddlewareResultHandler (пропускает GET /api/v1/state после отказа авторизации — тестовый аналог .AllowAnonymous() на маршруте) проверяет, что обе проверки дают отказ с GET /api/v1/state. Правила: раздел «Живая проверка — на стенде» в docs/rules/implement.md; команды стенда и правило «docker — только через движок domovoy-engine» в .claude/CLAUDE.md; allow на bash scripts/stand.sh*, deny на wsl --shutdown/--terminate/-t/--unregister/--manage и на правку .wslconfig в .claude/settings.json; строка docker-engine-only в rules-map.json с предфильтром.",
+    "rejected": [
+      {
+        "option": "Каталог боевого стека — константа пути или переменная окружения, заданная владельцем, до закрытия #162.",
+        "reason": "Путь разойдётся с #162 в день её мерджа, а владельцу добавляется ручная настройка. Метка working_dir в движке называет каталог, из которого боевой стек реально запущен, до и после #162; основное дерево репозитория закрыто отдельным условием, пока боевой стек живёт в нём."
+      },
+      {
+        "option": "Ждать #162 и не делать отказ по каталогу.",
+        "reason": "Именно в этот промежуток боевой .env лежит в основном клоне, и стенд, запущенный оттуда, получил бы его через env_file. Отказ нужен сейчас."
+      },
+      {
+        "option": "Каталог проекта compose — worktree, а .env стенда подставлять overlay-файлом с другим env_file.",
+        "reason": "Безопасность стенда зависела бы от правил слияния списка env_file в compose (дополнение или замена), а ./config и .env для интерполяции всё равно читались бы из каталога проекта. --project-directory на каталог стенда убирает .env и config/ владельца из достижимого целиком, без опоры на правило слияния."
+      },
+      {
+        "option": "Онбординг и токен HA — curl из сценария на bash.",
+        "reason": "Долгоживущий токен HA выпускается только по WebSocket; websocat или wscat — новая зависимость. python3 с aiohttp уже есть в образе HA."
+      },
+      {
+        "option": "Проба A12 — PostConfigure<AuthorizationOptions> с разрешающими DefaultPolicy и FallbackPolicy.",
+        "reason": "Открывает все маршруты разом, кроме именованной админ-политики, и проверяет не то, что было пробой #12 (один маршрут с AllowAnonymous). Подмена обработчика результата авторизации открывает ровно GET /api/v1/state."
+      },
+      {
+        "option": "Проба A12 — тест, красный в CI, или тест со Skip.",
+        "reason": "Постоянно красный тест закоммитить нельзя, Skip запрещён разделом «Запрещённые способы «починить» сборку». Красный прогон фиксируется утверждением теста: проверка на ослабленном хосте отказывает."
+      },
+      {
+        "option": "Кэш сборки после down — docker builder prune целиком.",
+        "reason": "Кэш общий с боевым стеком: глобальная очистка ломает его быструю пересборку. Удаляются только записи, которых не было в снимке до up."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да по пунктам 1–4 задачи, с одним открытым выбором — реестр сущностей стенда (развилка ниже). Каталог развёртывания боевого стека при открытой #162 трактуется как «каталог, из которого боевой проект domovoy реально запущен в движке, плюс основное дерево репозитория» — наблюдаемый результат тот же, что требует задача: отказ там, где лежит боевой .env. Память агента лежит вне репозитория и правится оркестратором (out_of_scope).",
+    "alternative": "Реестр стенда. Выбрано: config/entities.example.yaml не меняется, а ha-onboard.py переименовывает сущности demo в id примера (light.example_kitchen_ceiling и т. д.) и заводит пустой script.example_good_night; сущности примера без пары в demo остаются отсутствующими в HA стенда и перечисляются в выводе status. Владелец видит: пример и его тесты не тронуты, стенд отвечает на те же id, что тесты. Второй способ — переписать config/entities.example.yaml под id demo (light.bed_light, lock.front_door …), как читается фраза задачи «config/entities.example.yaml под сущности demo». Владелец увидел бы другой пример в репозитории (вымышленная квартира заменяется сущностями demo), и правка тянет за собой EntityRegistryTests, Routing/ExampleApartment.cs, FastPathEndToEndTests, fast-router-control-set.json, HaHostStartupTests, config/proactive-rules.example.yaml и ops/backup/fixtures — порядка 10 файлов сверх плана и перепроверку быстрого роутера на других именах. Третий, промежуточный: отдельный реестр стенда deploy/stand/entities.stand.yaml с id demo — пример цел, но стенд проверяет не тот реестр, что тесты.",
+    "ripple": "Греп вызывающих: docker-compose.yml и .env.example не меняются — стенд читает их как есть, боевой проект не затронут. AllRoutesRequireAuthenticationTests — единственный пользователь своего обхода маршрутов (grep Routes( по tests/Domovoy.Tests/Auth); вынос в помощник меняет только его. Новый deny в settings.json задевает формы wsl, которые агент сам не зовёт; engine-setup.ps1 зовёт wsl.exe изнутри сценария, а не командой агента, и права его не касаются; docker-wsl.sh зовёт wsl.exe -d … --exec, под шаблоны --shutdown/--terminate/--unregister/--manage не попадает. Новая строка rules-map срабатывает только на docker в начале команды; bash deploy/windows/docker-wsl.sh и bash scripts/stand.sh под неё не попадают — это пробы молчания. Блок «# Стек» в .claude/CLAUDE.md и пример в docs/rules/implement.md переводятся с голого docker на обёртку. config/entities.example.yaml при выбранном варианте не меняется.",
+    "workaround": "Нет. Стенд — штатный второй проект compose со своими томами и сетью; отказы — проверки до первого изменения, а не подавление. // HACK: не требуется.",
+    "council_signs": [
+      "правка обвязки — .claude/settings.json, .claude/hooks/**, .claude/CLAUDE.md, docs/rules/implement.md, scripts/**, .github/workflows/ci-fast.yml",
+      "новая функциональность — сценарий стенда",
+      "общий механизм — права сессии и предфильтр впрыска правил: греп показал, что ветка Bash предфильтра общая для всех Bash-строк таблицы, а deny действует на каждую команду агента",
+      "объём выше порога size.files = 11 (16 файлов) — зовёт прагматика"
+    ],
+    "executor": "Субагенты по срезам: 16 файлов и заметно больше ~40 строк, порог делегирования превышен. Четыре среза: stand, probe и harness параллельно, rules — после stand и harness.",
+    "fork": true,
+    "slices": [
+      {
+        "name": "stand",
+        "files": [
+          "scripts/stand.sh",
+          "scripts/stand.test.sh",
+          "deploy/stand/docker-compose.stand.yml",
+          "deploy/stand/ha-configuration.yaml",
+          "deploy/stand/ha-onboard.py",
+          ".github/workflows/ci-fast.yml"
+        ],
+        "contract": "CLI: bash scripts/stand.sh up|down|status|logs [--name <N>] [--] [аргументы logs]. N — целое 1…999; без --name берётся из имени каталога .claude/worktrees/<N>, иначе отказ. Проект domovoy-stand-<N>; API_HTTP_PORT=19000+N, HA_HTTP_PORT=9000+N. Коды: 0 — успех; 1 — отказ по существу (до первого изменения), первая строка stderr начинается с «stand: отказ: » и называет причину: «domovoy — имя боевого проекта», «каталог проекта — каталог боевого стека: <путь>», «порт <p> занят», «движок domovoy-engine недоступен; Docker Desktop не запускать»; 2 — ошибка вызова (неизвестная подкоманда, N не число). Переменная DOMOVOY_ENGINE_DISTRO — имя дистрибутива, как в docker-wsl.sh. Голого docker в сценарии нет: каждая команда docker — через функцию engine(), исполняющую wsl.exe -d \"$distro\" --exec docker …. Токен HA и секреты .env стенда не выводятся ни одной подкомандой. В ci-fast.yml — шаг «Сценарий стенда агента» с run: bash scripts/stand.test.sh рядом с остальными scripts/*.test.sh.",
+        "after": []
+      },
+      {
+        "name": "probe",
+        "files": [
+          "tests/Domovoy.Tests/Auth/RouteAuthenticationAudit.cs",
+          "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
+          "tests/Domovoy.Tests/Auth/AuthenticationWeakeningProbeTests.cs"
+        ],
+        "contract": "internal static class RouteAuthenticationAudit в namespace Domovoy.Tests.Auth: Task<IReadOnlyList<string>> NonAnonymousRoutesRejectingAsync(IServiceProvider services, HttpClient client, string? bearer) и Task<IReadOnlyList<string>> UndocumentedAnonymousRoutesAsync(IServiceProvider services, HttpClient client); элемент списка — «<METHOD> <path>: <код> <тело>» в том же формате, что сообщения нынешних тестов. AllRoutesRequireAuthenticationTests сохраняет имена, DisplayName и утверждения, включая положительный контроль состава маршрутов. src/ не меняется.",
+        "after": []
+      },
+      {
+        "name": "harness",
+        "files": [
+          ".claude/settings.json",
+          ".claude/hooks/rules-map.json",
+          ".claude/hooks/rule-injector.sh",
+          ".claude/hooks/tests/test_rules_map.py",
+          ".claude/hooks/tests/test_settings_permissions.py"
+        ],
+        "contract": "settings.json: permissions.allow = [\"Bash(bash scripts/stand.sh*)\"]; в deny — пары Bash/PowerShell для «wsl*--shutdown*», «wsl*--terminate*», «wsl* -t *», «wsl*--unregister*», «wsl*--manage*» (покрывают wsl и wsl.exe), «*.wslconfig*», и Edit/Write-пути «**/.wslconfig», «//**/.wslconfig». rules-map.json: строка name=docker-engine-only, doc=docs/rules/implement.md, tools Bash и PowerShell, repeat=true, command_regex — docker или docker.exe в начале команды (тот же префикс начала команды, что у one-task-one-branch); note называет docs/rules/implement.md, раздел «Живая проверка — на стенде». rule-injector.sh: в ветке Bash/PowerShell строка предфильтра case \"$ti\" in *docker*) pass=1. Пробы срабатывания: «docker compose up -d», «cd x && docker ps»; пробы молчания: «bash deploy/windows/docker-wsl.sh compose ps», «bash scripts/stand.sh up --name 7», «grep docker README.md».",
+        "after": []
+      },
+      {
+        "name": "rules",
+        "files": [
+          ".claude/CLAUDE.md",
+          "docs/rules/implement.md"
+        ],
+        "contract": "docs/rules/implement.md: раздел «Живая проверка — на стенде» заменяет нынешний «Живая проверка» с тем же содержанием про пропуск: когда стенд нужен (контракт приёмки требует живого наблюдения, миграция, compose, бэкап), подъём и снос командами из CLI среза stand, что на стенде нельзя (значения владельца, боевые порты и проект domovoy, Docker Desktop), красные прогоны — подменой в тестовом хосте, а не правкой src/, запрет wsl --shutdown/--terminate/--unregister/--manage и правки .wslconfig со ссылкой на engine-setup.ps1. Заголовок дословно «Живая проверка — на стенде» — на него ссылается note строки docker-engine-only. .claude/CLAUDE.md: блок «# Стек» раздела «Команды» — через bash deploy/windows/docker-wsl.sh и команды bash scripts/stand.sh up|down|status|logs; правило «docker — только через движок domovoy-engine» — в «Особенности, о которых легко забыть».",
+        "after": [
+          "stand",
+          "harness"
+        ]
+      }
+    ],
+    "single_slice_reason": ""
+  },
+  "files": [
+    {
+      "path": "scripts/stand.sh",
+      "action": "create",
+      "why": "Сценарий стенда: up, down, status, logs, отказы до первого изменения. Группа harness_quality (scripts/**)."
+    },
+    {
+      "path": "scripts/stand.test.sh",
+      "action": "create",
+      "why": "Регрессионный сценарий stand.sh без движка: подделки wsl.exe и cygpath в PATH. Группа harness_quality."
+    },
+    {
+      "path": "deploy/stand/docker-compose.stand.yml",
+      "action": "create",
+      "why": "Overlay стенда: build.context api на путь worktree внутри дистрибутива при --project-directory на каталог стенда."
+    },
+    {
+      "path": "deploy/stand/ha-configuration.yaml",
+      "action": "create",
+      "why": "Затравка configuration.yaml HA стенда: default_config, demo: и пустой script example_good_night; кладётся в том HA до первого старта."
+    },
+    {
+      "path": "deploy/stand/ha-onboard.py",
+      "action": "create",
+      "why": "Онбординг HA стенда через API онбординга, долгоживущий токен через WebSocket, переименование сущностей demo в id реестра-примера; исполняется python3 внутри контейнера HA, токен — в stdout для stand.sh."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "Шаг bash scripts/stand.test.sh рядом с остальными сценариями обвязки. Группа harness_quality (.github/**)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/RouteAuthenticationAudit.cs",
+      "action": "create",
+      "why": "Обход маршрутов и обе проверки аутентификации, вынесенные из теста и возвращающие список отказов. Путь под **/Auth/** — группа product_security."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/AllRoutesRequireAuthenticationTests.cs",
+      "action": "modify",
+      "why": "Тесты переходят на RouteAuthenticationAudit с прежними утверждениями. Группа product_security."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/AuthenticationWeakeningProbeTests.cs",
+      "action": "create",
+      "why": "Проба A12-all-routes тестом: хост с подменой в тестовом хосте, проверки обязаны отказать с GET /api/v1/state. Группа product_security."
+    },
+    {
+      "path": ".claude/settings.json",
+      "action": "modify",
+      "why": "allow на bash scripts/stand.sh*, deny на wsl --shutdown/--terminate/--unregister/--manage и правку .wslconfig. Группа harness_control."
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "action": "modify",
+      "why": "Строка docker-engine-only: напоминание о правиле при docker мимо обёртки. Группа harness_control."
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "action": "modify",
+      "why": "Строка предфильтра для docker в ветке Bash/PowerShell — без неё новая строка таблицы молча не срабатывает. Группа harness_control."
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "action": "modify",
+      "why": "Пробы срабатывания и молчания для docker-engine-only. Группа harness_control."
+    },
+    {
+      "path": ".claude/hooks/tests/test_settings_permissions.py",
+      "action": "modify",
+      "why": "Проверки: формы wsl --shutdown и правка .wslconfig закрыты, bash scripts/stand.sh разрешён, docker-wsl.sh и engine-setup.ps1 -Check не закрыты. Группа harness_control."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "Команды стенда и docker через обёртку в «Команды», правило «docker — только через движок domovoy-engine». Группа harness_quality (.claude/**)."
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "action": "modify",
+      "why": "Раздел «Живая проверка — на стенде» вместо нынешнего «Живая проверка». Группа harness_quality (docs/rules/**)."
+    }
+  ],
+  "boundaries": [
+    "scripts/stand.sh",
+    "scripts/stand.test.sh",
+    "deploy/stand/**",
+    ".github/workflows/ci-fast.yml",
+    "tests/Domovoy.Tests/Auth/**",
+    ".claude/settings.json",
+    ".claude/hooks/**",
+    ".claude/CLAUDE.md",
+    "docs/rules/implement.md",
+    "docs/tasks/164*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "отказ: имя domovoy",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "stand.sh up --name domovoy завершается кодом 1, stderr начинается с «stand: отказ: » и называет боевой проект; подделка wsl.exe не получила ни одной команды compose up, create, cp или run."
+    },
+    {
+      "name": "отказ: занятый порт",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Подделка ss в движке сообщает слушателя на 19000+N — up отказывает кодом 1 с номером порта в причине и ничего не создаёт; тот же исход при занятом порте по netstat хоста."
+    },
+    {
+      "name": "отказ: движок недоступен",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Подделка wsl.exe отвечает ошибкой на docker info — up отказывает кодом 1, причина называет domovoy-engine и что Docker Desktop не запускается; голый docker из PATH (подделка, пишущая журнал вызовов) не вызван ни разу."
+    },
+    {
+      "name": "отказ: каталог боевого стека",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse",
+        "A-coexist"
+      ],
+      "behavior": "Метка com.docker.compose.project.working_dir контейнера проекта domovoy (подделка docker ps) совпадает с каталогом проекта стенда — отказ кодом 1 с путём в причине; то же при запуске из основного дерева (подделка git worktree list)."
+    },
+    {
+      "name": "порты и проект выводятся из N",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-up",
+        "A-coexist"
+      ],
+      "behavior": "Для --name 7 и для каталога .claude/worktrees/164 compose вызывается с -p domovoy-stand-7 / domovoy-stand-164, --project-directory на каталог стенда и обоими файлами; в собранном .env API_HTTP_PORT=19007 и HA_HTTP_PORT=9007; --name 0, 1000 и abc — код 2."
+    },
+    {
+      "name": ".env стенда только из примера",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-up"
+      ],
+      "behavior": "Собранный .env содержит ровно ключи .env.example, COMPOSE_PROJECT_NAME стенда, COMPOSE_PROFILES=ha, AUTH_ADMIN_TOKEN длиной не меньше 32 и не равный плейсхолдеру; значение-маркер, положенное в .env корня временного клона, в .env стенда не попадает."
+    },
+    {
+      "name": "токен не выводится",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-up"
+      ],
+      "behavior": "Подделка онбординга возвращает маркерный токен; он оказывается в .env стенда, но не встречается ни в stdout, ни в stderr подкоманд up, status и logs."
+    },
+    {
+      "name": "down удаляет только своё",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-down",
+        "A-df"
+      ],
+      "behavior": "down вызывает compose down -v --rmi local --remove-orphans для проекта стенда; удаляет образы и записи кэша сборки, которых нет в снимке до up, и не удаляет присутствовавшие в снимке (postgres и HA боевого стека); каталог стенда удалён."
+    },
+    {
+      "name": "в stand.sh нет голого docker",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Поиск по stand.sh: каждая строка с docker вне комментариев идёт через функцию engine(); bash -n и shellcheck (если есть) чистые."
+    },
+    {
+      "name": "WeakenedHostFailsRouteAuthenticationAudit",
+      "file": "tests/Domovoy.Tests/Auth/AuthenticationWeakeningProbeTests.cs",
+      "new": true,
+      "covers": [
+        "A-probe"
+      ],
+      "behavior": "На хосте фабрики с подменой IAuthorizationMiddlewareResultHandler, пропускающей GET /api/v1/state после отказа авторизации, NonAnonymousRoutesRejectingAsync без токена и с неизвестным токеном и UndocumentedAnonymousRoutesAsync возвращают непустые списки, и каждый содержит элемент, начинающийся с «GET /api/v1/state: 501». Тот же помощник на хосте без подмены — пустые списки (в этом же классе, чтобы проба не проходила на сломанном помощнике)."
+    },
+    {
+      "name": "docker-engine-only",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": [
+        "A-rules"
+      ],
+      "behavior": "Проба строки таблицы через rule-injector.sh: срабатывает на docker в начале команды и после &&, молчит на bash deploy/windows/docker-wsl.sh, bash scripts/stand.sh и на слове docker внутри аргумента grep."
+    },
+    {
+      "name": "test_wsl_engine_controls_denied",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "A-rules"
+      ],
+      "behavior": "wsl --shutdown, wsl.exe --terminate domovoy-engine, wsl -t domovoy-engine, wsl --unregister …, wsl --manage … и правка .wslconfig (Edit и запись командой) попадают под deny в Bash и PowerShell; bash deploy/windows/docker-wsl.sh compose ps и powershell -File deploy/windows/engine-setup.ps1 -Check — нет."
+    },
+    {
+      "name": "test_stand_script_allowed",
+      "file": ".claude/hooks/tests/test_settings_permissions.py",
+      "new": true,
+      "covers": [
+        "A-rules"
+      ],
+      "behavior": "bash scripts/stand.sh up --name 7 попадает под allow и не попадает под deny."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-up",
+      "criterion": "scripts/stand.sh up на чистой машине с domovoy-engine поднимает api, postgres и HA с demo, /health стенда отвечает, токен HA стенда получен без участия человека.",
+      "method": "Живой прогон агентом в worktree: bash scripts/stand.sh up --name 164 — код 0; bash scripts/stand.sh status --name 164 — три контейнера healthy; curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19164/health — 200; строка status «токен HA: принят» — stand.sh сам делает GET /api/ HA стенда с токеном из .env стенда и печатает только HTTP-код (200), сам токен агент не видит: .env закрыт правами. Без единой команды через ! владельца. «Чистая машина» приближается так: каталог стенда и тома domovoy-stand-164 до прогона отсутствуют; образы postgres и HA в движке общие с боевым и стираться ради прогона не могут.",
+      "evidence": "Вывод трёх команд в журнале, раздел «Проверено», с HTTP-кодом 200 и статусом Ha; отсутствие строк с ! в журнале на этом шаге. Часть «чистая машина» в буквальном смысле (движок без образов) — непроверяема без сноса боевого стека, это записывается."
+    },
+    {
+      "id": "A-down",
+      "criterion": "scripts/stand.sh down не оставляет контейнеров, томов и сетей стенда.",
+      "method": "bash scripts/stand.sh down --name 164; затем bash deploy/windows/docker-wsl.sh ps -a --filter label=com.docker.compose.project=domovoy-stand-164 -q, … volume ls --filter label=com.docker.compose.project=domovoy-stand-164 -q, … network ls --filter label=com.docker.compose.project=domovoy-stand-164 -q — все три пустые; плюс сценарий «down удаляет только своё» в stand.test.sh.",
+      "evidence": "Пустой вывод трёх команд в журнале; зелёный bash scripts/stand.test.sh."
+    },
+    {
+      "id": "A-coexist",
+      "criterion": "Стенд и боевой стек работают одновременно, боевой стек не перезапускается и не меняется (проверено compose ps боевого проекта до и после).",
+      "method": "До up и после down: bash deploy/windows/docker-wsl.sh ps --filter label=com.docker.compose.project=domovoy --format '{{.ID}} {{.Names}} {{.Status}}' и docker inspect -f '{{.Name}} {{.State.StartedAt}}' по тем же ID (через обёртку); то же — пока стенд поднят.",
+      "evidence": "Три снимка в журнале с одинаковыми ID контейнеров и StartedAt боевого проекта; Status различается только счётчиком времени работы."
+    },
+    {
+      "id": "A-refuse",
+      "criterion": "stand.sh отказывает с причиной на имени domovoy, на занятом порту и при недоступном движке.",
+      "method": "bash scripts/stand.test.sh — сценарии «отказ: имя domovoy», «отказ: занятый порт», «отказ: движок недоступен», «отказ: каталог боевого стека» зелёные; живьём: bash scripts/stand.sh up --name domovoy — код 1 и причина; занятый порт — up второго стенда с тем же N при поднятом первом — код 1 с номером порта.",
+      "evidence": "Вывод stand.test.sh с числом пройденных и 0 упавших; stderr двух живых отказов в журнале. Живой «движок недоступен» не прогоняется: погасить движок — значит погасить боевой стек (wsl --terminate закрыт этой же задачей); покрыт подделкой wsl.exe."
+    },
+    {
+      "id": "A-probe",
+      "criterion": "Проба ослабления защиты из #12 (A12-all-routes) переписана тестом с подменой в тестовом хосте и даёт красный прогон без правки src/.",
+      "method": "dotnet test --filter \"FullyQualifiedName~AuthenticationWeakeningProbeTests|FullyQualifiedName~AllRoutesRequireAuthenticationTests\" — все пройдены; git diff --name-only origin/main...HEAD -- src/ — пусто. «Красный прогон» здесь — утверждение теста: обе проверки RouteAuthenticationAudit на хосте с подменой возвращают отказ «GET /api/v1/state: 501 …»; проверка, что утверждение не пустое, — временная порча подмены (пропуск отключён) делает WeakenedHostFailsRouteAuthenticationAudit красным, правка не коммитится.",
+      "evidence": "Вывод dotnet test с числом пройденных; пустой git diff по src/; текст падения пробы при отключённой подмене — строкой в журнале."
+    },
+    {
+      "id": "A-df",
+      "criterion": "После stand.sh down объём docker system df в движке возвращается к значению до up (±100 МБ).",
+      "method": "bash deploy/windows/docker-wsl.sh system df --format '{{.Type}} {{.Size}}' до up и после down; сумма Images + Build Cache + Local Volumes до и после.",
+      "evidence": "Два вывода в журнале и разность сумм по модулю не больше 100 МБ."
+    },
+    {
+      "id": "A-rules",
+      "criterion": "Правила и разрешения из п. 4 на месте, scripts/stand.test.sh и тесты впрыска зелёные.",
+      "method": "grep -n 'Живая проверка — на стенде' docs/rules/implement.md; grep -n 'stand.sh' .claude/CLAUDE.md; grep -n 'domovoy-engine' .claude/CLAUDE.md; jq '.permissions.allow, (.permissions.deny | map(select(test(\"wsl\"))))' .claude/settings.json; jq '.rules[] | select(.name==\"docker-engine-only\") | .name' .claude/hooks/rules-map.json; bash scripts/stand.test.sh; python3 -m unittest discover -s .claude/hooks/tests -v — код 0. Пункт «stand.sh down удаляет и образы стенда» — сценарий «down удаляет только своё».",
+      "evidence": "Найденные строки grep и jq с номерами; итоговые строки stand.test.sh и unittest (OK, 0 failures)."
+    },
+    {
+      "id": "A-memory",
+      "criterion": "Память агента «живая проверка — одноразовый стенд» заменяется ссылкой на правило.",
+      "method": "непроверяем",
+      "evidence": "Файл памяти лежит вне репозитория, в каталоге проекта Claude Code владельца; ни одна команда в ветке и CI его не видит. Правит оркестратор до отдачи PR (out_of_scope) и цитирует новую строку памяти в журнале."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Состав платформ demo в образе HA 2026.10.1 не проверен: части сущностей примера (vacuum, climate котла, binary_sensor протечки) пары в demo может не быть.",
+      "mitigation": "Первый шаг реализации среза stand — поднять HA стенда и перечислить сущности demo (WebSocket config/entity_registry/list из ha-onboard.py, вывод — в журнал); карта переименования строится по этому списку, не по памяти. Сущности без пары не создаются шаблонами и перечисляются в выводе status как отсутствующие."
+    },
+    {
+      "risk": "Переименование entity_id через config/entity_registry/update требует unique_id у сущности demo; без него сущность не переименовать.",
+      "mitigation": "ha-onboard.py проверяет ответ на каждое переименование и падает с именем сущности; такая сущность уходит в список отсутствующих, up при этом не падает. Проверяется на первом живом прогоне."
+    },
+    {
+      "risk": "Слияние двух файлов compose с --project-directory: относительные пути второго файла могут считаться от каталога проекта, а не от файла — build.context уйдёт в каталог стенда.",
+      "mitigation": "Overlay задаёт context абсолютным путём worktree внутри дистрибутива (wslpath), относительных путей в нём нет; проверка — docker inspect смонтированного /app/config api стенда указывает на каталог стенда, а образ собран из worktree (метка org.opencontainers.image.revision или проверка сборки). docker compose config для проверки не используется: он в deny."
+    },
+    {
+      "risk": "Кэш сборки общий с боевым стеком, фильтр по id у docker buildx prune может отсутствовать в версии движка — ±100 МБ не выполнится или удалится чужой кэш.",
+      "mitigation": "Первый живой шаг — docker buildx prune --help в движке; фильтр есть — удаляются записи вне снимка; фильтра нет — остановка и вопрос оркестратору с замером, а не docker builder prune целиком."
+    },
+    {
+      "risk": "allow Bash(bash scripts/stand.sh*) пропускает и хвост команды после stand.sh.",
+      "mitigation": "Шаблон сопоставляется Claude Code по подкомандам составной команды; тест test_stand_script_allowed фиксирует форму, deny проверяется отдельно и имеет приоритет. В отчёте задачи это предел, а не гарантия (запись 0026, «Пределы»)."
+    },
+    {
+      "risk": "deny на «*.wslconfig*» закрывает и чтение .wslconfig командой агента.",
+      "mitigation": "Чтение агенту не нужно: звено .wslconfig проверяет engine-setup.ps1 -Check, его команда .wslconfig не содержит — test_wsl_engine_controls_denied проверяет, что -Check открыт."
+    },
+    {
+      "risk": "Токен HA стенда или пробный AUTH_ADMIN_TOKEN попадёт в вывод — правило 3 «Безопасность».",
+      "mitigation": "ha-onboard.py пишет токен только в stdout, stand.sh перехватывает его в переменную и пишет в .env стенда без echo; сценарий «токен не выводится» проверяет stdout и stderr всех подкоманд маркером."
+    },
+    {
+      "risk": "Стенд на порту, занятом portproxy ЛВС (запись 0030), или конфликт с боевым при совпадении N.",
+      "mitigation": "Порты стенда вне боевых значений по построению; занятость проверяется и в движке (ss -ltn), и на хосте (netstat -ano) до первого изменения."
+    },
+    {
+      "risk": "Новая строка docker-engine-only срабатывает на тексте, где docker не команда, и шумит.",
+      "mitigation": "command_regex привязан к началу команды; пробы молчания в test_rules_map.py — grep docker, bash docker-wsl.sh, bash stand.sh."
+    }
+  ],
+  "out_of_scope": [
+    "Каталог развёртывания боевого стека, образ в GHCR и сценарий обновления — #162.",
+    "Удаление Docker Desktop — решение владельца (запись 0028, дополнение 2026-10-13).",
+    "Правка config/entities.example.yaml, его тестов и фикстур — только если владелец выберет этот вариант развилки; тогда план пересматривается.",
+    "Файл памяти агента live-check-throwaway-stand.md — вне репозитория; заменяет ссылкой на docs/rules/implement.md оркестратор до отдачи PR.",
+    "README: раздел о стенде не добавляется — стенд инструмент агента, а не владельца; команды живут в .claude/CLAUDE.md.",
+    "Перевод остальных живых проб #12 (A12-pairing, A13-audit) на стенд — отдельными задачами при необходимости."
+  ]
+}
