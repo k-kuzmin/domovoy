@@ -1,0 +1,22 @@
+# ============================================================
+# Домовой — затравка configuration.yaml Home Assistant стенда агента
+#
+# Кладётся scripts/stand.sh в том homeassistant-config стенда до первого
+# старта HA. Боевой HA её не видит: том у каждого проекта compose свой.
+#
+# default_config: — то, что HA пишет в configuration.yaml сам на чистом
+# томе (в том числе onboarding, без которого stand.sh не получит токен).
+# demo: — вымышленные устройства; deploy/stand/ha-onboard.py переименовывает
+# их в entity_id из config/entities.example.yaml.
+# ============================================================
+
+default_config:
+
+demo:
+
+# Пустой скрипт под id из раздела scripts реестра-примера: у demo своего
+# скрипта нет, а api стенда должен видеть script.example_good_night.
+script:
+  example_good_night:
+    alias: Спокойной ночи
+    sequence: []
