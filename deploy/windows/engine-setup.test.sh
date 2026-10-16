@@ -30,10 +30,18 @@
 #     отметку; measure-boot.ps1 против локальной заглушки /health на python
 #     (порт на 127.0.0.1, журнал во временном каталоге);
 #   - пути через прежний движок рабочего стола сняты: поиск по сценариям и
-#     README пуст, режима переезда нет.
+#     README пуст, режима переезда нет;
+#   - каталог развёртывания (#162): настройки стека — из его .env через
+#     deploy/envfile.sh get (подменённым -AssumeDeploySettings или
+#     подделкой wsl.exe -WslExe), без него — значения по умолчанию со
+#     строкой settings.source; .env клона не читается; ключи [experimental]
+#     .wslconfig, разреженный диск и метка working_dir стека — функциями
+#     сценария; задача замера и бэкапа — с каталогом развёртывания.
 #
 # engine-setup.ps1 -Install и -Check тест не запускает: они меняют и читают
 # хост — это живой прогон владельца (README, «Автозапуск после перезагрузки»).
+# Сухие прогоны идут с подменённым состоянием движка (по умолчанию Absent)
+# или с подделкой wsl.exe: настоящий дистрибутив тест не трогает.
 
 set -uo pipefail
 export MSYS_NO_PATHCONV=1
@@ -460,12 +468,30 @@ engine_setup() {
 # службы IP Helper и профили firewall Windows — исправными по умолчанию;
 # сценарий отказа задаёт свои: ip_helper=Manual dry_run …,
 # open_profile=Public dry_run …
+# Состояние движка — engine_state (по умолчанию Absent: настоящий
+# дистрибутив и его диск не читаются; пустое — не подменяется), настройки
+# каталога развёртывания — deploy_settings (-AssumeDeploySettings),
+# подделка wsl.exe — fake_wsl (каталог make_fake_wsl).
 dry_run() {
-  local shell="$1"
+  local shell="$1" extra=()
   shift
+  if [ -n "${engine_state-Absent}" ]; then extra+=(-AssumeEngineState "${engine_state-Absent}"); fi
+  if [ -n "${deploy_settings:-}" ]; then extra+=(-AssumeDeploySettings "$deploy_settings"); fi
+  if [ -n "${fake_wsl:-}" ]; then extra+=(-WslExe "$(cygpath -w "$fake_wsl/wsl.cmd")"); fi
   engine_setup "$shell" -Install -DryRun -AssumeListenAddress 192.0.2.10 \
-    -AssumeIpHelperStartType "${ip_helper:-Automatic}" -AssumeOpenFirewallProfile "${open_profile:-None}" "$@"
+    -AssumeIpHelperStartType "${ip_helper:-Automatic}" -AssumeOpenFirewallProfile "${open_profile:-None}" "${extra[@]}" "$@"
 }
+
+# Вызовы подделки wsl.exe, которые меняют состояние дистрибутивов, —
+# сухой прогон их не делает.
+no_state_changing_wsl_calls() {
+  if grep -nE -- '--(terminate|shutdown|manage|import|unregister)( |$)|(^| )-t ' "$1/calls.log" >"$work/out.calls" 2>/dev/null; then
+    echo "вызовы, меняющие WSL: $(tr '\n' '|' <"$work/out.calls")"; return 1
+  fi
+}
+
+# .wslconfig со всеми ключами, которые пишет -Install, — с LF.
+wslconfig_full_lf=$'[wsl2]\nnetworkingMode=nat\n\n[experimental]\nsparseVhd=true\nautoMemoryReclaim=gradual\n'
 
 # Номер первой строки вывода, равной $2; пусто — строки нет.
 line_no() { grep -nxF -- "$2" "$work/out.$1" | head -n 1 | cut -d: -f1; }
@@ -504,6 +530,10 @@ test_engine_setup_dry_run() {
   [ -n "$ha_default" ] && [ -n "$api_default" ] || { fail "$name" "в docker-compose.yml нет значений по умолчанию портов"; return; }
   fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nHA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
   rm -f "$work/wslconfig"*
+  # Настройки каталога развёртывания подменены: каталог считается
+  # настроенным, задача бэкапа — с --cd в нём.
+  local deploy_settings
+  deploy_settings="API_HTTP_PORT=28081;COMPOSE_PROJECT_NAME=example-home;BACKUP_DIR=$(cygpath -m "$dest")"
 
   for shell in "${shells[@]}"; do
     dry_run "$shell"
@@ -527,9 +557,21 @@ test_engine_setup_dry_run() {
       "portproxy.remove: own v4tov4 entries on ports 28081,$ha_default (connect 127.0.0.1, same port) at other listen addresses" \
       'wslconfig.exists: False' 'wslconfig.changed: True' 'wslconfig.save: absent marker' \
       'wslconfig.line: [wsl2]' 'wslconfig.line: networkingMode=nat' \
+      'wslconfig.line: [experimental]' 'wslconfig.line: sparseVhd=true' 'wslconfig.line: autoMemoryReclaim=gradual' \
+      'settings.source: assumed (-AssumeDeploySettings)' \
+      'distro.registered: False' 'distro.sparse: wsl.exe --manage domovoy-engine --set-sparse true (after import)' \
+      'backup.Arguments: -d domovoy-engine --cd "/srv/domovoy" --exec bash ops/backup/backup.sh' \
       'backup.LogonType: S4U' 'backup.exitcode: 0' 'DryRun: nothing changed'; do
       has "$shell" "$line" || { fail "$name/$shell" "нет «$line»"; show_out; return; }
     done
+    # Разреженный диск — сразу после импорта, до провижининга.
+    [ "$(grep -n '^distro\.import: ' "$work/out.$shell" | cut -d: -f1)" -lt "$(grep -n '^distro\.sparse: ' "$work/out.$shell" | cut -d: -f1)" ] &&
+      [ "$(grep -n '^distro\.sparse: ' "$work/out.$shell" | cut -d: -f1)" -lt "$(grep -n '^provision: ' "$work/out.$shell" | cut -d: -f1)" ] \
+      || { fail "$name/$shell" "distro.sparse не между импортом и провижинингом"; show_out; return; }
+    # --allow-unsafe молча не ставится.
+    if grep -q -- '--allow-unsafe' "$work/out.$shell"; then fail "$name/$shell" "в плане --allow-unsafe"; show_out; return; fi
+    # Зонд замера — в каталоге развёртывания.
+    grep -q '^measure.arguments: .* -DeployDir "/srv/domovoy" ' "$work/out.$shell" || { fail "$name/$shell" "замеру не передан -DeployDir"; show_out; return; }
     # Правило — firewall Windows, а не Hyper-V: VMCreatorId у него нет.
     if grep -qi '^firewall\.vmcreatorid' "$work/out.$shell"; then fail "$name/$shell" "правило собрано для Hyper-V"; show_out; return; fi
     # Правило сужено до слушателя portproxy: svchost.exe службы iphlpsvc.
@@ -559,8 +601,9 @@ test_engine_setup_dry_run() {
       || { fail "$name/$shell" "замеру не переданы -Distro и -Project из COMPOSE_PROJECT_NAME"; show_out; return; }
     grep -q '^provision: wsl.exe -d domovoy-engine -u root --cd .* --exec bash deploy/windows/provision-engine.sh$' "$work/out.$shell" \
       || { fail "$name/$shell" "нет строки провижининга"; show_out; return; }
-    # Расписание бэкапа — одно, S4U: выбора типа входа больше нет.
-    has "$shell" 'backup: install-schedule.ps1 -Install -DryRun' || { fail "$name/$shell" "нет строки вызова расписания бэкапа"; show_out; return; }
+    # Расписание бэкапа — одно, S4U: выбора типа входа больше нет. Каталог
+    # развёртывания передаётся ему явно.
+    grep -q '^backup: install-schedule\.ps1 -Install -DryRun -DeployDir /srv/domovoy\( \|$\)' "$work/out.$shell" || { fail "$name/$shell" "нет строки вызова расписания бэкапа с -DeployDir"; show_out; return; }
     if grep -q -- '-LogonType' "$work/out.$shell"; then fail "$name/$shell" "расписанию бэкапа передаётся -LogonType"; show_out; return; fi
     if grep -q 'ha-long-lived-token' "$work/out.$shell"; then fail "$name/$shell" "в выводе значения .env"; return; fi
     [ ! -e "$work/wslconfig" ] || { fail "$name/$shell" "сухой прогон записал .wslconfig"; return; }
@@ -568,6 +611,8 @@ test_engine_setup_dry_run() {
       fail "$name" "вывод $first и $shell различается"; diff "$work/out.$first" "$work/out.$shell" | sed 's/^/    | /' | head; return
     fi
   done
+  # Новый .wslconfig — nat в [wsl2] и оба ключа [experimental], CRLF.
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\n\r\n[experimental]\r\nsparseVhd=true\r\nautoMemoryReclaim=gradual\r\n' || return
   ok "$name"
 
   # Повторный -Install гасит дистрибутив (wsl --terminate): держалка, если
@@ -575,22 +620,27 @@ test_engine_setup_dry_run() {
   # владельца после переезда держалка работает, и ветка «не работала» иначе
   # не проверялась бы.
   name=engine_setup_resumes_keeper
-  dry_run "${shells[0]}" -AssumeEngineState Running
+  engine_state=Running dry_run "${shells[0]}"
   [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
   has "${shells[0]}" 'engine.running: True' || { fail "$name" "состояние Running не учтено"; show_out; return; }
   has "${shells[0]}" 'keeper.resume: Start-ScheduledTask domovoy-engine' || { fail "$name" "держалка не запускается снова"; show_out; return; }
-  dry_run "${shells[0]}" -AssumeEngineState Stopped
+  engine_state=Stopped dry_run "${shells[0]}"
   [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
   has "${shells[0]}" 'engine.running: False' || { fail "$name" "состояние Stopped не учтено"; show_out; return; }
   if grep -q '^keeper.resume: Start-ScheduledTask' "$work/out.${shells[0]}"; then fail "$name" "держалка запускается, хотя не работала"; show_out; return; fi
   grep -q '^keeper.resume: none ' "$work/out.${shells[0]}" || { fail "$name" "решение о держалке не напечатано"; show_out; return; }
   ok "$name"
 
-  # Без API_HTTP_PORT в .env — значение по умолчанию из docker-compose.yml.
+  # Настроек каталога развёртывания нет (дистрибутив не зарегистрирован) —
+  # значения по умолчанию из docker-compose.yml, а не из .env клона.
   name=engine_setup_port_from_compose_default
-  fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  deploy_settings=''
   dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "код $rc"; show_out; return; }
+  has "${shells[0]}" 'settings.source: defaults (distro not registered)' || { fail "$name" "нет строки settings.source: defaults"; show_out; return; }
   grep -q "^measure.arguments: .* -Port $api_default " "$work/out.${shells[0]}" || { fail "$name" "порт не $api_default"; show_out; return; }
+  if grep -qE '28081|example-home' "$work/out.${shells[0]}"; then fail "$name" "значения .env клона в выводе"; show_out; return; fi
   # Без COMPOSE_PROJECT_NAME в .env — имя проекта по умолчанию из docker-compose.yml.
   grep -q "^measure.arguments: .* -Project $(sed -nE 's/^name: \$\{COMPOSE_PROJECT_NAME:-([^}]*)\}.*/\1/p' "$root/docker-compose.yml") " "$work/out.${shells[0]}" \
     || { fail "$name" "проект замера не по умолчанию из docker-compose.yml"; show_out; return; }
@@ -603,45 +653,51 @@ test_engine_setup_dry_run() {
   name=engine_setup_refuses_bad_project_name
   local bad
   for bad in 'Example-Home' 'example home' '-example'; do
-    fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=%s\r\nBACKUP_DIR="%s"\r\n' "$bad" "$(cygpath -m "$dest")")"
+    deploy_settings="API_HTTP_PORT=28081;COMPOSE_PROJECT_NAME=$bad;BACKUP_DIR=$(cygpath -m "$dest")"
     dry_run "${shells[0]}"
     [ "$rc" -eq 2 ] || { fail "$name" "«$bad»: код $rc, ожидался 2"; show_out; return; }
     grep -qF 'COMPOSE_PROJECT_NAME' "$work/out.${shells[0]}" || { fail "$name" "«$bad»: отказ не называет COMPOSE_PROJECT_NAME"; show_out; return; }
     if grep -qE '^(measure|keeper)\.task:' "$work/out.${shells[0]}"; then fail "$name" "«$bad»: задачи напечатаны после отказа"; show_out; return; fi
   done
-  # Следующим сценариям — клон с допустимым .env, как до этого сценария.
-  fake_clone "$(printf 'BACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  # Следующим сценариям — допустимые настройки, как до этого сценария.
+  deploy_settings="API_HTTP_PORT=28081;COMPOSE_PROJECT_NAME=example-home;BACKUP_DIR=$(cygpath -m "$dest")"
   ok "$name"
 
   name=engine_setup_wslconfig_kept
   printf '[wsl2]\r\nmemory=4GB\r\n' >"$work/wslconfig"
   cp "$work/wslconfig" "$work/wslconfig.before"
   dry_run "${shells[0]}"
-  [ "$(grep '^wslconfig.line: ' "$work/out.${shells[0]}" | tr '\n' '|')" = 'wslconfig.line: [wsl2]|wslconfig.line: networkingMode=nat|wslconfig.line: memory=4GB|' ] \
+  [ "$(grep '^wslconfig.line: ' "$work/out.${shells[0]}" | tr '\n' '|')" = 'wslconfig.line: [wsl2]|wslconfig.line: networkingMode=nat|wslconfig.line: memory=4GB|wslconfig.line: [experimental]|wslconfig.line: sparseVhd=true|wslconfig.line: autoMemoryReclaim=gradual|' ] \
     || { fail "$name" "прежние строки .wslconfig не сохранены"; show_out; return; }
   has "${shells[0]}" 'wslconfig.save: backup copy' || { fail "$name" "прежний файл не сохраняется копией"; show_out; return; }
   # Байтовое сравнение: строки wslconfig.line делятся по \r?\n, а dry_run
   # срезает CR — лишний CR после [wsl2] виден только здесь.
-  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n' || return
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n\r\n[experimental]\r\nsparseVhd=true\r\nautoMemoryReclaim=gradual\r\n' || return
   cmp -s "$work/wslconfig" "$work/wslconfig.before" || { fail "$name" "сухой прогон изменил .wslconfig"; return; }
   # Файл с LF остаётся с LF: перевод строки берётся из самого файла.
   printf '[wsl2]\nmemory=4GB\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=nat\nmemory=4GB\n' || return
+  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=nat\nmemory=4GB\n\n[experimental]\nsparseVhd=true\nautoMemoryReclaim=gradual\n' || return
   # Без секции [wsl2] она дописывается в конец — тоже переводом строки файла.
   printf '[boot]\nsystemd=true\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[boot]\nsystemd=true\n\n[wsl2]\nnetworkingMode=nat\n' || return
+  wslconfig_bytes_are "$name" $'[boot]\nsystemd=true\n\n[wsl2]\nnetworkingMode=nat\n\n[experimental]\nsparseVhd=true\nautoMemoryReclaim=gradual\n' || return
   printf '[boot]\r\nsystemd=true\r\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
-  wslconfig_bytes_are "$name" $'[boot]\r\nsystemd=true\r\n\r\n[wsl2]\r\nnetworkingMode=nat\r\n' || return
+  wslconfig_bytes_are "$name" $'[boot]\r\nsystemd=true\r\n\r\n[wsl2]\r\nnetworkingMode=nat\r\n\r\n[experimental]\r\nsparseVhd=true\r\nautoMemoryReclaim=gradual\r\n' || return
+  # nat задан, ключей [experimental] нет — дописываются только они.
   printf '[wsl2]\nnetworkingMode=nat\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
   [ "$rc" -eq 0 ] || { fail "$name" "nat уже задан — код $rc"; show_out; return; }
-  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "nat уже задан, а файл меняется"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: True' || { fail "$name" "ключи [experimental] не дописываются"; show_out; return; }
+  wslconfig_bytes_are "$name" "$wslconfig_full_lf" || return
+  printf '%s' "$wslconfig_full_lf" >"$work/wslconfig"
+  dry_run "${shells[0]}"
+  [ "$rc" -eq 0 ] || { fail "$name" "все ключи заданы — код $rc"; show_out; return; }
+  has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "все ключи заданы, а файл меняется"; show_out; return; }
   # firewall=false не отказ: правила Hyper-V больше нет, порты стека на
   # адресе хоста закрывает firewall Windows.
-  printf '[wsl2]\nnetworkingMode=nat\nfirewall=false\n' >"$work/wslconfig"
+  printf '[wsl2]\nnetworkingMode=nat\nfirewall=false\n\n[experimental]\nsparseVhd=true\nautoMemoryReclaim=gradual\n' >"$work/wslconfig"
   dry_run "${shells[0]}"
   [ "$rc" -eq 0 ] || { fail "$name" "firewall=false — отказ, код $rc"; show_out; return; }
   has "${shells[0]}" 'wslconfig.changed: False' || { fail "$name" "firewall=false: файл меняется"; show_out; return; }
@@ -659,7 +715,7 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 0 ] || { fail "$name" "свой mirrored с копией: код $rc"; show_out; return; }
   has "${shells[0]}" 'wslconfig.changed: True' || { fail "$name" "свой mirrored с копией не переписывается"; show_out; return; }
   has "${shells[0]}" 'wslconfig.save: none (backup copy or absent marker already there)' || { fail "$name" "копия перезаписывается"; show_out; return; }
-  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n' || return
+  wslconfig_bytes_are "$name" $'[wsl2]\r\nnetworkingMode=nat\r\nmemory=4GB\r\n\r\n[experimental]\r\nsparseVhd=true\r\nautoMemoryReclaim=gradual\r\n' || return
   rm -f "$work/wslconfig"*
   printf '[wsl2]\nnetworkingMode=mirrored\n' >"$work/wslconfig"
   : >"$work/wslconfig.domovoy-absent"
@@ -667,7 +723,7 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 0 ] || { fail "$name" "свой mirrored с отметкой: код $rc"; show_out; return; }
   has "${shells[0]}" 'wslconfig.changed: True' || { fail "$name" "свой mirrored с отметкой не переписывается"; show_out; return; }
   has "${shells[0]}" 'wslconfig.save: none (backup copy or absent marker already there)' || { fail "$name" "при отметке создаётся копия mirrored"; show_out; return; }
-  wslconfig_bytes_are "$name" $'[wsl2]\nnetworkingMode=nat\n' || return
+  wslconfig_bytes_are "$name" "$wslconfig_full_lf" || return
   [ ! -e "$work/wslconfig.domovoy-backup" ] || { fail "$name" "сухой прогон создал копию"; return; }
   rm -f "$work/wslconfig"*
   ok "$name"
@@ -677,13 +733,18 @@ test_engine_setup_dry_run() {
   # ::1 хоста до движка в NAT не доходят).
   name=engine_setup_refuses_foreign_wslconfig
   local wsl_case
+  # Ключи [experimental] — тоже: sparseVhd иное, чем true, и
+  # autoMemoryReclaim иное, чем gradual.
   for wsl_case in $'[wsl2]\nnetworkingMode=mirrored\n|networkingMode=mirrored' $'[wsl2]\nnetworkingMode=bridged\n|networkingMode=bridged' \
-    $'[wsl2]\nlocalhostForwarding=false\n|localhostForwarding=false' $'[wsl2]\nnetworkingMode=nat\nLocalhostForwarding = False\n|localhostForwarding=False'; do
+    $'[wsl2]\nlocalhostForwarding=false\n|localhostForwarding=false' $'[wsl2]\nnetworkingMode=nat\nLocalhostForwarding = False\n|localhostForwarding=False' \
+    $'[wsl2]\nnetworkingMode=nat\n\n[experimental]\nsparseVhd=false\n|sparseVhd=false' \
+    $'[experimental]\nautoMemoryReclaim=dropCache\n|autoMemoryReclaim=dropCache'; do
     rm -f "$work/wslconfig"*
     printf '%s' "${wsl_case%|*}" >"$work/wslconfig"
     dry_run "${shells[0]}"
     if [ "$rc" -ne 1 ]; then fail "$name" "${wsl_case#*|}: код $rc, ожидался 1"; show_out; return; fi
     has "${shells[0]}" "wslconfig.conflict: ${wsl_case#*|}" || { fail "$name" "конфликт ${wsl_case#*|} не назван"; show_out; return; }
+    if grep -q '^wslconfig\.line: ' "$work/out.${shells[0]}"; then fail "$name" "${wsl_case#*|}: напечатано новое содержимое"; show_out; return; fi
   done
   rm -f "$work/wslconfig"*
   ok "$name"
@@ -724,6 +785,22 @@ test_engine_setup_dry_run() {
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeIpHelperStartType без -DryRun код $rc, ожидался 2"; show_out; return; }
   run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeOpenFirewallProfile None
   [ "$rc" -eq 2 ] || { fail "$name" "-AssumeOpenFirewallProfile без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -AssumeDeploySettings 'API_HTTP_PORT=28081'
+  [ "$rc" -eq 2 ] || { fail "$name" "-AssumeDeploySettings без -DryRun код $rc, ожидался 2"; show_out; return; }
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$work/clone/deploy/windows/engine-setup.ps1")" -Check -WslExe 'C:\example\wsl.cmd'
+  [ "$rc" -eq 2 ] || { fail "$name" "-WslExe без -DryRun код $rc, ожидался 2"; show_out; return; }
+  # Подменённые настройки — только ключи белого списка envfile.sh get, в
+  # форме KEY=значение; каталог развёртывания — абсолютный путь Linux.
+  local bad_setting
+  for bad_setting in 'HA_TOKEN=example' 'API_HTTP_PORT' 'api_http_port=28081'; do
+    deploy_settings="$bad_setting" dry_run "${shells[0]}"
+    [ "$rc" -eq 2 ] || { fail "$name" "-AssumeDeploySettings «$bad_setting»: код $rc, ожидался 2"; show_out; return; }
+  done
+  local bad_dir
+  for bad_dir in 'srv/domovoy' '/srv/example deploy' 'C:\example' '/srv/../example'; do
+    deploy_settings='' dry_run "${shells[0]}" -DeployDir "$bad_dir"
+    [ "$rc" -eq 2 ] || { fail "$name" "-DeployDir «$bad_dir»: код $rc, ожидался 2"; show_out; return; }
+  done
   # Подменённый адрес — только IPv4 одного узла: петля и подстановочный
   # адрес дали бы петлю portproxy.
   local bad_address
@@ -735,8 +812,10 @@ test_engine_setup_dry_run() {
 
   # stderr внешней программы — отдельным полем: в строках stdout его нет,
   # в выводе он виден с пометкой. Отказ вложенного install-schedule.ps1
-  # (нет BACKUP_DIR) пишется в stderr.
+  # (нет BACKUP_DIR) пишется в stderr. Каталога развёртывания нет — задача
+  # бэкапа прежняя, с BACKUP_DIR из .env клона.
   fake_clone "$(printf 'API_HTTP_PORT=28081\r\n')"
+  deploy_settings=''
   rm -f "$work/wslconfig"*
   for shell in "${shells[@]}"; do
     name="engine_setup_stderr_apart/$shell"
@@ -749,10 +828,12 @@ test_engine_setup_dry_run() {
   done
 }
 
+# Настройки каталога развёртывания подменены: при работающем движке
+# настоящий дистрибутив не читается.
 uninstall_dry_run() {
   local shell="$1"
   shift
-  engine_setup "$shell" -Uninstall -DryRun "$@"
+  engine_setup "$shell" -Uninstall -DryRun -AssumeDeploySettings 'API_HTTP_PORT=28081' "$@"
 }
 
 # Файлы .wslconfig, копия и отметка — байт в байт как до сухого прогона.
@@ -816,8 +897,9 @@ test_uninstall_dry_run_without_rollback() {
       ! before "$shell" 'uninstall.firewall.hyperv.remove: domovoy-engine-ports' 'uninstall.firewall.remove: domovoy-engine-ports'; then
       fail "$name" "порядок portproxy → Hyper-V → правило Windows не тот, что у исполнения"; show_out; return
     fi
-    grep -q '^uninstall\.stack\.stop: wsl\.exe -d domovoy-engine -u root --cd .* --exec docker compose --profile ha stop$' "$work/out.$shell" \
-      || { fail "$name" "стек не останавливается командой stop внутри движка"; show_out; return; }
+    # Стек останавливается в каталоге развёртывания, а не в клоне.
+    has "$shell" 'uninstall.stack.stop: wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec docker compose --profile ha stop' \
+      || { fail "$name" "стек не останавливается командой stop в каталоге развёртывания"; show_out; return; }
     # stop, а не down: тома стека остаются.
     if grep -q '^uninstall\.stack\.stop: .* down' "$work/out.$shell"; then fail "$name" "стек сносится down"; show_out; return; fi
     grep -q '^uninstall\.distro\.kept: .*wsl --unregister domovoy-engine' "$work/out.$shell" \
@@ -1228,6 +1310,223 @@ test_wslconfig_check() {
       Get-WslConfigCheck Get-WslConfigPlan
     [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
   done
+  ok "$name"
+}
+
+# Ключи [experimental] .wslconfig (Get-WslConfigPlan): sparseVhd=true и
+# autoMemoryReclaim=gradual дописываются — после заголовка секции, если
+# она есть, иначе новой секцией в конце; прочее не трогается. Чужое
+# значение — Conflict, файл не меняется. Звенья -Check по каждому ключу
+# (Get-WslConfigKeyCheck) краснеют только по своему ключу; звено nat
+# (Get-WslConfigCheck) — только по своим.
+test_wslconfig_experimental_keys() {
+  local name=wslconfig_experimental_keys shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  mkdir -p "$work/wslexp"
+  for shell in "${shells[@]}"; do
+    rm -f "$work/wslexp/"*
+    # shellcheck disable=SC2016
+    PS1_TMP="$(cygpath -w "$work/wslexp")" ps_functions "$shell" "$here/engine-setup.ps1" '
+      $path = Join-Path $env:PS1_TMP "wslconfig"
+      function put($t) { [IO.File]::WriteAllText($path, $t) }
+      function plan { Get-WslConfigPlan $path }
+      function want($from, $to, $why) {
+        put $from
+        $p = plan
+        if ($p.Conflict -or -not $p.Changed -or $p.Content -cne $to) { "${why}: Conflict «$($p.Conflict)» Changed $($p.Changed) Content «$($p.Content -replace "`n", "|")»"; exit 1 }
+      }
+      $all = "[wsl2]`nnetworkingMode=nat`n`n[experimental]`nsparseVhd=true`nautoMemoryReclaim=gradual`n"
+      want "[wsl2]`nnetworkingMode=nat`nmemory=4GB`n" "[wsl2]`nnetworkingMode=nat`nmemory=4GB`n`n[experimental]`nsparseVhd=true`nautoMemoryReclaim=gradual`n" "без секции"
+      want "[wsl2]`nnetworkingMode=nat`n`n[experimental]`nhostAddressLoopback=true`n" "[wsl2]`nnetworkingMode=nat`n`n[experimental]`nsparseVhd=true`nautoMemoryReclaim=gradual`nhostAddressLoopback=true`n" "с секцией"
+      want "[wsl2]`r`nnetworkingMode=nat`r`n`r`n[experimental]`r`nsparseVhd=true`r`n" "[wsl2]`r`nnetworkingMode=nat`r`n`r`n[experimental]`r`nautoMemoryReclaim=gradual`r`nsparseVhd=true`r`n" "один ключ задан, CRLF"
+      put $all
+      $p = plan
+      if ($p.Changed -or $p.Conflict) { "все ключи заданы: Changed $($p.Changed), Conflict «$($p.Conflict)»"; exit 1 }
+      foreach ($c in @(@("sparseVhd=false", "sparseVhd"), @("autoMemoryReclaim=dropCache", "autoMemoryReclaim"))) {
+        $text = $all -replace ("(?m)^" + $c[1] + "=.*$"), $c[0]
+        put $text
+        $p = plan
+        if ($p.Conflict -notmatch [regex]::Escape($c[0]) -or $p.Changed -or $p.Content -cne $text) { "$($c[0]): Conflict «$($p.Conflict)», Changed $($p.Changed)"; exit 1 }
+        $k = Get-WslConfigKeyCheck $p $c[1]
+        if ($k.State -ne "FAIL" -or $k.Detail -notmatch [regex]::Escape($c[0])) { "$($c[0]): звено $($c[1]) $($k.State) «$($k.Detail)»"; exit 1 }
+        $other = if ($c[1] -eq "sparseVhd") { "autoMemoryReclaim" } else { "sparseVhd" }
+        if ((Get-WslConfigKeyCheck $p $other).State -ne "OK") { "$($c[0]): покраснело звено $other"; exit 1 }
+        if ((Get-WslConfigCheck $p).State -ne "OK") { "$($c[0]): покраснело звено nat"; exit 1 }
+      }
+      put $all
+      foreach ($key in "sparseVhd", "autoMemoryReclaim") {
+        if ((Get-WslConfigKeyCheck (plan) $key).State -ne "OK") { "${key} задан, звено не OK"; exit 1 }
+      }
+      foreach ($key in "sparseVhd", "autoMemoryReclaim") {
+        put ($all -replace ("(?m)^" + $key + "=.*\n"), "")
+        $p = plan
+        $k = Get-WslConfigKeyCheck $p $key
+        if ($k.State -ne "FAIL" -or $k.Detail -notmatch "не задан") { "${key} снят: $($k.State) «$($k.Detail)»"; exit 1 }
+        $other = if ($key -eq "sparseVhd") { "autoMemoryReclaim" } else { "sparseVhd" }
+        if ((Get-WslConfigKeyCheck $p $other).State -ne "OK") { "${key} снят: покраснело звено $other"; exit 1 }
+        if ((Get-WslConfigCheck $p).State -ne "OK") { "${key} снят: покраснело звено nat"; exit 1 }
+      }' \
+      Get-WslConfigPlan Get-WslConfigCheck Get-WslConfigKeyCheck
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Звено -Check «диск дистрибутива разреженный» (Get-SparseDiskCheck):
+# атрибут SparseFile — OK, без него — FAIL с подсказкой -Install, файла нет
+# — FAIL с путём. Путь ext4.vhdx — BasePath записи Lxss по
+# DistributionName (Select-DistroDiskPath), без префикса \\?\.
+test_sparse_disk_check() {
+  local name=sparse_disk_check shell
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  for shell in "${shells[@]}"; do
+    # shellcheck disable=SC2016
+    ps_functions "$shell" "$here/engine-setup.ps1" '
+      $disk = "C:\example\domovoy-engine\disk\ext4.vhdx"
+      $c = Get-SparseDiskCheck $disk ([IO.FileAttributes]"Archive")
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "-Install") { "без SparseFile: $($c.State) «$($c.Detail)»"; exit 1 }
+      $c = Get-SparseDiskCheck $disk ([IO.FileAttributes]"Archive, SparseFile")
+      if ($c.State -ne "OK") { "SparseFile: $($c.State) «$($c.Detail)»"; exit 1 }
+      $c = Get-SparseDiskCheck $disk $null
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch [regex]::Escape($disk)) { "файла нет: $($c.State) «$($c.Detail)»"; exit 1 }
+      $c = Get-SparseDiskCheck "" $null
+      if ($c.State -ne "FAIL" -or -not $c.Detail) { "путь не найден: $($c.State) «$($c.Detail)»"; exit 1 }
+      $entries = @(
+        [pscustomobject]@{ DistributionName = "example-other"; BasePath = "C:\example\other" },
+        [pscustomobject]@{ Version = 2 },
+        [pscustomobject]@{ DistributionName = "Domovoy-Engine"; BasePath = "\\?\C:\example\domovoy-engine\disk" })
+      $got = Select-DistroDiskPath $entries "domovoy-engine"
+      if ($got -ne $disk) { "путь «$got», ожидался «$disk»"; exit 1 }
+      $got = Select-DistroDiskPath @([pscustomobject]@{ DistributionName = "domovoy-engine"; BasePath = "C:\example\domovoy-engine\disk\" }) "domovoy-engine"
+      if ($got -ne $disk) { "BasePath с \ в конце: «$got»"; exit 1 }
+      if (Select-DistroDiskPath $entries "example-absent") { "чужой дистрибутив дал путь"; exit 1 }
+      if (Select-DistroDiskPath @() "domovoy-engine") { "пустой список дал путь"; exit 1 }' \
+      Get-SparseDiskCheck Select-DistroDiskPath
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+  done
+  ok "$name"
+}
+
+# Звено -Check «стек поднят из каталога развёртывания»
+# (Get-StackWorkingDirCheck): метки com.docker.compose.project.working_dir
+# всех контейнеров проекта равны -DeployDir — OK; хоть одна другая (клон
+# Windows через /mnt) — FAIL с этим путём; контейнеров нет или метки нет —
+# FAIL. Запрос (Get-WorkingDirQuery) доходит до wsl.exe одним аргументом
+# формата на обоих шеллах — подделка wsl.exe пишет argv.
+test_stack_working_dir_check() {
+  local name=stack_working_dir_check shell fake="$work/fakewsl-wd"
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  if ! python_cmd >/dev/null; then skip "$name" "нет python для подделки wsl.exe"; return; fi
+  for shell in "${shells[@]}"; do
+    make_fake_wsl "$fake"
+    probe_step "$fake" 0 0 $'/srv/domovoy\n'
+    # shellcheck disable=SC2016
+    PS1_FAKE="$(cygpath -w "$fake/wsl.cmd")" ps_functions "$shell" "$here/engine-setup.ps1" '
+      $c = Get-StackWorkingDirCheck @("/srv/domovoy", "/srv/domovoy/") "/srv/domovoy"
+      if ($c.State -ne "OK") { "все из каталога: $($c.State) «$($c.Detail)»"; exit 1 }
+      $c = Get-StackWorkingDirCheck @("/srv/domovoy", "/mnt/c/example/clone") "/srv/domovoy"
+      if ($c.State -ne "FAIL" -or $c.Detail -notmatch "/mnt/c/example/clone") { "клон: $($c.State) «$($c.Detail)»"; exit 1 }
+      $c = Get-StackWorkingDirCheck @() "/srv/domovoy"
+      if ($c.State -ne "FAIL") { "контейнеров нет: $($c.State)"; exit 1 }
+      $c = Get-StackWorkingDirCheck @("/srv/domovoy", "") "/srv/domovoy"
+      if ($c.State -ne "FAIL") { "контейнер без метки: $($c.State)"; exit 1 }
+      $wslExe = $env:PS1_FAKE
+      $r = Invoke-Wsl (Get-WorkingDirQuery "domovoy-engine" "example")
+      if ($r.Code -ne 0 -or $r.Text -ne "/srv/domovoy") { "подделка: код $($r.Code) «$($r.Text)»"; exit 1 }' \
+      Get-StackWorkingDirCheck Get-WorkingDirQuery Invoke-Wsl Invoke-Native Set-NativeOutputEncoding Restore-NativeOutputEncoding
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+    # shellcheck disable=SC2016
+    grep -qxF -- '-d domovoy-engine -u root --exec docker ps -a --filter label=com.docker.compose.project=example --format {{.Label `com.docker.compose.project.working_dir`}}' "$fake/calls.log" \
+      || { fail "$name/$shell" "аргументы запроса меток дошли не так"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  done
+  ok "$name"
+}
+
+# Настройки стека — из .env каталога развёртывания (deploy/envfile.sh get
+# внутри дистрибутива), не из .env клона. Подменённые настройки — порты и
+# проект в правиле, portproxy и задаче замера. Без них и с неработающим
+# дистрибутивом — значения по умолчанию. Дистрибутив работает (подделка
+# wsl.exe), а каталога развёртывания нет — тоже значения по умолчанию с
+# причиной, -Install -DryRun не отказывает, задача бэкапа прежняя — с --cd
+# клона. Каталог есть — чтение через envfile.sh get, задача бэкапа с --cd
+# в нём; get отказал — отказ, а не тихие значения по умолчанию.
+test_deploy_settings_from_deploy_dir() {
+  local name=deploy_settings_from_deploy_dir
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  if ! python_cmd >/dev/null; then skip "$name" "нет python для подделки wsl.exe"; return; fi
+  local dest="$work/backups" shell="${shells[0]}" ha_default fake="$work/fakewsl-deploy" why deploy_settings clone_win
+  mkdir -p "$dest"
+  ha_default="$(compose_default HA_HTTP_PORT)"
+  fake_clone "$(printf 'API_HTTP_PORT=28081\r\nCOMPOSE_PROJECT_NAME=example-home\r\nBACKUP_DIR="%s"\r\n' "$(cygpath -m "$dest")")"
+  clone_win="$(cygpath -w "$work/clone")"
+  rm -f "$work/wslconfig"*
+
+  deploy_settings="API_HTTP_PORT=28082;COMPOSE_PROJECT_NAME=example-deploy;BACKUP_DIR=$(cygpath -m "$dest")"
+  dry_run "$shell"
+  [ "$rc" -eq 0 ] || { fail "$name" "подменённые настройки: код $rc"; show_out; return; }
+  local line
+  for line in "firewall.localports: 28082,$ha_default" \
+    'portproxy.add: v4tov4 listenport=28082 connectaddress=127.0.0.1 connectport=28082' \
+    'settings.source: assumed (-AssumeDeploySettings)'; do
+    has "$shell" "$line" || { fail "$name" "нет «$line»"; show_out; return; }
+  done
+  grep -q '^measure.arguments: .* -Port 28082 -Distro domovoy-engine -Project example-deploy ' "$work/out.$shell" \
+    || { fail "$name" "задача замера не с 28082 и example-deploy"; show_out; return; }
+  if grep -qE '28081|example-home' "$work/out.$shell"; then fail "$name" "значения .env клона в выводе"; grep -nE '28081|example-home' "$work/out.$shell" | sed 's/^/    | /'; return; fi
+
+  # Без настроек, дистрибутив не работает.
+  deploy_settings=''
+  engine_state=Stopped dry_run "$shell"
+  [ "$rc" -eq 0 ] || { fail "$name" "дистрибутив не работает: код $rc"; show_out; return; }
+  has "$shell" 'settings.source: defaults (distro not running)' || { fail "$name" "дистрибутив не работает: нет settings.source: defaults"; show_out; return; }
+  if grep -qE '28081|example-home' "$work/out.$shell"; then fail "$name" "дистрибутив не работает: значения .env клона в выводе"; show_out; return; fi
+
+  # Дистрибутив работает, каталога развёртывания нет: test -f отвечает 1.
+  make_fake_wsl "$fake"
+  printf 'domovoy-engine\n' >"$fake/running"
+  probe_step "$fake" 0 1 ''
+  engine_state='' fake_wsl="$fake" dry_run "$shell"
+  [ "$rc" -eq 0 ] || { fail "$name" "каталога нет: код $rc"; show_out; return; }
+  has "$shell" 'settings.source: defaults (deploy dir /srv/domovoy: no .env or deploy/envfile.sh)' \
+    || { fail "$name" "каталога нет: нет settings.source: defaults с причиной"; show_out; return; }
+  has "$shell" "backup.Arguments: -d domovoy-engine --cd \"$clone_win\" --exec bash ops/backup/backup.sh" \
+    || { fail "$name" "каталога нет: задача бэкапа не с --cd клона"; show_out; return; }
+  grep -q '^backup\.Settings: clone ' "$work/out.$shell" || { fail "$name" "каталога нет: не сказано, что задача бэкапа прежняя"; show_out; return; }
+  grep -qxF -- '-d domovoy-engine -u root --exec test -f /srv/domovoy/.env -a -f /srv/domovoy/deploy/envfile.sh' "$fake/calls.log" \
+    || { fail "$name" "каталога нет: проверки наличия нет"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  if grep -q 'envfile.sh get' "$fake/calls.log"; then fail "$name" "каталога нет, а get вызван"; return; fi
+  why="$(no_state_changing_wsl_calls "$fake")" || { fail "$name" "$why"; return; }
+
+  # Каталог есть: настройки и BACKUP_DIR — через envfile.sh get.
+  make_fake_wsl "$fake"
+  printf 'domovoy-engine\n' >"$fake/running"
+  probe_step "$fake" 0 0 ''
+  probe_step "$fake" 1 0 $'API_HTTP_PORT=28083\nHA_HTTP_PORT=\nCOMPOSE_PROJECT_NAME=example-fake\n'
+  probe_step "$fake" 2 0 ''
+  probe_step "$fake" 3 0 "BACKUP_DIR=$(cygpath -m "$dest")"$'\n'
+  engine_state='' fake_wsl="$fake" dry_run "$shell"
+  [ "$rc" -eq 0 ] || { fail "$name" "каталог есть: код $rc"; show_out; return; }
+  for line in 'settings.source: deploy (/srv/domovoy/.env)' "firewall.localports: 28083,$ha_default" \
+    'backup.Arguments: -d domovoy-engine --cd "/srv/domovoy" --exec bash ops/backup/backup.sh' \
+    'backup.Settings: deploy (/srv/domovoy/.env)'; do
+    has "$shell" "$line" || { fail "$name" "каталог есть: нет «$line»"; show_out; return; }
+  done
+  grep -q '^measure.arguments: .* -Project example-fake ' "$work/out.$shell" || { fail "$name" "каталог есть: проект не из его .env"; show_out; return; }
+  grep -qxF -- '-d domovoy-engine -u root --cd /srv/domovoy --exec bash deploy/envfile.sh get .env API_HTTP_PORT HA_HTTP_PORT COMPOSE_PROJECT_NAME' "$fake/calls.log" \
+    || { fail "$name" "каталог есть: get настроек не той формы"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  grep -qxF -- '-d domovoy-engine -u root --cd /srv/domovoy --exec bash deploy/envfile.sh get .env BACKUP_DIR' "$fake/calls.log" \
+    || { fail "$name" "каталог есть: get BACKUP_DIR не той формы"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  why="$(no_state_changing_wsl_calls "$fake")" || { fail "$name" "$why"; return; }
+
+  # Каталог есть, а get отказал — отказ до первого изменения.
+  make_fake_wsl "$fake"
+  printf 'domovoy-engine\n' >"$fake/running"
+  probe_step "$fake" 0 0 ''
+  probe_step "$fake" 1 1 '' $'envfile: example failure\n'
+  engine_state='' fake_wsl="$fake" dry_run "$shell"
+  [ "$rc" -eq 1 ] || { fail "$name" "get отказал: код $rc, ожидался 1"; show_out; return; }
+  grep -q 'envfile.sh get' "$work/out.$shell" || { fail "$name" "get отказал: отказ не называет envfile.sh get"; show_out; return; }
+  if grep -q '^firewall\.' "$work/out.$shell"; then fail "$name" "get отказал, а план напечатан"; show_out; return; fi
   ok "$name"
 }
 
@@ -1785,6 +2084,44 @@ test_measure_boot_names_stopped_container() {
   done
 }
 
+# С -DeployDir зонд идёт в каталоге развёртывания: наличие
+# boot-probe.sh в нём проверяется один раз, когда дистрибутив уже работает.
+# Каталога нет — зонд с --cd клона, как без -DeployDir.
+test_measure_boot_probe_in_deploy_dir() {
+  local name=measure_boot_probe_in_deploy_dir
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ] || ! python_cmd >/dev/null; then skip "$name" "нет PowerShell Windows или python"; return; fi
+  local port shell="${shells[0]}" fake="$work/fakewsl" ready
+  ready=$'distro_start=1760331000\ndocker_active=1760331010\ncontainer name=example-api-1 started_at=1760331020 health=healthy\n'
+  port="$(free_port)" || { skip "$name" "не нашёлся свободный порт"; return; }
+  make_fake_wsl "$fake"
+  printf 'example-engine\n' >"$fake/running"
+  probe_step "$fake" 0 0 ''
+  probe_step "$fake" 1 0 "$ready"
+  start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+  port="$stub_port"
+  measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")" -DeployDir /srv/example-deploy
+  stop_stub
+  [ "$rc" -eq 0 ] || { fail "$name" "каталог есть: код $rc"; show_log; return; }
+  [ "$(grep -cxF -- '-d example-engine -u root --exec test -f /srv/example-deploy/deploy/windows/boot-probe.sh' "$fake/calls.log")" = 1 ] \
+    || { fail "$name" "наличие зонда в каталоге проверено не один раз"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  grep -qxF -- '-d example-engine -u root --cd /srv/example-deploy --exec bash deploy/windows/boot-probe.sh example' "$fake/calls.log" \
+    || { fail "$name" "зонд не в каталоге развёртывания"; sed 's/^/    | /' "$fake/calls.log"; return; }
+
+  make_fake_wsl "$fake"
+  printf 'example-engine\n' >"$fake/running"
+  probe_step "$fake" 0 1 ''
+  probe_step "$fake" 1 0 "$ready"
+  start_stub '{"status":"healthy"}' || { fail "$name" "заглушка не поднялась"; stop_stub; return; }
+  port="$stub_port"
+  measure_distro=example-engine measure_stable=0.2 measure_timeout=1 measure "$shell" "$port" -WslExe "$(cygpath -w "$fake/wsl.cmd")" -DeployDir /srv/example-deploy
+  stop_stub
+  [ "$rc" -eq 0 ] || { fail "$name" "каталога нет: код $rc"; show_log; return; }
+  grep -q -- '^-d example-engine -u root --cd .* --exec bash deploy/windows/boot-probe.sh example$' "$fake/calls.log" \
+    || { fail "$name" "каталога нет: зонд не вызван"; sed 's/^/    | /' "$fake/calls.log"; return; }
+  if grep -q -- '--cd /srv/example-deploy' "$fake/calls.log"; then fail "$name" "каталога нет, а зонд в нём"; sed 's/^/    | /' "$fake/calls.log"; return; fi
+  ok "$name"
+}
+
 # Отказ зонда, восстановление, тот же отказ снова: вторая строка
 # probe_error с тем же текстом есть — после успешного опроса текст
 # прежнего отказа сброшен.
@@ -1906,6 +2243,10 @@ test_portproxy_problems
 test_host_rule_problems
 test_remove_legacy_hyperv_rule
 test_wslconfig_check
+test_wslconfig_experimental_keys
+test_sparse_disk_check
+test_stack_working_dir_check
+test_deploy_settings_from_deploy_dir
 test_journald_config_problems
 test_container_log_problems
 test_native_output_encoding
@@ -1920,6 +2261,7 @@ test_measure_boot_survives_probe_failures
 test_measure_boot_probe_always_fails_not_ok
 test_measure_boot_records_container_restart
 test_measure_boot_names_stopped_container
+test_measure_boot_probe_in_deploy_dir
 test_measure_boot_repeats_probe_error_after_recovery
 test_readme_points_to_logs
 test_network_decision_recorded

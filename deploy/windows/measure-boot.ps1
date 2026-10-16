@@ -14,13 +14,17 @@
     - http://127.0.0.1:<Port>/health — статус стека;
     - wsl.exe --list --running --quiet — и только если дистрибутив -Distro
       уже работает, зонд внутри него:
-        wsl.exe -d <Distro> -u root --cd <клон> --exec bash deploy/windows/boot-probe.sh <Project>
+        wsl.exe -d <Distro> -u root --cd <DeployDir> --exec bash deploy/windows/boot-probe.sh <Project>
+      Каталог -DeployDir — если в нём есть deploy/windows/boot-probe.sh
+      (проверяется один раз, когда дистрибутив уже работает); иначе и без
+      -DeployDir — клон, где лежит этот сценарий.
       Замер сам дистрибутив не поднимает: до старта держалки его нет в
       списке работающих, и wsl.exe -d не вызывается.
 
-  -Port, -Distro и -Project задаются при регистрации: API_HTTP_PORT и
-  COMPOSE_PROJECT_NAME из .env клона, без них — значения по умолчанию из
-  docker-compose.yml. В сценарии чисел портов нет.
+  -Port, -Distro, -Project и -DeployDir задаются при регистрации:
+  API_HTTP_PORT и COMPOSE_PROJECT_NAME из .env каталога развёртывания, без
+  них — значения по умолчанию из docker-compose.yml. В сценарии чисел
+  портов нет.
 
   Статус /health: 200 с телом ровно {"status":"healthy"} или
   {"status":"degraded"} и 503 с телом {"status":"unhealthy"} — форма
@@ -84,6 +88,10 @@ param(
     [ValidateRange(1, 300)]
     [int]$IntervalSeconds = 5,
     [string]$LogPath = (Join-Path $env:LOCALAPPDATA 'domovoy-engine\measure-boot.log'),
+    # Каталог развёртывания внутри дистрибутива (#162): зонд идёт в нём.
+    # Пусто или в каталоге нет boot-probe.sh — зонд из клона.
+    [ValidatePattern('^((/[A-Za-z0-9_][A-Za-z0-9._-]*)+)?$')]
+    [string]$DeployDir = '',
     # wsl.exe; тест подменяет его, чтобы видеть вызовы.
     [string]$WslExe = (Join-Path $env:SystemRoot 'System32\wsl.exe')
 )
@@ -280,7 +288,10 @@ $client.Timeout = [TimeSpan]::FromSeconds(10)
 # сначала в ::1, и замер мерил бы не тот путь, что строка -Check
 # «/health на 127.0.0.1»; ::1 -Check проверяет отдельным звеном.
 $url = 'http://127.0.0.1:{0}/health' -f $Port
-$probeArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'bash', 'deploy/windows/boot-probe.sh', $Project)
+# Каталог зонда: -DeployDir, если в нём есть boot-probe.sh, — проверяется
+# один раз, когда дистрибутив уже работает; иначе клон, как без -DeployDir.
+$probeDir = $root
+$probeDirChecked = -not $DeployDir
 
 $firstResponse = $null
 $firstCode = ''
@@ -332,7 +343,14 @@ try {
         }
 
         if (Test-DistroRunning) {
-            $probe = Invoke-Wsl $probeArgs
+            if (-not $probeDirChecked) {
+                # test: 0 — есть, 1 — нет; иное — отказ wsl.exe, повтор на
+                # следующем опросе, зонд пока из клона.
+                $present = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'test', '-f', "$DeployDir/deploy/windows/boot-probe.sh")
+                if ($present.Code -eq 0) { $probeDir = $DeployDir }
+                $probeDirChecked = $present.Code -eq 0 -or $present.Code -eq 1
+            }
+            $probe = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--cd', $probeDir, '--exec', 'bash', 'deploy/windows/boot-probe.sh', $Project)
             $data = ConvertFrom-BootProbe $probe.Lines
             if (-not $distroSeen -and $null -ne $data.DistroStart) {
                 $distroSeen = $true
