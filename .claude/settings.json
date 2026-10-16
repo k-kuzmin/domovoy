@@ -220,10 +220,6 @@
       "PowerShell(wslconfig /u*)",
       "Bash(wslconfig.exe /u*)",
       "PowerShell(wslconfig.exe /u*)",
-      "Bash(*> *.wslconfig*)",
-      "PowerShell(*> *.wslconfig*)",
-      "Bash(*>> *.wslconfig*)",
-      "PowerShell(*>> *.wslconfig*)",
       "Bash(*tee *.wslconfig*)",
       "PowerShell(*tee *.wslconfig*)",
       "Bash(*Set-Content *.wslconfig*)",
@@ -237,9 +233,7 @@
       "Bash(*Copy-Item * *.wslconfig*)",
       "PowerShell(*Copy-Item * *.wslconfig*)",
       "Edit(**/.wslconfig)",
-      "Edit(//**/.wslconfig)",
-      "Write(**/.wslconfig)",
-      "Write(//**/.wslconfig)"
+      "Edit(//**/.wslconfig)"
     ],
     "allow": [
       "Bash(bash scripts/stand.sh *)"

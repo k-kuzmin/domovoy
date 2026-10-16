@@ -6,6 +6,9 @@
 Тест прогоняет обещанные формы против этой модели: живое поведение Claude Code проверяется
 только новой сессией, а здесь ловится то, что правило забыли или написали так, что оно
 закрывает нужное агенту.
+
+Где модель с Claude Code расходится, она формы не утверждает: перенаправление `>`/`>>`
+Claude Code шаблоном команды не ловит (живой прогон #164, 2026-10-16), а модель поймала бы.
 """
 
 import io
@@ -132,9 +135,6 @@ WSL_ENGINE_CONTROLS = (
 )
 
 WSLCONFIG_WRITES = (
-    "echo x > /c/Users/user/.wslconfig",
-    "echo x >> ~/.wslconfig",
-    "echo x > \"$TEMP/probe.wslconfig\"",
     "printf x | tee /c/Users/user/.wslconfig",
     "Set-Content $HOME/.wslconfig x",
     "Add-Content $HOME/.wslconfig x",
@@ -143,6 +143,19 @@ WSLCONFIG_WRITES = (
     "Copy-Item x $HOME/.wslconfig",
 )
 
+# Перенаправление в .wslconfig шаблоны deny не ловят: в живом прогоне 2026-10-16
+# `echo x > "$TEMP/probe.wslconfig"` выполнилась при правиле `Bash(*> *.wslconfig*)` —
+# цель перенаправления Claude Code с шаблоном не сопоставляет, а модель выше сопоставила
+# бы строку целиком. Известный предел (docs/rules/implement.md), а не закрытая форма:
+# здесь утверждается только, что мёртвого шаблона на перенаправление в deny нет.
+WSLCONFIG_REDIRECTS = (
+    "echo x > /c/Users/user/.wslconfig",
+    "echo x >> ~/.wslconfig",
+    "echo x > \"$TEMP/probe.wslconfig\"",
+)
+
+# Только Edit: Write-правила Claude Code для файлов не применяет («only Edit(path) rules
+# are»), Edit покрывает все инструменты правки файлов.
 WSLCONFIG_PATHS = (".wslconfig", "/c/Users/user/.wslconfig", "/home/user/.wslconfig")
 
 # Рабочие команды, которые правила движка задеть не вправе.
@@ -295,10 +308,20 @@ class SettingsPermissions(unittest.TestCase):
             for command in WSL_ENGINE_CONTROLS + WSLCONFIG_WRITES:
                 with self.subTest(shell=shell, command=command):
                     self.assertCommandDenied(shell, command)
-        for tool in ("Edit", "Write"):
-            for path in WSLCONFIG_PATHS:
-                with self.subTest(tool=tool, path=path):
-                    self.assertPathDenied(tool, path)
+        for path in WSLCONFIG_PATHS:
+            with self.subTest(tool="Edit", path=path):
+                self.assertPathDenied("Edit", path)
+
+    def test_wslconfig_dead_rules_absent(self):
+        # Правило, которое Claude Code не применяет, вводит в заблуждение: его нет.
+        for shell in SHELLS:
+            for command in WSLCONFIG_REDIRECTS:
+                with self.subTest(shell=shell, command=command):
+                    self.assertEqual(command_hits(self.deny, shell, command), [],
+                                     "%s(%s): шаблон перенаправления в deny не срабатывает живьём"
+                                     % (shell, command))
+        self.assertEqual([raw for tool, _, raw in self.deny if tool == "Write"], [],
+                         "Write-правила в deny Claude Code не применяет — нужен Edit")
 
     def test_wsl_working_commands_open(self):
         for shell in SHELLS:
