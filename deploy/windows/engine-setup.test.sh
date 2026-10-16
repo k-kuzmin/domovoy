@@ -1407,6 +1407,55 @@ test_sparse_disk_check() {
   ok "$name"
 }
 
+# Отказ wsl --manage --set-sparse -Install не обрывает (Set-DistroSparse):
+# подделка wsl.exe отказывает — функция возвращает текст wsl, а не выходит;
+# флага --allow-unsafe в вызове нет; согласие wsl — пустая строка. Порядок в
+# -Install — по AST: после каждого вызова Set-DistroSparse идут
+# регистрация задач, держалка, .wslconfig, правило firewall, portproxy и
+# расписание бэкапа, отказ уходит в $finalProblems и итоговый Stop-WithError
+# после них; ни один Stop-* не называет отказ разрежения сам.
+test_sparse_refusal_does_not_stop_install() {
+  local name=sparse_refusal_does_not_stop_install shell fake="$work/fakewsl-sparse"
+  if ! is_windows || [ "${#shells[@]}" -eq 0 ]; then skip "$name" "нет PowerShell Windows"; return; fi
+  if ! python_cmd >/dev/null; then skip "$name" "нет python для подделки wsl.exe"; return; fi
+  for shell in "${shells[@]}"; do
+    make_fake_wsl "$fake"
+    probe_step "$fake" 0 1 '' $'example: sparse VHD refused\n'
+    probe_step "$fake" 1 0 ''
+    # shellcheck disable=SC2016
+    PS1_FAKE="$(cygpath -w "$fake/wsl.cmd")" ps_functions "$shell" "$here/engine-setup.ps1" '
+      $wslExe = $env:PS1_FAKE
+      $p = Set-DistroSparse "domovoy-engine"
+      if (-not $p -or $p -notmatch "example: sparse VHD refused" -or $p -notmatch "--allow-unsafe") { "отказ: «$p»"; exit 1 }
+      $p = Set-DistroSparse "domovoy-engine"
+      if ($p) { "согласие wsl: «$p»"; exit 1 }
+      $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+      $cmds = @($ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true))
+      $calls = @($cmds | Where-Object { $_.GetCommandName() -eq "Set-DistroSparse" })
+      if ($calls.Count -ne 2) { "вызовов Set-DistroSparse $($calls.Count), ожидалось 2"; exit 1 }
+      foreach ($stop in @($cmds | Where-Object { $_.GetCommandName() -in "Stop-Install", "Stop-WithError" })) {
+        if ($stop.Extent.Text -match "(?i)set-sparse|sparseProblem|DistroSparse") { "строка $($stop.Extent.StartLineNumber): отказ разрежения обрывает -Install"; exit 1 }
+      }
+      $final = @($cmds | Where-Object { $_.GetCommandName() -eq "Stop-WithError" -and $_.Extent.Text -match "finalProblems" })
+      if ($final.Count -ne 1) { "итогового Stop-WithError с `$finalProblems нет"; exit 1 }
+      if ($ast.Extent.Text -notmatch "\`$finalProblems \+= \`$sparseProblem") { "отказ разрежения не в `$finalProblems"; exit 1 }
+      $last = @($calls | ForEach-Object { $_.Extent.StartOffset } | Measure-Object -Maximum).Maximum
+      foreach ($step in "Register-ScheduledTask", "Resume-Keeper", "New-NetFirewallRule", "Invoke-Netsh") {
+        $after = @($cmds | Where-Object { $_.GetCommandName() -eq $step -and $_.Extent.StartOffset -gt $last -and $_.Extent.StartOffset -lt $final[0].Extent.StartOffset })
+        if (-not $after.Count) { "шаг $step не между разрежением и итоговым отказом"; exit 1 }
+      }
+      foreach ($text in "WriteAllText(`$WslConfigPath", "& `$hostExe @scheduleArgs") {
+        $at = $ast.Extent.Text.IndexOf($text)
+        if ($at -le $last -or $at -ge $final[0].Extent.StartOffset) { "«$text» не между разрежением и итоговым отказом"; exit 1 }
+      }' \
+      Set-DistroSparse Invoke-Wsl Invoke-Native Format-Native Set-NativeOutputEncoding Restore-NativeOutputEncoding
+    [ "$rc" -eq 0 ] || { fail "$name/$shell" "код $rc"; show_out; return; }
+    grep -qxF -- '--manage domovoy-engine --set-sparse true' "$fake/calls.log" || { fail "$name/$shell" "вызов --set-sparse не той формы"; sed 's/^/    | /' "$fake/calls.log"; return; }
+    if grep -q -- '--allow-unsafe' "$fake/calls.log"; then fail "$name/$shell" "в вызове --allow-unsafe"; return; fi
+  done
+  ok "$name"
+}
+
 # Звено -Check «стек поднят из каталога развёртывания»
 # (Get-StackWorkingDirCheck): метки com.docker.compose.project.working_dir
 # всех контейнеров проекта равны -DeployDir — OK; хоть одна другая (клон
@@ -2245,6 +2294,7 @@ test_remove_legacy_hyperv_rule
 test_wslconfig_check
 test_wslconfig_experimental_keys
 test_sparse_disk_check
+test_sparse_refusal_does_not_stop_install
 test_stack_working_dir_check
 test_deploy_settings_from_deploy_dir
 test_journald_config_problems

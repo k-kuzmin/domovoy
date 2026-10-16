@@ -27,8 +27,10 @@
        без атрибута SparseFile у ext4.vhdx (путь — BasePath из
        HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss) — то же в окне
        после wsl --terminate шага 2, до возврата держалки. Флаг
-       --allow-unsafe сценарий не ставит: отказ wsl — отказ -Install с
-       текстом wsl, решение за владельцем;
+       --allow-unsafe сценарий не ставит. Отказ wsl -Install не обрывает:
+       остальные шаги доводятся, в конце — ненулевой код с текстом wsl
+       (как при отказе расписания бэкапа); решение за владельцем, звено
+       -Check «диск дистрибутива разреженный» красное, пока диск не разрежен;
     2. провижининг внутри под root — deploy/windows/provision-engine.sh:
        systemd, Docker Engine с compose, git, safe.directory клона, журнал
        systemd на диске со сбросом раз в 10 с и драйвер логов docker
@@ -519,6 +521,17 @@ function Get-SparseDiskCheck([string]$Path, $Attributes) {
     if ($null -eq $Attributes) { return [pscustomobject]@{ State = 'FAIL'; Detail = "нет файла $Path" } }
     if (([IO.FileAttributes]$Attributes -band [IO.FileAttributes]::SparseFile) -ne 0) { return [pscustomobject]@{ State = 'OK'; Detail = "SparseFile: $Path" } }
     return [pscustomobject]@{ State = 'FAIL'; Detail = "у $Path нет атрибута SparseFile — engine-setup.ps1 -Install (wsl --manage --set-sparse true при остановленном дистрибутиве)" }
+}
+
+# Разреженный диск дистрибутива: wsl --manage <имя> --set-sparse true, без
+# --allow-unsafe. '' — сделано; иначе текст отказа wsl и что делать
+# владельцу. Не обрывает -Install: остальные шаги доводятся, отказ уходит в
+# ненулевой код в конце; звено -Check «диск дистрибутива разреженный»
+# остаётся красным, пока диск не разрежен.
+function Set-DistroSparse([string]$Name) {
+    $result = Invoke-Wsl @('--manage', $Name, '--set-sparse', 'true')
+    if ($result.Code -eq 0) { return '' }
+    return "wsl --manage $Name --set-sparse true: код $($result.Code): $(Format-Native $result) — диск дистрибутива не разреженный. Флаг --allow-unsafe сценарий не ставит: если WSL требует его из-за риска порчи данных, решение за владельцем (wsl --version, wsl --manage $Name --set-sparse true вручную при остановленном дистрибутиве); повторный -Install попробует снова"
 }
 
 # Аргументы wsl.exe: метка working_dir каждого контейнера проекта, строкой
@@ -1219,10 +1232,9 @@ if ($Install) {
         $diskPath = Get-DistroDiskPath $Distro
         $sparseStep = if ((Get-SparseDiskCheck $diskPath (Get-DiskAttributes $diskPath)).State -eq 'OK') { 'none' } else { 'after-provision' }
     }
-    # Отказ --set-sparse: текст wsl и решение владельцу, флаг молча не ставится.
-    function Format-SparseRefusal($Result) {
-        return "wsl --manage $Distro --set-sparse true: код $($Result.Code): $(Format-Native $Result) — диск дистрибутива не разреженный. Флаг --allow-unsafe сценарий не ставит: если WSL требует его из-за риска порчи данных, решение за владельцем; повторный -Install попробует снова"
-    }
+    # Отказ --set-sparse -Install не обрывает: остальные шаги доводятся, в
+    # конце — ненулевой код с этим текстом, как при отказе расписания бэкапа.
+    $sparseProblem = ''
     $scheduleArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Install')
     if ($DryRun) { $scheduleArgs += '-DryRun' }
     $scheduleArgs += @('-DeployDir', $DeployDir)
@@ -1371,9 +1383,9 @@ if ($Install) {
         Remove-Item -LiteralPath $tar, $sumsFile -Force -ErrorAction SilentlyContinue
         Write-Output "дистрибутив $Distro создан из $ImageFile (целостность загрузки: SHA256 сошёлся с SHA256SUMS того же сервера; подлинность не проверялась)"
         # Разреженный диск — сразу после импорта: дистрибутив ещё не запущен.
-        $sparse = Invoke-Wsl $sparseArgs
-        if ($sparse.Code -ne 0) { Stop-WithError ("{0}; дистрибутив создан, провижининг не выполнен" -f (Format-SparseRefusal $sparse)) }
-        Write-Output "диск дистрибутива $Distro разреженный (wsl --manage --set-sparse true)"
+        $sparseProblem = Set-DistroSparse $Distro
+        if (-not $sparseProblem) { Write-Output "диск дистрибутива $Distro разреженный (wsl --manage --set-sparse true)" }
+        else { Write-Warning $sparseProblem }
     }
 
     # Держалка снова, если работала до -Install: $true — запущена.
@@ -1426,9 +1438,9 @@ if ($Install) {
     # окне после wsl --terminate выше, до возврата держалки: --set-sparse
     # требует остановленного дистрибутива.
     if ($sparseStep -eq 'after-provision') {
-        $sparse = Invoke-Wsl $sparseArgs
-        if ($sparse.Code -ne 0) { Stop-Install (Format-SparseRefusal $sparse) }
-        Write-Output "диск дистрибутива $Distro сделан разреженным (wsl --manage --set-sparse true)"
+        $sparseProblem = Set-DistroSparse $Distro
+        if (-not $sparseProblem) { Write-Output "диск дистрибутива $Distro сделан разреженным (wsl --manage --set-sparse true)" }
+        else { Write-Warning $sparseProblem }
     }
 
     # 3–4. Задачи; -Force заменяет прежние.
@@ -1513,8 +1525,14 @@ Start-ScheduledTask $KeeperTask и проверка всех звеньев — 
 адрес хоста в ЛВС закреплён в DHCP роутера — сменился адрес, повторите -Install.
 "@
     }
+    # Отказы шагов, после которых остальное доведено: ненулевой код в конце.
+    $finalProblems = @()
+    if ($sparseProblem) { $finalProblems += $sparseProblem }
     if ($scheduleCode -ne 0) {
-        Stop-WithError "расписание бэкапа не поставлено (ops/backup/install-schedule.ps1, код $scheduleCode) — остальное настроено"
+        $finalProblems += "расписание бэкапа не поставлено (ops/backup/install-schedule.ps1, код $scheduleCode)"
+    }
+    if ($finalProblems.Count) {
+        Stop-WithError (($finalProblems -join '; ') + ' — остальное настроено')
     }
     exit 0
 }
