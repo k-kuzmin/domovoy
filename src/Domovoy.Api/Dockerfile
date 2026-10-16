@@ -50,11 +50,19 @@ RUN /tools/dotnet-ef migrations script \
 # PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD из окружения; значений в
 # образе нет. Весь скрипт — одна транзакция psql (--single-transaction),
 # первая ошибка (ON_ERROR_STOP) откатывает её целиком.
+#
+# Скан секретов (deploy/build-images.sh) смотрит только пути, которые
+# добавляет этот Dockerfile, — переменная scan_paths в шапке сценария. Новая
+# точка COPY в этой стадии добавляется в scan_paths той же правкой.
 FROM postgres:16-alpine AS migrate
 COPY --from=migrations /out/migrate.sql /migrations/migrate.sql
 ENTRYPOINT ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/migrations/migrate.sql"]
 
 # runtime — последняя стадия и цель сборки по умолчанию.
+#
+# Скан секретов (deploy/build-images.sh) смотрит только пути, которые
+# добавляет этот Dockerfile, — переменная scan_paths в шапке сценария. Новая
+# точка COPY в этой стадии добавляется в scan_paths той же правкой.
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 
 # curl нужен для healthcheck контейнера: в образе aspnet его нет.

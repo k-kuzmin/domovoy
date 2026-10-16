@@ -39,15 +39,34 @@
 # подделки. Формы вызовов, других нет:
 #   docker build -f <корень>/src/Domovoy.Api/Dockerfile --target <runtime|migrate>
 #          --label <ключ>=<значение>… -t <образ> <корень>
-#   docker save -o <файл> <образ>   — должен записать tar-архив <файл>
+#   docker save -o <файл> <образ>   — должен записать tar-архив <файл>:
+#          в нём хотя бы один слой (tar) с файлами под путём scan_paths
+#          цели и JSON-файл с ключом "rootfs" (конфиг образа)
 #   docker tag <образ> <образ с --also-tag>
 #   docker push <образ>
 #   gitleaks dir <каталог> --config <путь> --redact --no-banner --exit-code 1
 # Порядок: build и скан api, build и скан migrate, затем tag и push.
-# Архив docker save распаковывается, каждый файл в нём, который читается
-# как tar (слой; сжатие tar определяет сам), распаковывается в свой
-# каталог — файл, удалённый верхним слоем, тоже сканируется. JSON конфига
-# образа (ENV, метки) остаётся в каталоге скана.
+#
+# ЧТО СКАНИРУЕТСЯ
+#
+# Только то, что добавляет наш Dockerfile, — пути scan_paths ниже, — и JSON
+# конфига образа из архива docker save (ENV, метки; узнаётся по ключу
+# "rootfs", не найден — код 1). Базовые слои
+# (aspnet, postgres-alpine) — закреплённые upstream-образы; правила проекта
+# дают на их файлах ложные срабатывания (замер #162: dpkg, openssl.cnf,
+# perl), поэтому их содержимое не сканируется.
+#
+# Архив docker save распаковывается; каждый файл в нём, который читается
+# как tar (слой; сжатие tar определяет сам), даёт в свой каталог только
+# члены под путями scan_paths — файл, удалённый верхним слоем, тоже
+# сканируется. Fail closed: путь не найден ни в одном слое или под ним нет
+# файлов — код 1.
+
+# Пути, которые добавляет наш Dockerfile, по целям сборки: <цель>:<путь в
+# образе без ведущего «/»>. Новая точка COPY в финальных стадиях
+# src/Domovoy.Api/Dockerfile (runtime, migrate) добавляется сюда той же
+# правкой — иначе её содержимое уйдёт в реестр без скана.
+scan_paths='runtime:app migrate:migrations'
 
 set -euo pipefail
 
@@ -123,41 +142,84 @@ build_image() {
     || fail "сборка $2 не удалась"
 }
 
-# Скан одного образа: scan_image <образ> <имя каталога>.
+# Пути scan_paths цели: paths_for <цель> — по одному на строку.
+paths_for() {
+  local entry
+  for entry in $scan_paths; do
+    [ "${entry%%:*}" = "$1" ] && printf '%s\n' "${entry#*:}"
+  done
+  return 0
+}
+
+# Скан одного образа: scan_image <цель> <образ> <имя каталога>.
 scan_image() {
-  local image="$1" dir="$work/$2" n=0 f
+  local target="$1" image="$2" dir="$work/$3" n=0 f p dest
+  local -a paths
+  mapfile -t paths < <(paths_for "$target")
+  [ "${#paths[@]}" -gt 0 ] || fail "для цели $target нет путей в scan_paths"
+
   mkdir -p "$dir/archive" "$dir/scan"
-  say "скан слоёв $image"
+  say "скан $image: ${paths[*]} и конфиг образа"
   docker save -o "$dir/image.tar" "$image" || fail "docker save $image не удался"
   tar -xf "$dir/image.tar" -C "$dir/archive" || fail "архив docker save $image не распаковывается"
   rm -f "$dir/image.tar"
 
   while IFS= read -r -d '' f; do
-    if tar -tf "$f" >/dev/null 2>&1; then
+    if tar -tf "$f" > "$dir/members" 2>/dev/null; then
       n=$((n + 1))
-      mkdir -p "$dir/scan/layer-$n"
-      tar -xf "$f" -C "$dir/scan/layer-$n" --no-same-owner --no-same-permissions \
-        || fail "слой $n образа $image не распаковывается — скан был бы неполным"
+      # Только члены под путями scan_paths (имена с «./» и без).
+      : > "$dir/wanted"
+      for p in "${paths[@]}"; do
+        grep -E "^(\./)?${p}(/|$)" "$dir/members" >> "$dir/wanted" || true
+      done
+      if [ -s "$dir/wanted" ]; then
+        dest="$dir/scan/layer-$n"
+        mkdir -p "$dest"
+        tar -xf "$f" -C "$dest" --no-same-owner --no-same-permissions \
+            --no-recursion --verbatim-files-from -T "$dir/wanted" \
+          || fail "слой $n образа $image не распаковывается — скан был бы неполным"
+      fi
       rm -f "$f"
     fi
   done < <(find "$dir/archive" -type f -print0)
+  rm -f "$dir/members" "$dir/wanted"
   [ "$n" -gt 0 ] || fail "в архиве $image не найдено ни одного слоя"
 
-  # Остаток архива — манифест, индекс, JSON конфига образа: ENV и метки.
-  mv "$dir/archive" "$dir/scan/image-metadata"
+  # Fail closed: каждый путь цели найден и не пуст.
+  for p in "${paths[@]}"; do
+    if [ -z "$(find "$dir/scan" -path "$dir/scan/layer-*/$p/*" -type f -print -quit 2>/dev/null)" ]; then
+      fail "в слоях $image нет файлов под /$p — скан был бы пустым"
+    fi
+  done
+
+  # Из остатка архива сканируется только JSON конфига образа (ENV, метки,
+  # история) — его отличает ключ "rootfs". index.json, manifest.json и
+  # repositories несут лишь имя и тег, которые задаёт сам сценарий: тег
+  # domovoy-api:sha-<40 hex> правило generic-api-key принимает за ключ
+  # (замер #162).
+  local configs=0
+  mkdir -p "$dir/scan/image-config"
+  while IFS= read -r -d '' f; do
+    if grep -q '"rootfs"' "$f" 2>/dev/null; then
+      configs=$((configs + 1))
+      cp "$f" "$dir/scan/image-config/config-$configs.json"
+    fi
+  done < <(find "$dir/archive" -type f -print0)
+  [ "$configs" -gt 0 ] || fail "в архиве $image не найден JSON конфига образа"
+  rm -rf "$dir/archive"
   chmod -R u+rwX "$dir/scan" 2>/dev/null || true
 
   local rc=0
   gitleaks dir "$dir/scan" --config "$gitleaks_config" --redact --no-banner --exit-code 1 || rc=$?
-  [ "$rc" -eq 0 ] || fail "gitleaks: код $rc по слоям $image — push не выполняется"
-  say "чисто: $image ($n слоёв)"
+  [ "$rc" -eq 0 ] || fail "gitleaks: код $rc по образу $image — push не выполняется"
+  say "чисто: $image (слоёв в архиве: $n)"
   rm -rf "$dir"
 }
 
 build_image runtime "$api"
-scan_image "$api" api
+scan_image runtime "$api" api
 build_image migrate "$migrate"
-scan_image "$migrate" migrate
+scan_image migrate "$migrate" migrate
 
 images=("$migrate" "$api")
 extra=()
