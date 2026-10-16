@@ -196,7 +196,7 @@ new_env() {
 # ------------------------------------------------------------------
 # sync
 # ------------------------------------------------------------------
-begin_case 'sync: ключ без разметки дописывается строкой примера как есть'
+begin_case 'envfile_sync_adds_plain_key_with_example_value: sync: ключ без разметки дописывается строкой примера как есть'
 new_env
 run sync "$EXAMPLE" "$CASE_DIR/.env"
 expect_status 0
@@ -219,7 +219,7 @@ expect_no_out_line 'добавлен KEEP (из примера)'
 [ "$(file_line_count "$CASE_DIR/.env" 'KEEP=VAL_env_keep_original')" = 1 ] || fail_case 'значение KEEP заменено'
 end_case
 
-begin_case 'sync: generate — 48 символов [A-Za-z0-9], значение не печатается'
+begin_case 'envfile_sync_generates_marked_secret: sync: generate — 48 символов [A-Za-z0-9], значение не печатается'
 new_env
 run sync "$EXAMPLE" "$CASE_DIR/.env"
 expect_status 0
@@ -232,6 +232,19 @@ if [ -n "$gen" ] && grep -qF -- "$gen" <<<"$OUT$ERR"; then
     fail_case 'сгенерированное значение попало в вывод'
 fi
 expect_no_leak "$CASE_DIR/.env"
+# Две копии одного .env — два разных секрета: значение генерируется, а не
+# берётся из постоянного источника. Значения сравниваются в переменных и не
+# печатаются.
+new_env
+cp "$CASE_DIR/.env" "$CASE_DIR/.env.second"
+run sync "$EXAMPLE" "$CASE_DIR/.env"
+expect_status 0
+run sync "$EXAMPLE" "$CASE_DIR/.env.second"
+expect_status 0
+gen_first="$(sed -n 's/^GEN=//p' "$CASE_DIR/.env")"
+gen_second="$(sed -n 's/^GEN=//p' "$CASE_DIR/.env.second")"
+[ -n "$gen_first" ] && [ -n "$gen_second" ] || fail_case 'GEN не дописан в одну из копий'
+[ "$gen_first" != "$gen_second" ] || fail_case 'две копии .env получили одинаковое значение GEN'
 end_case
 
 begin_case 'sync: повторный прогон ничего не дописывает и секрет не перегенерирует'
@@ -246,7 +259,7 @@ expect_no_out_line 'добавлен PLAIN (из примера)'
 expect_out_line 'заполните OWN'
 end_case
 
-begin_case 'sync: owner — не дописывается, строка «заполните KEY»'
+begin_case 'envfile_sync_reports_owner_key_without_value: sync: owner — не дописывается, строка «заполните KEY»'
 new_env
 run sync "$EXAMPLE" "$CASE_DIR/.env"
 expect_status 0
@@ -255,7 +268,7 @@ grep -q '^OWN=' "$CASE_DIR/.env" && fail_case 'owner-ключ дописан'
 expect_no_out_line 'добавлен OWN (из примера)'
 end_case
 
-begin_case 'sync: лишний ключ — строка отчёта, ключ не удаляется; управляемые не лишние'
+begin_case 'envfile_sync_lists_extra_keys_keeps_them: sync: лишний ключ — строка отчёта, ключ не удаляется; управляемые не лишние'
 new_env
 run sync "$EXAMPLE" "$CASE_DIR/.env"
 expect_status 0
@@ -266,12 +279,15 @@ for k in COMPOSE_FILE DOMOVOY_IMAGE_REPO DOMOVOY_IMAGE_TAG; do
 done
 end_case
 
-begin_case 'sync --dry-run: «будет » только у действий, файл не меняется'
+begin_case 'envfile_sync_dry_run_writes_nothing: sync --dry-run: «будет » только у действий, файл не меняется'
 new_env
+chmod 600 "$CASE_DIR/.env"
 before="$(file_sum "$CASE_DIR/.env")"
+mode_before="$(stat -c %a "$CASE_DIR/.env")"
 run sync --dry-run "$EXAMPLE" "$CASE_DIR/.env"
 expect_status 0
 [ "$before" = "$(file_sum "$CASE_DIR/.env")" ] || fail_case 'файл изменён в --dry-run'
+[ "$mode_before" = "$(stat -c %a "$CASE_DIR/.env")" ] || fail_case 'права файла изменились в --dry-run'
 expect_out_line 'будет добавлен PLAIN (из примера)'
 expect_out_line 'будет добавлен GEN (сгенерирован)'
 expect_out_line 'заполните OWN'
@@ -387,6 +403,8 @@ COMPOSE_PROJECT_NAME=domovoy-x
 COMPOSE_PROJECT_NAME=domovoy-last
 BACKUP_DIR=<внешний-диск>/domovoy-backups
 POSTGRES_PASSWORD=VAL_get_secret_pg
+HA_TOKEN=VAL_get_secret_ha
+AUTH_ADMIN_TOKEN=VAL_get_secret_admin
 EOF
 
 begin_case 'get: ключи белого списка — KEY=значение по правилам dotenv_value'
@@ -402,16 +420,18 @@ expect_status 0
 [ "$OUT" = $'BACKUP_DIR=\nBACKUP_MAX_SIZE_GB=\nDOMOVOY_IMAGE_TAG=' ] || fail_case 'плейсхолдер или пустой ключ не пусты'
 end_case
 
-begin_case 'get: ключ вне белого списка — код 2 без вывода, даже вместе с разрешёнными'
-run get "$SANDBOX/get.env" POSTGRES_PASSWORD
-expect_status 2
-expect_out_empty
-[ -z "$ERR" ] || fail_case 'stderr не пуст'
-run get "$SANDBOX/get.env" API_HTTP_PORT POSTGRES_PASSWORD
-expect_status 2
-expect_out_empty
-[ -z "$ERR" ] || fail_case 'stderr не пуст'
-grep -qF VAL_get_secret_pg <<<"$OUT$ERR" && fail_case 'значение секрета попало в вывод'
+begin_case 'envfile_get_refuses_secret_keys: get: ключ вне белого списка — код 2 без вывода, даже вместе с разрешёнными'
+for k in POSTGRES_PASSWORD HA_TOKEN AUTH_ADMIN_TOKEN; do
+    run get "$SANDBOX/get.env" "$k"
+    expect_status 2
+    expect_out_empty
+    [ -z "$ERR" ] || fail_case "stderr не пуст ($k)"
+    run get "$SANDBOX/get.env" API_HTTP_PORT "$k"
+    expect_status 2
+    expect_out_empty
+    [ -z "$ERR" ] || fail_case "stderr не пуст ($k вместе с разрешённым)"
+    grep -qF VAL_get_secret_ <<<"$OUT$ERR" && fail_case "значение секрета попало в вывод ($k)"
+done
 end_case
 
 begin_case 'get: работает из чужого каталога (dotenv.sh — от пути сценария)'
