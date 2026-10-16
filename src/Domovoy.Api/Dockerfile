@@ -34,11 +34,13 @@ RUN dotnet publish src/Domovoy.Api/Domovoy.Api.csproj \
 
 # Идемпотентный SQL-скрипт миграций: образ migrate применяет его psql, без
 # SDK и без исходников. Версия dotnet-ef — та же, что EF Core в
-# Directory.Packages.props (#162).
+# Directory.Packages.props (#162). --no-transactions: своих START
+# TRANSACTION/COMMIT в скрипте нет, транзакцию держит psql в образе migrate.
 FROM build AS migrations
 RUN dotnet tool install --tool-path /tools dotnet-ef --version 8.0.11
 RUN /tools/dotnet-ef migrations script \
         --idempotent \
+        --no-transactions \
         --output /out/migrate.sql \
         --project src/Domovoy.Data \
         --startup-project src/Domovoy.Api \
@@ -46,7 +48,8 @@ RUN /tools/dotnet-ef migrations script \
 
 # Образ применения миграций: только psql и скрипт. Подключение — переменные
 # PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD из окружения; значений в
-# образе нет. Весь скрипт — одна транзакция, первая ошибка её откатывает.
+# образе нет. Весь скрипт — одна транзакция psql (--single-transaction),
+# первая ошибка (ON_ERROR_STOP) откатывает её целиком.
 FROM postgres:16-alpine AS migrate
 COPY --from=migrations /out/migrate.sql /migrations/migrate.sql
 ENTRYPOINT ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/migrations/migrate.sql"]
