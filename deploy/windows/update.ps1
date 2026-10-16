@@ -151,6 +151,13 @@ finally {
 
 if ($code -ne 0 -or $DryRun) { exit $code }
 
+# engine-setup.ps1 знает только domovoy-engine: проверять им другой дистрибутив
+# значило бы проверить не тот.
+if ($Distro -ne 'domovoy-engine') {
+    Write-Output "update.ps1: обновление готово; engine-setup.ps1 -Check не запускается — он проверяет только domovoy-engine, а не $Distro"
+    exit 0
+}
+
 $check = Join-Path $PSScriptRoot 'engine-setup.ps1'
 $shell = (Get-Process -Id $PID).Path
 Write-Output 'update.ps1: обновление готово, проверка хоста: engine-setup.ps1 -Check'
