@@ -700,6 +700,38 @@ test_install_schedule_dry_run() {
   ok "$name"
 }
 
+# -Check: каталог развёртывания есть, а задача бэкапа идёт не из него —
+# причина (код 1 у -Check); каталога нет — задача клона допустима. Решение
+# — функция Get-TaskPlacementProblem: -Check читает настоящую задачу
+# Планировщика, а функция берётся из файла разбором, без запуска сценария.
+test_install_schedule_check_task_placement() {
+  local name=install_schedule_check_task_placement shell=''
+  if command -v pwsh >/dev/null 2>&1; then shell=pwsh
+  elif command -v powershell.exe >/dev/null 2>&1; then shell=powershell.exe
+  else skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
+  local path="$here/install-schedule.ps1"
+  if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -w "$path")"; fi
+  # shellcheck disable=SC2016
+  PS1_PATH="$path" run "$shell" -NoProfile -NonInteractive -Command '
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+    $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Get-TaskPlacementProblem" }, $true)
+    if (@($fn).Count -ne 1) { "no function Get-TaskPlacementProblem"; exit 1 }
+    . ([scriptblock]::Create(@($fn)[0].Extent.Text))
+    $deployTask = "-d domovoy-engine -u root --cd ""/srv/example-deploy"" --exec bash ops/backup/backup.sh"
+    $cloneTask = "-d domovoy-engine --cd ""C:\example\clone"" --exec bash ops/backup/backup.sh"
+    $bad = 0
+    if (Get-TaskPlacementProblem $deployTask "deploy" "/srv/example-deploy") { "deploy task in deploy dir: problem"; $bad = 1 }
+    if (-not (Get-TaskPlacementProblem $cloneTask "deploy" "/srv/example-deploy")) { "clone task with deploy dir present: no problem"; $bad = 1 }
+    if (-not (Get-TaskPlacementProblem $deployTask "deploy" "/srv/example")) { "prefix of deploy dir accepted"; $bad = 1 }
+    if (Get-TaskPlacementProblem $cloneTask "clone" "/srv/example-deploy") { "clone task without deploy dir: problem"; $bad = 1 }
+    exit $bad'
+  if [ "$rc" -ne 0 ]; then fail "$name" "решение о месте задачи неверно"; show_out; return; fi
+  # Причина ведёт к ненулевому коду -Check.
+  grep -q 'if (\$placement) { exit 1 }' "$here/install-schedule.ps1" \
+    || { fail "$name" "-Check не завершается кодом 1 при задаче не в каталоге развёртывания"; return; }
+  ok "$name"
+}
+
 test_restore_project_refuses_while_other_ha_runs_static() {
   local name=restore_project_refuses_while_other_ha_runs/static
   # Подделка docker: работает homeassistant проекта example-other, всё
@@ -1105,6 +1137,7 @@ test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
 test_restore_check_defaults_to_latest_backup
 test_install_schedule_dry_run
+test_install_schedule_check_task_placement
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"

@@ -200,6 +200,15 @@ function Get-DotEnvValue([string]$Path, [string]$Key) {
     return $value
 }
 
+# Задача бэкапа на своём месте: каталог развёртывания есть (Source не
+# clone) — задача обязана идти с --cd в нём; каталога нет — допустима
+# задача клона. Пустая строка — порядок, иначе причина.
+function Get-TaskPlacementProblem([string]$Arguments, [string]$Source, [string]$DeployDir) {
+    if ($Source -eq 'clone') { return '' }
+    if ($Arguments -match ('--cd "' + [regex]::Escape($DeployDir) + '"')) { return '' }
+    return "задача не в $DeployDir — переустановите: engine-setup.ps1 -Install"
+}
+
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal $identity
@@ -331,9 +340,8 @@ if ($Check) {
         $backupSource = "$DeployDir/.env"
     }
     Write-Output "Settings: $($deploySettings.Source) ($($deploySettings.Reason))"
-    if ($action.Arguments -notmatch ('--cd "' + [regex]::Escape($DeployDir) + '"')) {
-        Write-Output "DeployDir: задача не в $DeployDir — переустановите: engine-setup.ps1 -Install"
-    }
+    $placement = Get-TaskPlacementProblem $action.Arguments $deploySettings.Source $DeployDir
+    if ($placement) { Write-Output "DeployDir: $placement" }
     if (-not $backupDir) {
         Write-Output "backup.log: BACKUP_DIR в $backupSource не задан"
     }
@@ -347,6 +355,9 @@ if ($Check) {
             Write-Output "backup.log: $log недоступен — носитель не подключён или бэкапов ещё не было"
         }
     }
+    # Задача не там, где стек, — бэкап идёт не из того каталога: -Check
+    # красный, и звено «расписание бэкапа» в engine-setup.ps1 -Check тоже.
+    if ($placement) { exit 1 }
     exit 0
 }
 
