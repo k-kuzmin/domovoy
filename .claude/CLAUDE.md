@@ -365,6 +365,7 @@ bash scripts/risk.sh plan docs/tasks/<N>.plan.json
 bash scripts/risk.sh diff origin/main HEAD
 bash scripts/plan.sh validate docs/tasks/<N>.plan.json
 bash scripts/plan.sh render   docs/tasks/<N>.plan.json
+bash scripts/plan.sh drift    docs/tasks/<N>.plan.json origin/main HEAD
 bash scripts/council.sh <plan|diff> <артефакт> .council/<N>/<режим>-<круг> [прошлый-хеш]
 bash scripts/guard-lite.sh origin/main HEAD
 bash scripts/review-comments.sh <номер PR>

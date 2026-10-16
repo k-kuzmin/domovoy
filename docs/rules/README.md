@@ -132,6 +132,7 @@
 | `diff.patch` | `diff` | `git diff origin/main...<ветка>` целиком |
 | `diffstat.txt` | `diff` | `git diff --stat origin/main...<ветка>` |
 | `guard-lite.txt` | `diff` | `bash scripts/guard-lite.sh origin/main HEAD` |
+| `drift.txt` | `diff` | `bash scripts/plan.sh drift docs/tasks/<N>.plan.json origin/main HEAD` |
 | `history.txt` | оба | `git log --oneline -n 30 -- <затронутые файлы>` — история фиксов для скептика и инженера |
 
 `issue.md` — заголовок, метки, тело и каждый комментарий с автором и датой,
