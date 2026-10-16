@@ -223,13 +223,27 @@ PR этот этап не открывает: он открывается пос
   разрешение привязано к пути, а не к содержимому, и защиту боевого проекта
   и каталога держит только сценарий. Поэтому `stand.sh` в сессии не
   правится и не запускается в изменённом виде до ревью диффа;
-- запись `.wslconfig` формами вне перечисленных в `deny` (`>`, `>>`,
-  `tee`, `Set-Content`, `Out-File`, `Add-Content`, `cp`, `Copy-Item`,
-  Edit и Write).
+- запись `.wslconfig` перенаправлением `>` и `>>`: шаблоны команды цель
+  перенаправления не ловят. В живом прогоне 2026-10-16
+  `echo x > "$TEMP/probe.wslconfig"` выполнилась; `echo x > "$TEMP/.wslconfig"`
+  отбил классификатор авто-режима, а не `deny`, — вне авто-режима и при
+  другом его решении этой защиты нет. Шаблонов на перенаправление в `deny`
+  поэтому нет;
+- запись `.wslconfig` формами вне перечисленных в `deny` (`tee`,
+  `Set-Content`, `Out-File`, `Add-Content`, `cp`, `Copy-Item`, Edit).
+  Write-правил нет: правила `Write(path)` Claude Code к файлам не применяет,
+  инструменты правки файлов покрывает `Edit(path)`.
 
-Шаблоны с ведущим `*` для записи `.wslconfig` проверены моделью
-`.claude/hooks/tests/test_settings_permissions.py`, а не самим Claude Code.
-Правило действует и там, где шаблон форму не поймал.
+Что подтверждено живьём (прогон 2026-10-16, новая сессия с правами ветки):
+отказ правилом на `tee` через трубу и `cp` в `.wslconfig`, на
+`wsl.exe --terminate`, `wsl.exe -d … --terminate` и
+`powershell -Command "wsl --terminate …"`; разрешение
+`bash scripts/stand.sh *`. Не проверялись живьём, только моделью
+`.claude/hooks/tests/test_settings_permissions.py`: `Set-Content`,
+`Out-File`, `Add-Content`, `Copy-Item`, `Edit` по `.wslconfig`,
+`--shutdown`, `--unregister`, `--manage`, `-t`, `wslconfig /t` и `/u`,
+обёртки `pwsh` и `cmd /c`. Правило действует и там, где шаблон форму не
+поймал.
 
 ## Миграции
 
