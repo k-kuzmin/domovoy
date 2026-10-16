@@ -228,6 +228,9 @@ case "${1-}" in
         ;;
     image)
         printf 'docker %s\n' "$*" >>"$F/calls.log"
+        if [ "${2-}" = rm ] && [ -n "${FAKE_STATE-}" ] && [ -e "$FAKE_STATE" ]; then
+            printf 'state-present-at-cleanup\n' >>"$F/calls.log"
+        fi
         if [ "${2-}" = ls ]; then
             ref="${*: -1}"
             name="${ref##*/}"
@@ -237,6 +240,9 @@ case "${1-}" in
         ;;
     *)
         printf 'docker %s\n' "$*" >>"$F/calls.log"
+        if [ "${1-}" = builder ] && [ -n "${FAKE_STATE-}" ] && [ -e "$FAKE_STATE" ]; then
+            printf 'state-present-at-cleanup\n' >>"$F/calls.log"
+        fi
         exit 0
         ;;
 esac
@@ -396,6 +402,7 @@ run_update() {
         cd "$CASE" || exit 99
         PATH="$FAKE/bin:$PATH" FAKE_DIR="$FAKE" REAL_GIT="$REAL_GIT" \
             FAKE_BACKUP_DIR="$BACKUPS" TMPDIR="$CASE/tmp" \
+            FAKE_STATE="$DEPLOY/.git/domovoy-update.state" \
             DOMOVOY_UPDATE_BACKUP="bash $FAKE/backup.sh" \
             bash "$DEPLOY/deploy/update.sh" "$@" </dev/null >"$CASE/out" 2>"$CASE/err"
     )
@@ -769,6 +776,20 @@ grep -q 'builder prune.*--builder' "$FAKE/calls.log" && fail_case 'builder prune
 h="$(log_line '^curl ')"
 r="$(log_line '^docker (image rm|builder prune)')"
 [ -n "$h" ] && [ -n "$r" ] && [ "$h" -lt "$r" ] || fail_case 'чистка не после проверки /health'
+end_case
+
+begin_case 'update_state_removed_before_cleanup'
+make_fixture
+commit_c2
+for name in domovoy-api domovoy-migrate; do
+    printf 'example.invalid/owner/%s:%s\n' "$name" sha-old1 "$name" "sha-$C1" "$name" "sha-$C2" >"$FAKE/images.$name"
+done
+run_update
+expect_status 0
+grep -qE '^docker image rm ' "$FAKE/calls.log" || fail_case 'чистка не вызвала image rm — сценарий пустой'
+grep -qxF 'state-present-at-cleanup' "$FAKE/calls.log" \
+    && fail_case 'файл состояния ещё есть во время чистки — обрыв в ней откатил бы удачное обновление'
+expect_no_state
 end_case
 
 begin_case 'update_prune_keeps_local_build_when_it_is_previous (--adopt)'

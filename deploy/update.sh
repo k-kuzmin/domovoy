@@ -63,12 +63,13 @@
 #      compose пересоздал бы только api, а postgres и homeassistant
 #      остались бы с меткой прежнего каталога); тома именованные — данные
 #      сохраняются;
-#   9. чистка: из образов <repo>/domovoy-api и <repo>/domovoy-migrate
+#   9. файл состояния удаляется — сразу после /health, до чистки: обрыв в
+#      чистке не откатывает удавшееся обновление;
+#  10. чистка: из образов <repo>/domovoy-api и <repo>/domovoy-migrate
 #      остаются текущий тег и тот, на котором стек работал до обновления;
 #      локальный образ <проект>-api прежней сборки удаляется, если стек
 #      работал не на нём; docker image rm без -f; docker builder prune
-#      --all --force — встроенного строителя;
-#  10. файл состояния удаляется.
+#      --all --force — встроенного строителя.
 #
 # Провал шагов 2–8 — откат: прежние значения управляемых ключей (и их
 # отсутствие после первого --adopt), git checkout прежнего коммита,
@@ -634,7 +635,12 @@ main() {
     dc --profile ha up -d --wait "${recreate[@]+"${recreate[@]}"}" >&2 || fail_after_change "compose up -d --wait на sha-$TARGET не удался"
     check_health || fail_after_change "/health на 127.0.0.1:$PORT не отвечает 200 формы стека"
 
-    # --- 9. чистка ---
+    # --- 9. файл состояния ---
+    # Сразу после /health, до чистки: обрыв во время чистки не должен
+    # откатывать удавшееся обновление на следующем запуске.
+    rm -f "$STATE" || warn "файл состояния $STATE не удалён — следующий запуск откатит обновление"
+
+    # --- 10. чистка ---
     local cand
     while IFS= read -r cand; do
         [ -n "$cand" ] || continue
@@ -646,8 +652,6 @@ main() {
     done < <(prune_candidates "$prev_tag" "$prev_api")
     docker builder prune --all --force >&2 || warn 'чистка: docker builder prune не удался'
 
-    # --- 10. готово ---
-    rm -f "$STATE" || warn "файл состояния $STATE не удалён — следующий запуск откатит обновление"
     say "готово: $TARGET (образ sha-$TARGET)"
     exit 0
 }
