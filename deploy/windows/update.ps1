@@ -151,7 +151,7 @@ if ($code -ne 0 -or $DryRun) { exit $code }
 $check = Join-Path $PSScriptRoot 'engine-setup.ps1'
 $shell = (Get-Process -Id $PID).Path
 Write-Output 'update.ps1: обновление готово, проверка хоста: engine-setup.ps1 -Check'
-& $shell -NoProfile -ExecutionPolicy Bypass -File $check -Check
+& $shell -NoProfile -ExecutionPolicy Bypass -File $check -Check -DeployDir $DeployDir
 if ($LASTEXITCODE -ne 0) {
     [Console]::Error.WriteLine('update.ps1: стек обновлён, но engine-setup.ps1 -Check красный — звенья выше; образ не откатывается: они от него не зависят')
     exit 5
