@@ -247,6 +247,19 @@ gen_second="$(sed -n 's/^GEN=//p' "$CASE_DIR/.env.second")"
 [ "$gen_first" != "$gen_second" ] || fail_case 'две копии .env получили одинаковое значение GEN'
 end_case
 
+begin_case 'sync: генератор отказал — код 1, ключ не дописан, отчёта об успехе нет'
+new_env
+before="$(file_sum "$CASE_DIR/.env")"
+mkdir -p "$CASE_DIR/fakebin"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$CASE_DIR/fakebin/head"
+chmod +x "$CASE_DIR/fakebin/head"
+PATH="$CASE_DIR/fakebin:$PATH" run sync "$EXAMPLE" "$CASE_DIR/.env"
+expect_status 1
+expect_no_out_line 'добавлен GEN (сгенерирован)'
+grep -q '^GEN=' "$CASE_DIR/.env" && fail_case 'GEN дописан без значения'
+[ "$(file_sum "$CASE_DIR/.env")" = "$before" ] || fail_case '.env изменён при отказе генератора'
+end_case
+
 begin_case 'sync: повторный прогон ничего не дописывает и секрет не перегенерирует'
 new_env
 run sync "$EXAMPLE" "$CASE_DIR/.env"

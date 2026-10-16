@@ -163,7 +163,7 @@ cmd_sync() {
         env_order+=("$key")
     done <"$env"
 
-    local prev='' report=() additions=()
+    local prev='' report=() additions=() generated
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%$'\r'}"
         if [[ "$line" =~ $KEY_LINE ]]; then
@@ -175,7 +175,13 @@ cmd_sync() {
                         '# env-sync: generate')
                             report+=("добавлен $key (сгенерирован)")
                             if [ "$dry_run" -eq 0 ]; then
-                                additions+=("$key=$(new_secret)")
+                                # Подоболочка: io_error внутри new_secret
+                                # завершил бы только её — код проверяется здесь.
+                                generated="$(new_secret)" \
+                                    || io_error 'не прочитан /dev/urandom'
+                                [ "${#generated}" -eq "$SECRET_LENGTH" ] \
+                                    || io_error "секрет для $key не сгенерирован"
+                                additions+=("$key=$generated")
                             fi
                             ;;
                         '# env-sync: owner')
