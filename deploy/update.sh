@@ -374,6 +374,9 @@ main() {
 
     # --- движок ---
     command -v docker >/dev/null 2>&1 || refuse 'docker не найден — движок не установлен'
+    # Без curl провалились бы и /health нового образа, и /health отката —
+    # код 4 на каждом запуске. Проверка — до первого изменения.
+    command -v curl >/dev/null 2>&1 || refuse 'curl не найден — /health после обновления нечем проверить'
     docker info >/dev/null 2>&1 || refuse 'движок Docker не отвечает (docker info) — дистрибутив ещё не поднялся или docker не запущен'
     local cv major minor
     cv="$(docker compose version --short 2>/dev/null)" || refuse 'docker compose не отвечает'

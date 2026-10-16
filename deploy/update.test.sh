@@ -774,7 +774,14 @@ if is_linux && command -v flock >/dev/null 2>&1 && command -v setsid >/dev/null 
     for _ in $(seq 1 300); do [ -e "$FAKE/hang" ] && break; sleep 0.1; done
     [ -e "$FAKE/hang" ] || fail_case 'поддельный up не дошёл до метки'
     pgid="$(cat "$FAKE/hang.pgid" 2>/dev/null)"
-    [ -n "$pgid" ] && kill -9 -- "-$pgid" 2>/dev/null
+    own_pgid="$(ps -o pgid= -p $$ | tr -d ' ')"
+    if [ -z "$pgid" ] || [ "$pgid" = "$own_pgid" ]; then
+        # setsid не отделил группу: kill -9 группы убил бы сам тест.
+        fail_case "группа процесса update.sh не отдельная (pgid «$pgid»)"
+        pkill -9 -f "$DEPLOY/deploy/update.sh" 2>/dev/null
+    else
+        kill -9 -- "-$pgid" 2>/dev/null
+    fi
     wait "$upd" 2>/dev/null
     rm -f "$FAKE/up_hang_tag"
     [ "$(head_of)" = "$C2" ] || fail_case 'после обрыва HEAD не целевой коммит'
