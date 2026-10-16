@@ -444,13 +444,15 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/engine-setup.ps1 -Instal
 Windows.
 
 1. Предусловия выше выполнены; установлен Git for Windows (Git Bash).
-2. Клон Windows — для хост-сценариев: `git clone`. Файлы, которых нет в
-   бэкапе, — `.env` и `config/*` (`entities.yaml`, `home-profile.md`,
-   `proactive-rules.yaml`, `response-templates.yaml`) — достать из своего
-   хранилища: бэкап их не содержит (шапка
-   [`ops/backup/restore.sh`](ops/backup/restore.sh)). Они понадобятся на
-   шаге 5. В `.env` — `COMPOSE_PROJECT_NAME` прежнего хоста и `BACKUP_DIR`
-   путём Windows вида `D:/domovoy-backups`.
+2. Клон Windows — для хост-сценариев: `git clone`, затем в него `.env` и
+   `config/*` (`entities.yaml`, `home-profile.md`, `proactive-rules.yaml`,
+   `response-templates.yaml`) из своего хранилища: бэкап их не содержит
+   (шапка [`ops/backup/restore.sh`](ops/backup/restore.sh)). Из клона они
+   копируются в каталог развёртывания на шаге 5, а `.env` клона нужен и
+   шагу 4: пока каталога развёртывания нет, расписание бэкапа берёт
+   `BACKUP_DIR` из него и без него не ставится. В `.env` —
+   `COMPOSE_PROJECT_NAME` прежнего хоста и `BACKUP_DIR` путём Windows вида
+   `D:/domovoy-backups`.
 3. Подключить носитель с бэкапами: каталог `BACKUP_DIR` виден в
    Проводнике.
 4. Установка движка:
@@ -488,10 +490,13 @@ Windows.
    ```
 
    Путь `--from` — в записи Windows, как `BACKUP_DIR` (`D:/domovoy-backups/…`):
-   внутри дистрибутива его переводит `wslpath`. `restore.sh` собирает `api`
-   из исходников каталога развёртывания.
-7. Перевод стека на образы реестра — обновление (раздел «Обновление
-   стека»); локальную сборку `api` из шага 6 оно убирает:
+   внутри дистрибутива его переводит `wslpath`. Если в `.env` нет ключей
+   `COMPOSE_FILE` и `DOMOVOY_IMAGE_*` (их пишет обновление), `restore.sh`
+   собирает `api` из исходников каталога развёртывания; если есть — берёт
+   образ реестра по тегу из `.env`.
+7. Перевод стека на образы реестра головы `main` — обновление (раздел
+   «Обновление стека»); локальную сборку `api` из шага 6, если она была,
+   оно убирает:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1
@@ -854,7 +859,10 @@ powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1
 **Ручные шаги — запасной путь:** обновление отказывает по причине, которую
 не снять сразу, или нужен человек после кода 4. Всё — в каталоге
 развёртывания, в PowerShell (из Git Bash — с `MSYS_NO_PATHCONV=1`
-впереди):
+впереди). После кода 4 файл состояния `.git/domovoy-update.state` ещё
+лежит: следующий `update.ps1` сначала вернёт каталог к прежнему коммиту из
+этого файла, даже если стек доведён руками до нового, — и только
+следующий за ним запуск обновит снова.
 
 ```powershell
 wsl.exe -d domovoy-engine -u root --cd /srv/domovoy --exec bash ops/backup/backup.sh
