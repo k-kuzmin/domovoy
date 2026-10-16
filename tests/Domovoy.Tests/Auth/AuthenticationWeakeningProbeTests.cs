@@ -1,3 +1,4 @@
+using System.Globalization;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
@@ -18,14 +19,15 @@ namespace Domovoy.Tests.Auth;
 /// Ослабление — декоратор поверх стандартного
 /// <see cref="AuthorizationMiddlewareResultHandler"/>: после отказа
 /// авторизации пропускает к обработчику ровно <c>GET /api/v1/state</c>,
-/// остальное отдаёт стандартному. Маршрут отвечает заглушкой
-/// <c>501 not_implemented</c> — по ней проба и узнаёт пропуск.
+/// остальное отдаёт стандартному. Пропуск проба узнаёт по статусу ответа,
+/// отличному от 401 и 403, а не по телу обработчика: маршрут может получить
+/// реализацию, и проба от этого не должна падать.
 /// </summary>
 public sealed class AuthenticationWeakeningProbeTests : IClassFixture<DomovoyApiFactory>
 {
     private const string WeakenedMethod = "GET";
     private const string WeakenedPath = "/api/v1/state";
-    private const string ExpectedFailurePrefix = WeakenedMethod + " " + WeakenedPath + ": 501";
+    private const string ExpectedFailurePrefix = WeakenedMethod + " " + WeakenedPath + ": ";
 
     private readonly DomovoyApiFactory _factory;
 
@@ -52,9 +54,23 @@ public sealed class AuthenticationWeakeningProbeTests : IClassFixture<DomovoyApi
 
         // Ровно один отказ: подмена ослабляет один маршрут, остальные
         // по-прежнему отвечают 401 — декоратор, а не замена обработчика.
-        withoutToken.Should().ContainSingle().Which.Should().StartWith(ExpectedFailurePrefix);
-        unknownToken.Should().ContainSingle().Which.Should().StartWith(ExpectedFailurePrefix);
-        undocumented.Should().ContainSingle().Which.Should().StartWith(ExpectedFailurePrefix);
+        ShouldBeWeakenedRouteOnly(withoutToken);
+        ShouldBeWeakenedRouteOnly(unknownToken);
+        ShouldBeWeakenedRouteOnly(undocumented);
+    }
+
+    /// <summary>
+    /// Отказ ровно один, это ослабленный маршрут, и он прошёл к обработчику:
+    /// статус — не 401 и не 403. Строка отказа —
+    /// <c>«{метод} {путь}: {статус} {тело}»</c> (<see cref="RouteAuthenticationAudit"/>).
+    /// </summary>
+    private static void ShouldBeWeakenedRouteOnly(IReadOnlyList<string> failures)
+    {
+        string failure = failures.Should().ContainSingle().Which;
+        failure.Should().StartWith(ExpectedFailurePrefix);
+        string status = failure[ExpectedFailurePrefix.Length..].Split(' ', 2)[0];
+        int.TryParse(status, NumberStyles.None, CultureInfo.InvariantCulture, out int code).Should().BeTrue("за префиксом идёт код статуса: {0}", failure);
+        code.Should().NotBe(StatusCodes.Status401Unauthorized).And.NotBe(StatusCodes.Status403Forbidden);
     }
 
     [Fact(DisplayName = "Проба: на хосте без подмены те же проверки маршрутов нарушений не находят")]
