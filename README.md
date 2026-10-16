@@ -740,9 +740,14 @@ domovoy-engine` уничтожает их — только решением вл
    каталога развёртывания грязным — обновление на нём отказывает.
 
    ```powershell
-   wsl.exe -d domovoy-engine -u root --cd "<клон>" --exec cp .env /srv/domovoy/.env
+   wsl.exe -d domovoy-engine -u root --cd "<клон>" --exec install -m 600 .env /srv/domovoy/.env
    wsl.exe -d domovoy-engine -u root --cd "<клон>" --exec cp config/entities.yaml config/home-profile.md config/proactive-rules.yaml config/response-templates.yaml /srv/domovoy/config/
    ```
+
+   `.env` с секретами получает права `600` сразу при копировании: его
+   читает только compose от root. Файлам `config/` секретов не положено, и
+   `600` им нельзя: `api` читает их через монтирование `./config` от
+   непривилегированного пользователя контейнера.
 
    `COMPOSE_PROJECT_NAME` в `.env` каталога развёртывания — то же, что у
    работающего стека (`domovoy`). `BACKUP_DIR` остаётся путём Windows вида
