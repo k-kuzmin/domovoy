@@ -1,0 +1,43 @@
+# ============================================================
+# Домовой — надстройка каталога развёртывания (#162)
+#
+# Подключается только в каталоге развёртывания: deploy/update.sh пишет в
+# его .env
+#
+#   COMPOSE_FILE=docker-compose.yml:deploy/docker-compose.deploy.yml
+#   DOMOVOY_IMAGE_REPO=<реестр>/<владелец>
+#   DOMOVOY_IMAGE_TAG=sha-<коммит>
+#
+# В клоне разработки, в CI и на стенде агента этих ключей нет, и стек
+# собирает api из исходников, как раньше.
+#
+# api берёт готовый образ коммита из реестра и собраться из исходников
+# не может (build: !reset null, compose ≥ 2.24 — версию проверяет
+# update.sh). migrate — одноразовый сервис миграций под своим профилем:
+#
+#   docker compose --profile migrate run --rm migrate
+#
+# Подключение к базе — только переменные окружения PG*: пароль не попадает
+# в аргументы процесса psql. Атомарность держит psql --single-transaction
+# (ENTRYPOINT стадии migrate в src/Domovoy.Api/Dockerfile).
+# ============================================================
+
+services:
+  api:
+    image: ${DOMOVOY_IMAGE_REPO:?DOMOVOY_IMAGE_REPO не задан — его пишет deploy/update.sh}/domovoy-api:${DOMOVOY_IMAGE_TAG:?DOMOVOY_IMAGE_TAG не задан — его пишет deploy/update.sh}
+    build: !reset null
+
+  migrate:
+    image: ${DOMOVOY_IMAGE_REPO:?DOMOVOY_IMAGE_REPO не задан — его пишет deploy/update.sh}/domovoy-migrate:${DOMOVOY_IMAGE_TAG:?DOMOVOY_IMAGE_TAG не задан — его пишет deploy/update.sh}
+    profiles: [migrate]
+    networks: [db]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
