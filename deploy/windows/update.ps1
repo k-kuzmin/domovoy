@@ -20,8 +20,8 @@
 
   Затем:
     wsl.exe -d <Distro> -u root --cd <DeployDir> --exec bash deploy/update.sh …
-  От root: каталог развёртывания клонирует root (README, «Перенос стека в
-  каталог развёртывания»), и владелец клона совпадает с вызывающим — git не
+  От root: каталог развёртывания клонирует root (README, «Первая
+  установка»), и владелец клона совпадает с вызывающим — git не
   отказывает по dubious ownership. Код update.sh возвращается как есть.
 
   После кода 0 без -DryRun — engine-setup.ps1 -Check рядом со сценарием:
@@ -127,7 +127,7 @@ if (-not (Test-DistroListed @('--list', '--running', '--quiet'))) {
 
 $probe = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'test', '-d', "$DeployDir/.git")
 if ($probe.Code -ne 0) {
-    Stop-WithRefusal "каталог развёртывания $DeployDir не найден в $Distro (нет $DeployDir/.git) — README, «Перенос стека в каталог развёртывания»"
+    Stop-WithRefusal "каталог развёртывания $DeployDir не найден в $Distro (нет $DeployDir/.git) — README, «Первая установка»"
 }
 
 $updateArgs = New-Object System.Collections.Generic.List[string]

@@ -1151,10 +1151,10 @@ end_case
 # ------------------------------------------------------------------
 # README (зеленеет после среза docs)
 # ------------------------------------------------------------------
-begin_case 'readme_describes_update_and_move'
+begin_case 'readme_describes_update'
 R="$REPO/README.md"
 grep -qxF '### Обновление стека' "$R" || fail_case 'нет «### Обновление стека»'
-grep -qxF '### Перенос стека в каталог развёртывания' "$R" || fail_case 'нет «### Перенос стека в каталог развёртывания»'
+grep -qxF '### Первая установка' "$R" || fail_case 'нет «### Первая установка»'
 grep -qF 'deploy/windows/update.ps1' "$R" || fail_case 'нет deploy/windows/update.ps1'
 grep -qF '/srv/domovoy' "$R" || fail_case 'нет /srv/domovoy'
 grep -qF 'запасной путь' "$R" || fail_case 'нет «запасной путь»'
