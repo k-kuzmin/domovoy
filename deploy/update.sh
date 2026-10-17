@@ -34,7 +34,8 @@
 # ШАГИ
 #
 # Проверки до первого изменения: каталог и его .git; блокировка flock -n на
-# <каталог>/.git/domovoy-update.lock; движок (docker info) и compose ≥ 2.24;
+# <каталог>/.git/domovoy-update.lock (общей блокировки с ночным бэкапом
+# ops/backup/backup.sh нет — не запускать обновление в его окне); движок (docker info) и compose ≥ 2.24;
 # файл состояния (ниже); .env; чистое рабочее дерево; postgres и
 # homeassistant проекта запущены, их метка working_dir — этот каталог (или
 # --adopt); целевой коммит; оба образа есть в реестре (docker manifest
