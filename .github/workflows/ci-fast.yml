@@ -207,6 +207,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/stand.test.sh
 
+      # Сценарии развёртывания (#162): синхронизация .env и обновление стека.
+      # Движка и реестра здесь нет: docker, curl и gitleaks — подделки в
+      # PATH, git работает на временном bare-origin. Блокировка (flock) и
+      # обрыв процесса (setsid) проверяются только здесь — в Git Bash их нет.
+      - name: Сценарии .env каталога развёртывания
+        if: ${{ !cancelled() }}
+        run: bash deploy/envfile.test.sh
+
+      - name: Сценарии обновления стека
+        if: ${{ !cancelled() }}
+        run: bash deploy/update.test.sh
+
       - name: Тесты впрыска правил
         # Только stdlib unittest: зависимость ради тестов хука не ставится.
         if: ${{ !cancelled() }}

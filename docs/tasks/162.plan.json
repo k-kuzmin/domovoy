@@ -1,0 +1,762 @@
+{
+  "issue": 162,
+  "current_state": [
+    {
+      "path": "docker-compose.yml",
+      "line": 23,
+      "observation": "Имя проекта — ${COMPOSE_PROJECT_NAME:-domovoy}, тома postgres-data и homeassistant-config — именованные с префиксом проекта. Стек различается по имени проекта, а не по каталогу: каталог развёртывания с тем же COMPOSE_PROJECT_NAME=domovoy подхватывает прежние тома без переноса, а клон разработки с тем же именем проекта пересоздал бы боевые контейнеры."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 58,
+      "observation": "У api есть только build (контекст — корень, src/Domovoy.Api/Dockerfile), image не задан: стек сегодня всегда собирается на хосте (docker compose up --build), реестра образов нет."
+    },
+    {
+      "path": "deploy/stand/docker-compose.stand.yml",
+      "line": 11,
+      "observation": "Шапка надстройки стенда: image у api быть не должно — свой тег увёл бы образ стенда из-под down --rmi local. Стенд собирает api в том же движке, что и боевой стек, поэтому image с тегом реестра в базовом docker-compose.yml дал бы стенду тег боевого образа."
+    },
+    {
+      "path": "src/Domovoy.Api/Dockerfile",
+      "line": 34,
+      "observation": "Две стадии: build (sdk, строка 11) и runtime (aspnet, строка 34) — последняя, то есть цель по умолчанию; ENTRYPOINT на строке 50. Стадии миграций нет, dotnet-ef в образе нет."
+    },
+    {
+      "path": "docs/tasks/12.md",
+      "line": 208,
+      "observation": "Проверенный путь миграции: dotnet ef migrations script --idempotent и psql -v ON_ERROR_STOP=1 на настоящем postgres:16-alpine — применён без ошибок. Строки 74–75: приложение миграций на старте не применяет, применяет человек."
+    },
+    {
+      "path": "README.md",
+      "line": 216,
+      "observation": "Раздел «Схема базы данных»: миграции применяются вручную — SQL-скрипт генерируется на машине с SDK и dotnet-ef 8.x и подаётся в psql контейнера postgres; на машине стека нужен только docker compose exec."
+    },
+    {
+      "path": ".github/workflows/ci-heavy.yml",
+      "line": 88,
+      "observation": "CI собирает образ только для проверки (compose up --build) и никуда его не публикует; работы с правом packages: write нет ни в одном workflow (permissions — contents: read, строка 29). Итоговая работа heavy-ok перечисляет нужды на строке 283."
+    },
+    {
+      "path": ".github/workflows/gitleaks.yml",
+      "line": 22,
+      "observation": "gitleaks закреплён на 8.30.1 и ставится загрузкой релиза; на pull_request правила берутся с базы, а не из ветки PR. Сканируется история git, слои образа не сканируются нигде."
+    },
+    {
+      "path": ".env.example",
+      "line": 45,
+      "observation": "AUTH_ADMIN_TOKEN=<admin-token> — секрет, который можно сгенерировать; HA_TOKEN (строка 59) и BACKUP_DIR (строка 132) требуют значения владельца. Разметки «генерируемый / от владельца» нет; COMPOSE_PROJECT_NAME=domovoy на строке 18."
+    },
+    {
+      "path": "ops/backup/backup.sh",
+      "line": 188,
+      "observation": "Бэкап отказывает, если не запущен любой из сервисов postgres и homeassistant. Итог печатается строкой «успех: <имя>» (строка 338) — имя каталога, а не полный путь; каталог — <BACKUP_DIR>/domovoy-backup-<UTC-метка>, ротация — 14 последних."
+    },
+    {
+      "path": "ops/backup/restore.sh",
+      "line": 261,
+      "observation": "Восстановление поднимает стек командой dc up -d --build с явным списком файлов compose (строка 164): оно собирает api из исходников каталога, в котором запущено, и надстройку каталога развёртывания не подхватит."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 239,
+      "observation": "Порты и COMPOSE_PROJECT_NAME берутся из .env клона, в котором лежит сценарий ($root, строка 201, — клон Windows): firewall, portproxy, задача замера и -Check настраиваются по .env клона разработки."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 751,
+      "observation": "-Uninstall останавливает стек командой docker compose --profile ha stop с --cd $root — в клоне Windows (/mnt/<диск>/… внутри дистрибутива)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 989,
+      "observation": "Дистрибутив создаётся wsl --import в $DistroDir\\disk; ни --set-sparse, ни проверки атрибута SparseFile у ext4.vhdx нет."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 331,
+      "observation": "Get-WslConfigPlan управляет только [wsl2] networkingMode=nat: чужое значение — Conflict и отказ, свой mirrored переписывается, прежний файл сохраняется копией .domovoy-backup или отметкой .domovoy-absent. Секции [experimental] сценарий не пишет; звено -Check по .wslconfig одно (строка 1318)."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "line": 129,
+      "observation": "Задача бэкапа — wsl.exe -d domovoy-engine --cd \"<клон Windows>\" --exec bash ops/backup/backup.sh; BACKUP_DIR читается из .env того же клона (строка 115). Перенос .env в каталог развёртывания без правки этого места оставит ночной бэкап без настроек."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "line": 283,
+      "observation": "Зонд хронологии загрузки запускается с --cd $root — из клона Windows через мост /mnt/<диск>."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "line": 76,
+      "observation": "Решение 0028: docker и compose идут внутри дистрибутива, «клон там виден как /mnt/<диск>/…»; бэкап — с --cd <клон>. Перенос стека в файловую систему дистрибутива это решение частично заменяет."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "line": 48,
+      "observation": "Строка индекса 0028 несёт «частично заменено [0030](0030-wsl-nat-portproxy.md)» — эту подстроку проверяет test_network_decision_recorded в deploy/windows/engine-setup.test.sh."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 894,
+      "observation": "Функции .ps1 тестируются извлечением из AST (ps_functions) — только на Windows; сухой прогон -Install сверяет .wslconfig байт в байт (test_engine_setup_dry_run, строка 496). Этот сценарий в CI не запускается: только локально на Windows."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 188,
+      "observation": "Стенд узнаёт каталог боевого стека по метке com.docker.compose.project.working_dir контейнеров проекта domovoy; каталог стенда — внутри файловой системы дистрибутива (~/domovoy-stand/<N>). Тот же признак годится и для проверки, что боевой стек поднят из каталога развёртывания."
+    }
+  ],
+  "approach": {
+    "summary": "Стек переезжает в каталог развёртывания /srv/domovoy внутри дистрибутива domovoy-engine — отдельный git-клон только для запуска, с тем же COMPOSE_PROJECT_NAME=domovoy, поэтому тома не переносятся. Образы публикует CI: на push в main собираются api (стадия runtime) и migrate (новая стадия Dockerfile из postgres:16-alpine с идемпотентным SQL, который генерирует dotnet ef migrations script --idempotent в промежуточной стадии migrations), слои каждого образа сканируются gitleaks 8.30.1 до push, теги — sha-<полный коммит> и main. Сборка и скан — общий сценарий deploy/publish.sh: его зовут workflow публикации и разовый живой прогон на стенде агента (#164, локальный реестр на петле). В каталоге развёртывания compose читает надстройку deploy/docker-compose.deploy.yml через COMPOSE_FILE в .env этого каталога: у api — image из реестра и build: !reset null, плюс одноразовый сервис migrate под своим профилем (PGPASSWORD приходит окружением из .env, не аргументом). Базовый docker-compose.yml не меняется — CI, стенд и клон разработки собирают как раньше. Логика обновления — bash deploy/update.sh внутри дистрибутива, вызов не зависит от вызывающего (коды возврата, без вопросов, блокировка от параллельного запуска) — это и есть способ вызова для кнопки #163, без docker socket. Шаги: проверки до первого изменения (движок, compose ≥ 2.24, чистый клон, .env, postgres и homeassistant запущены, стек поднят из этого каталога или --adopt, целевой коммит, оба образа есть в реестре) → бэкап ops/backup/backup.sh, путь нового каталога бэкапа печатается → файл состояния отката <каталог>/.git/domovoy-update.state (прежний коммит, цель, путь бэкапа, прежние значения трёх управляемых ключей .env с отметкой отсутствия — только несекретное; атомарно, до первого изменения) → checkout --detach целевого коммита → синхронизация .env (deploy/envfile.sh) → запись всех трёх управляемых ключей одним шагом: COMPOSE_FILE, DOMOVOY_IMAGE_REPO и DOMOVOY_IMAGE_TAG=sha-<целевой коммит> — до pull: надстройка требует тег (${DOMOVOY_IMAGE_TAG:?}) и у api, и у migrate, и compose берёт его из .env → pull и compose run --rm migrate (psql --single-transaction) — образ migrate целевого коммита → up -d --wait, проверка /health на 127.0.0.1:<API_HTTP_PORT> (200 формы стека) → чистка образов (текущий и предыдущий остаются) и docker builder prune → удаление файла состояния. Провал после первого изменения — откат: прежний коммит, прежние значения всех трёх управляемых ключей .env (включая их отсутствие при первом --adopt), up -d --wait, удаление файла состояния; схема не откатывается (expand/contract). Процесс оборвался (закрыто окно WSL, wsl --shutdown, kill) — файл состояния остаётся на диске, и следующий запуск update.sh (из обёртки или кнопкой #163) сначала доводит откат по нему, а не начинает новое обновление. Сухой прогон не меняет ни каталог, ни .env, ни контейнеры, ни образы: целевой коммит — git ls-remote, образы — docker manifest inspect, превью синхронизации .env — по .env.example из временного неглубокого клона, который удаляется. На Windows — тонкая обёртка deploy/windows/update.ps1: проверяет, что дистрибутив зарегистрирован и работает (по --list, до любого вызова -d, который запустил бы его молча), и каталог развёртывания доступен, зовёт update.sh, после успеха — engine-setup.ps1 -Check (провал -Check не откатывает образ: его звенья от образа не зависят, код обёртки 5; развилка решена так по рекомендации плана — карточка развилки). Живые проверки — один прогон на стенде агента #164 (проект domovoy-stand-162, временный клон, локальный реестр), не на боевом стеке; сквозного теста в CI нет. Синхронизация .env сравнивает только ключи; разметка — строка «# env-sync: generate» или «# env-sync: owner» прямо над ключом в .env.example; значения не печатаются. Хост-сценарии (engine-setup.ps1, install-schedule.ps1, measure-boot.ps1) получают -DeployDir и читают настройки стека (порты, проект, BACKUP_DIR) из .env каталога развёртывания через deploy/envfile.sh get с белым списком несекретных ключей — клон разработки на стек и его настройку больше не влияет. engine-setup.ps1 -Install делает диск дистрибутива разреженным (после --import и на уже зарегистрированном — в окне после wsl --terminate) и пишет в .wslconfig [experimental] sparseVhd=true и autoMemoryReclaim=gradual тем же планом с копией прежнего файла; чужое значение этих ключей — отказ, как у networkingMode. -Check получает звенья: разреженный диск, sparseVhd, autoMemoryReclaim, «стек поднят из каталога развёртывания». Расхождение с 0028 — новая запись 0034, частично заменяющая 0028.",
+    "rejected": [
+      {
+        "option": "image: с тегом реестра в базовом docker-compose.yml",
+        "reason": "Стенд агента собирает api в том же движке и получил бы тег боевого образа, а down --rmi local перестал бы его удалять (шапка deploy/stand/docker-compose.stand.yml); CI и клон разработки тоже начали бы зависеть от реестра."
+      },
+      {
+        "option": "dotnet ef migrations bundle в образе",
+        "reason": "Бандл строит хост приложения в момент миграции, ему нужна строка подключения целиком (пароль в окружении или аргументе исполняемого файла), и этот путь на настоящем Postgres не проверялся; идемпотентный SQL и psql уже проверены (docs/tasks/12.md, «Проверено»), а пароль psql получает переменной окружения контейнера."
+      },
+      {
+        "option": "SQL миграций, закоммиченный в репозиторий",
+        "reason": "Второй источник схемы, который расходится с Migrations/ молча; SQL из стадии сборки всегда того же коммита, что и образ."
+      },
+      {
+        "option": "Генерация SQL на хосте",
+        "reason": "Требует SDK .NET и dotnet-ef на хосте — задача требует, чтобы хосту хватало Docker."
+      },
+      {
+        "option": "Логика обновления в update.ps1",
+        "reason": "PowerShell-логику с docker и git не прогнать на ubuntu-раннере CI, а кнопка #163 вызывает обновление изнутри Linux; в bash внутри дистрибутива сценарий тестируется подделками и годится любому вызывающему."
+      },
+      {
+        "option": "docker/login-action, docker/build-push-action и другие сторонние действия",
+        "reason": "docker login --password-stdin, build и push покрывают задачу без новых действий в цепочке поставки CI."
+      },
+      {
+        "option": "Откат образа при провале engine-setup.ps1 -Check",
+        "reason": "Звенья -Check — firewall, portproxy, задачи, .wslconfig — от образа не зависят; откат по ним менял бы рабочий образ из-за настройки хоста. Откат — по провалу up --wait и /health."
+      },
+      {
+        "option": "Новое имя боевого проекта (например domovoy-prod) для изоляции от клона разработки",
+        "reason": "Тома привязаны к имени проекта — понадобился бы перенос данных через бэкап и восстановление; ТЗ фиксирует проект domovoy. Изоляция — отказ update.sh и звено -Check по метке working_dir плюс шаг README: в клоне разработки другое COMPOSE_PROJECT_NAME."
+      },
+      {
+        "option": "git fetch в сухом прогоне",
+        "reason": "Меняет .git каталога развёртывания; критерий — «без изменений». Превью берётся из временного неглубокого клона."
+      },
+      {
+        "option": "Правка backup.sh ради машинной строки с путём",
+        "reason": "Путь получается без неё: новый каталог domovoy-backup-* в BACKUP_DIR — разность списков до и после прогона; ops/backup и его тесты не трогаются."
+      },
+      {
+        "option": "Сквозной тест deploy/update.e2e.sh в ci-heavy (локальный реестр, три коммита, настоящий docker) с правкой итога heavy-ok",
+        "reason": "Критерий требует «проверено прогоном с заведомо плохим образом», а не постоянной тяжёлой проверки; та же проверка — один живой прогон на стенде агента #164 с результатом в журнале, без новой работы CI и правки ci-heavy.yml."
+      },
+      {
+        "option": "Прежний коммит и прежние значения ключей .env только в памяти процесса update.sh",
+        "reason": "Обрыв процесса между checkout и up --wait (окно WSL закрыто, wsl --shutdown, kill) оставил бы каталог на новом коммите без отката; файл состояния в .git переживает обрыв и читается следующим запуском."
+      },
+      {
+        "option": "Запись DOMOVOY_IMAGE_TAG после migrate, перед up",
+        "reason": "Надстройка требует тег у migrate: при первом --adopt compose run упал бы на интерполяции, а при обычном обновлении применил бы SQL образа прежнего тега."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Частично. Совпадает по всем шести пунктам «Что делается», кроме одного: issue (п. 3.6–3.7) называет проверкой /health и engine-setup.ps1 -Check и откатывает при провале проверки, а план откатывает только по провалу up --wait или /health; провал -Check после зелёного /health — код 5 обёртки без отката. Это развилка, и она решена: выбор сделал оркестратор по рекомендации плана — владелец поручил ему решать развилки по рекомендации плана (запись в журнал, раздел «Решения», переносит оркестратор). Почему так: звенья -Check (профиль firewall, portproxy, задачи, .wslconfig) от образа не зависят, откат их не чинит и только меняет рабочий образ, отвечающий /health. Толкования, которые issue не фиксирует: каталог развёртывания — /srv/domovoy; первый запуск из нового каталога — с флагом --adopt (стек ещё поднят из клона Windows); сухой прогон не делает git fetch; ключи владельца в .env не дописываются, только перечисляются (стек поднимается в NotConfigured, как требует issue); бэкап обновления идёт в ту же ротацию из 14.",
+    "alternative": "Развилка: откат и по провалу engine-setup.ps1 -Check, буквально по issue. Владелец увидел бы иначе: образ откатывается, когда красно звено хоста (профиль firewall, запись portproxy, задача замера, .wslconfig), хотя новый образ отвечает /health; цена — отдельная точка входа отката в update.sh, которую зовёт обёртка после -Check уже после удаления файла состояния, и откат рабочего образа из-за настройки хоста, которую откат не чинит. Выбрано (решение оркестратора по рекомендации плана, по поручению владельца) — откат только по up --wait и /health, красный -Check — код 5 и список незакрытых звеньев. Остальное — без иного наблюдаемого результата: бандл dotnet ef migrations bundle вместо SQL и psql (тот же результат, непроверенный путь и строка подключения у исполняемого файла); стек в клоне Windows с одним update.ps1 issue прямо исключает (мост /mnt/<диск>).",
+    "ripple": "По грепу $root и .env клона: engine-setup.ps1 (Get-Setting, строка 239; -Uninstall stop, строка 751; задача замера), install-schedule.ps1 (строки 115 и 129), measure-boot.ps1 (строка 283) — все переводятся на -DeployDir. restore.sh (строка 261) по-прежнему собирает api из исходников каталога, где запущен, — следующее обновление удаляет этот локальный образ и кэш сборки. backup.sh не меняется, но в каталоге развёртывания читает надстройку через COMPOSE_FILE — профиль migrate его dc --profile ha не задевает. Стенд (stand.sh) и CI compose не меняются: базовый docker-compose.yml и цель Dockerfile по умолчанию (runtime) те же, стадия migrations для runtime не собирается. Существующие тесты engine-setup.test.sh меняют ожидания: байты .wslconfig в сухом прогоне, строки сухого прогона -Install и -Uninstall, аргументы задачи замера и бэкапа; test_network_decision_recorded требует сохранить подстроку 0030 в строке индекса 0028. .wslconfig действует на все дистрибутивы пользователя.",
+    "workaround": "Нет. Единственная подстройка под среду — build: !reset null в надстройке (compose ≥ 2.24): так api в каталоге развёртывания не может собраться из исходников; версию compose update.sh проверяет до первого изменения.",
+    "council_signs": [
+      "миграция: новый механизм применения миграций к боевой базе (стадия migrations, сервис migrate, шаг обновления)",
+      "общий механизм: .env.example, расписание бэкапа и настройки хоста engine-setup.ps1 читают все пути запуска стека",
+      "глобальный переключатель: .wslconfig ([experimental] sparseVhd, autoMemoryReclaim) действует на все дистрибутивы WSL пользователя",
+      "правка обвязки: .github/workflows (новый ci-publish.yml, шаги ci-fast) — группа harness_quality",
+      "новая функциональность: публикация образов, сценарий обновления, синхронизация .env"
+    ],
+    "executor": "Субагенты по срезам: правка — около двух десятков файлов, далеко за порогом делегирования; оркестратор описывает стыки по контрактам ниже, склеивает и проверяет стыки. Порядок: срез image идёт первым и один — его первая правка, стадии migrations и migrate Dockerfile, сразу проверяется сборкой bash deploy/windows/docker-wsl.sh build --target migrate -t domovoy-probe-162:migrate -f src/Domovoy.Api/Dockerfile . из worktree задачи (голый docker на хосте ведёт в Docker Desktop), образ пробы удаляется тем же ходом; падение — стоп и пересмотр подхода к миграциям до запуска остальных срезов (поэтому у envfile after — image); затем envfile, затем update и engine параллельно, затем docs. Живой прогон на стенде агента — после склейки, процедура — контракт приёмки A-migrate. Срез engine начинается с пробы WSL (риск про --set-sparse) — проба на хосте владельца, если агенту её не разрешат права.",
+    "fork": true,
+    "slices": [
+      {
+        "name": "image",
+        "files": [
+          "src/Domovoy.Api/Dockerfile",
+          "deploy/publish.sh",
+          ".github/workflows/ci-publish.yml"
+        ],
+        "contract": "Dockerfile: стадии build (без изменений) → migrations (FROM build: dotnet tool install --tool-path /tools dotnet-ef --version 8.0.11 — та же версия, что EF Core в Directory.Packages.props; dotnet ef migrations script --idempotent --output /out/migrate.sql --project src/Domovoy.Data --startup-project src/Domovoy.Api --configuration Release) → migrate (FROM postgres:16-alpine; COPY --from=migrations /out/migrate.sql /migrations/migrate.sql; ENTRYPOINT [\"psql\",\"-v\",\"ON_ERROR_STOP=1\",\"--single-transaction\",\"-f\",\"/migrations/migrate.sql\"]; подключение — только переменные PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD из окружения) → runtime остаётся последней стадией и целью по умолчанию, без изменений. deploy/publish.sh: bash deploy/publish.sh --repo <реестр>/<владелец> --sha <40 hex> [--push] [--also-tag main] [--gitleaks-config <путь>]; собирает <repo>/domovoy-api:sha-<sha> (--target runtime) и <repo>/domovoy-migrate:sha-<sha> (--target migrate) с метками org.opencontainers.image.source и org.opencontainers.image.revision; каждый образ — docker save, слои распаковываются во временный каталог, gitleaks dir <каталог> --config <путь> --redact --no-banner --exit-code 1; находка — код 1 до любого push; --push пушит оба sha-тега, --also-tag main — ещё и тег main. Коды: 0 — успех, 1 — отказ по существу (сборка, скан, push), 2 — ошибка вызова; gitleaks нужен в PATH. ci-publish.yml: на pull_request — сборка и скан без push (правила gitleaks с базы, как в gitleaks.yml), на push в main — сборка, скан и push sha-<github.sha> и main в ghcr.io/<владелец в нижнем регистре>; packages: write — только у работы push; concurrency на main без отмены (образ нужен каждому мерджу); gitleaks 8.30.1 ставится так же, как в gitleaks.yml; сторонних действий кроме actions/checkout нет. Шов для тестов — docker и gitleaks берутся из PATH: update.test.sh (publish_scans_before_push) подкладывает подделки. Push в GHCR вне workflow не делается никем: живой прогон на стенде пушит только в локальный реестр на петле. Первая правка среза — стадии migrations и migrate, и до продолжения — проба сборки --target migrate (карточка, executor).",
+        "after": []
+      },
+      {
+        "name": "envfile",
+        "files": [
+          "deploy/envfile.sh",
+          "deploy/envfile.test.sh",
+          ".env.example"
+        ],
+        "contract": "bash deploy/envfile.sh sync [--dry-run] <пример> <env>: ключи — строки ^[A-Za-z_][A-Za-z0-9_]*= примера; разметка — строка «# env-sync: generate» или «# env-sync: owner» непосредственно над ключом; без разметки — ключ дописывается значением примера как написано; generate — 48 символов [A-Za-z0-9] из /dev/urandom; owner — не дописывается, строка отчёта «заполните KEY». Ключи .env, которых нет в примере, не удаляются: строка «лишний ключ KEY», кроме управляемых COMPOSE_FILE, DOMOVOY_IMAGE_REPO, DOMOVOY_IMAGE_TAG. Строки вывода: «добавлен KEY (из примера)», «добавлен KEY (сгенерирован)», «заполните KEY», «лишний ключ KEY»; с --dry-run — с префиксом «будет », файл не меняется. Значения не печатаются никогда. Дописывание — в конец, тем же переводом строки, что в файле (LF или CRLF), на месте: права и владелец файла сохраняются. bash deploy/envfile.sh get <env> KEY…: печатает KEY=значение только для белого списка API_HTTP_PORT HA_HTTP_PORT COMPOSE_PROJECT_NAME BACKUP_DIR BACKUP_MAX_SIZE_GB COMPOSE_FILE DOMOVOY_IMAGE_REPO DOMOVOY_IMAGE_TAG; ключ вне списка — код 2 без вывода; разбор значения — dotenv_value из ops/backup/dotenv.sh (source, без копии), значение с плейсхолдером <…> — пустое. bash deploy/envfile.sh set <env> KEY VALUE и unset <env> KEY — только для управляемых ключей: заменить строку или дописать; удалить строку. Коды: 0 — успех, 1 — файл не читается или не пишется, 2 — ошибка вызова. .env.example: разметка generate над AUTH_ADMIN_TOKEN; owner над POSTGRES_PASSWORD, HA_TOKEN, LLM_API_KEY, NTFY_TOPIC, BACKUP_DIR; закомментированный блок «Развёртывание» с COMPOSE_FILE, DOMOVOY_IMAGE_REPO, DOMOVOY_IMAGE_TAG — пишет deploy/update.sh в .env каталога развёртывания, в клоне разработки не задаются. Строк KEY= без комментария блок не добавляет: CI и стенд поднимаются на .env.example как раньше.",
+        "after": [
+          "image"
+        ]
+      },
+      {
+        "name": "update",
+        "files": [
+          "deploy/update.sh",
+          "deploy/update.test.sh",
+          "deploy/docker-compose.deploy.yml",
+          "deploy/windows/update.ps1",
+          ".github/workflows/ci-fast.yml"
+        ],
+        "contract": "bash deploy/update.sh [--dir <каталог>] [--ref <коммит>] [--dry-run] [--adopt] [--image-repo <реестр>/<владелец>]; каталог по умолчанию — корень клона, в котором лежит сценарий; ref по умолчанию — голова main на origin (git ls-remote); реестр по умолчанию — DOMOVOY_IMAGE_REPO из .env, иначе ghcr.io/<владелец из git remote origin в нижнем регистре>. Тело — в функции, вызываемой последней строкой с exit на той же строке: checkout собственного файла не ломает исполнение. Коды: 0 — обновлено; 1 — отказ до первого изменения, первая строка stderr «update: отказ: <причина>»; 2 — ошибка вызова; 3 — провал после изменения, откат выполнен и стек на прежнем коммите и образе отвечает (и когда доведён откат прерванного прогона); 4 — провал и отказ отката — нужен человек, путь бэкапа повторяется в stderr. Строки stdout начинаются с «update: »; путь бэкапа — «update: бэкап: <путь>»; успех — «update: готово: <sha> (образ sha-<sha>)»; откат — «update: откат: …»; откат прерванного прогона — «update: откат прерванного обновления <sha цели>: …». Блокировка — flock -n на <каталог>/.git/domovoy-update.lock, занята — код 1. Швы для тестов — переменная DOMOVOY_UPDATE_BACKUP (команда бэкапа, по умолчанию bash ops/backup/backup.sh) и docker из PATH, описаны в шапке. Управляемые ключи .env: COMPOSE_FILE (docker-compose.yml:deploy/docker-compose.deploy.yml, плюс docker-compose.override.yml, если он есть в каталоге), DOMOVOY_IMAGE_REPO, DOMOVOY_IMAGE_TAG (sha-<40 hex>) — через deploy/envfile.sh set/unset. Порядок изменяющих шагов (обязателен): файл состояния → checkout --detach цели → envfile.sh sync → set всех трёх управляемых ключей, DOMOVOY_IMAGE_TAG=sha-<цель> → compose pull → compose --profile migrate run --rm migrate → up -d --wait и /health → чистка → удаление файла состояния. Тег цели задаётся до pull и migrate: compose берёт его из .env, и migrate запускается из образа целевого коммита; откат возвращает все три ключа вместе — тег вместе с COMPOSE_FILE. Файл состояния отката: путь <каталог>/.git/domovoy-update.state (внутри .git — checkout его не трогает, в рабочем дереве его нет); пишется после бэкапа и до checkout — во временный файл рядом с umask 077 и mv поверх; строки KEY=значение: prev_commit, target_commit, backup (путь), и на каждый управляемый ключ prev.<KEY>=<значение> или prev.<KEY>.absent=1; значения прочих ключей .env и секреты туда не пишутся. Удаляется после успеха и после завершённого отката, в том числе отката по коду 3. Читает его только update.sh, при старте после взятия блокировки и проверок движка и каталога развёртывания (движок ещё не поднялся после wsl --shutdown — код 1 «update: отказ: …», файл остаётся, откат не начинается): файл есть — прерванный прогон: новое обновление не начинается, выполняется откат по файлу (checkout prev_commit, возврат ключей, up -d --wait, /health), код 3 со строкой «update: откат прерванного обновления …» или 4; откат идемпотентен — обрыв посреди него повторяет его при следующем запуске; с --dry-run — только строка «update: будет выполнен откат прерванного обновления <sha>» и код 0, без изменений. Ключи, дописанные синхронизацией .env, откат не снимает: они только добавляются, прежний код их не читает. Чистка после успеха: из образов <repo>/domovoy-api и <repo>/domovoy-migrate остаются текущий тег и образ, на котором работали контейнеры до обновления; локальный образ <проект>-api прежней сборки удаляется, если он не предыдущий; docker image rm без -f; docker builder prune --all --force только встроенного строителя (строители стенда не трогаются). deploy/docker-compose.deploy.yml: api — image ${DOMOVOY_IMAGE_REPO:?}/domovoy-api:${DOMOVOY_IMAGE_TAG:?}, build: !reset null; migrate — image …/domovoy-migrate:${DOMOVOY_IMAGE_TAG:?}, profiles [migrate], networks [db], depends_on postgres service_healthy, restart \"no\", environment PGHOST=postgres, PGPORT=5432, PGUSER=${POSTGRES_USER}, PGDATABASE=${POSTGRES_DB}, PGPASSWORD=${POSTGRES_PASSWORD}. deploy/windows/update.ps1 [-DryRun] [-Ref <sha>] [-Adopt] [-DeployDir /srv/domovoy] [-Distro domovoy-engine] [-WslExe <путь>]: проверка --list --quiet и --list --running --quiet до любого вызова -d; затем test -d <DeployDir>/.git; отказ — код 1 и текст причины; иначе wsl.exe -d <Distro> -u root --cd <DeployDir> --exec bash deploy/update.sh … и код update.sh как есть; после кода 0 без -DryRun — engine-setup.ps1 -Check рядом со сценарием, его ненулевой код — код 5 обёртки. В deploy/windows нет числа порта контейнера и адресов localhost (существующие проверки engine-setup.test.sh). ci-fast.yml: шаги bash deploy/envfile.test.sh и bash deploy/update.test.sh рядом со scripts/*.test.sh, с if: !cancelled(). ci-heavy.yml не меняется: сквозного теста в CI нет, живой прогон — один раз на стенде (контракт приёмки A-migrate). Каталог развёртывания клонирует root (README переноса), и update.ps1 зовёт update.sh от root — владелец клона и вызывающий совпадают, git не отказывает по dubious ownership. update.test.sh проверяет и deploy/publish.sh (publish_scans_before_push) — отдельного файла тестов для него нет. readme_describes_update_and_move в update.test.sh проверяет якоря README из контракта среза docs и зеленеет после его переноса.",
+        "after": [
+          "image",
+          "envfile"
+        ]
+      },
+      {
+        "name": "engine",
+        "files": [
+          "deploy/windows/engine-setup.ps1",
+          "deploy/windows/engine-setup.test.sh",
+          "deploy/windows/measure-boot.ps1",
+          "ops/backup/install-schedule.ps1"
+        ],
+        "contract": "Первым делом — проба WSL хоста: wsl.exe --manage <дистрибутив> --set-sparse true на версии владельца; требует --allow-unsafe или печатает предупреждение о порче данных — срез останавливается и возвращает это оркестратору, --allow-unsafe молча не ставится. engine-setup.ps1: параметр -DeployDir (по умолчанию /srv/domovoy) и -AssumeDeploySettings 'KEY=v;KEY=v' (только с -DryRun, как прочие -Assume*). Настройки стека (API_HTTP_PORT, HA_HTTP_PORT, COMPOSE_PROJECT_NAME) — wsl.exe -d <дистрибутив> -u root --cd <DeployDir> --exec bash deploy/envfile.sh get .env <ключи>: в -Install без -DryRun — если дистрибутив зарегистрирован; в -DryRun и -Check — только если он уже работает; иначе, а также когда дистрибутив работает, но каталога развёртывания, его .env или deploy/envfile.sh ещё нет (хост после мерджа, до переноса), — значения по умолчанию из docker-compose.yml и строка settings.source: defaults с причиной; в -Check — звено SKIP «настройки каталога развёртывания», -Install при этом не обрывается. То же правило — у BACKUP_DIR в install-schedule.ps1 (каталога нет — задача бэкапа остаётся прежней, с --cd клона, и это печатается) и у зонда measure-boot.ps1 (каталога нет — зонд с --cd клона, как сейчас). .env клона больше не читается. -Uninstall stop — с --cd <DeployDir>. Разреженный диск: после --import — wsl --manage <дистрибутив> --set-sparse true; у зарегистрированного без атрибута SparseFile — в окне после wsl --terminate провижининга, до возврата держалки; путь ext4.vhdx — BasePath из HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss по DistributionName; строка сухого прогона distro.sparse. .wslconfig: Get-WslConfigPlan дописывает [experimental] sparseVhd=true и autoMemoryReclaim=gradual в том же плане и с той же копией или отметкой; sparseVhd иное, чем true, или autoMemoryReclaim иное, чем gradual, — Conflict и отказ до первого изменения. Звенья -Check: «диск дистрибутива разреженный», «.wslconfig: sparseVhd=true», «.wslconfig: autoMemoryReclaim=gradual», «стек поднят из каталога развёртывания» (только у работающего дистрибутива: метка com.docker.compose.project.working_dir контейнеров проекта равна DeployDir); каждое — отдельной функцией, тестируемой через ps_functions. Задача замера получает -DeployDir в аргументах, measure-boot.ps1 запускает зонд с --cd <DeployDir>. install-schedule.ps1: -DeployDir; действие задачи — wsl.exe -d domovoy-engine --cd \"<DeployDir>\" --exec bash ops/backup/backup.sh; BACKUP_DIR — тем же deploy/envfile.sh get; engine-setup.ps1 передаёт ему -DeployDir. Существующие тесты engine-setup.test.sh меняют ожидания, а не удаляются; подстрока «частично заменено [0030](0030-wsl-nat-portproxy.md)» в индексе решений остаётся.",
+        "after": [
+          "envfile"
+        ]
+      },
+      {
+        "name": "docs",
+        "files": [
+          "README.md",
+          "docs/decisions/0034-deploy-directory-ghcr-update.md",
+          "docs/decisions/README.md"
+        ],
+        "contract": "README: подраздел «### Обновление стека» — одна команда powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 (и -DryRun), коды 0–5, что делает каждый шаг, «запасной путь» — нынешние ручные команды (миграция psql, compose pull/up) сохраняются как запасной путь; подраздел «### Перенос стека в каталог развёртывания» — разово и в этом порядке: 1) git clone в /srv/domovoy внутри дистрибутива от root (wsl -d domovoy-engine -u root) — тем же пользователем, которым update.ps1 зовёт update.sh; 2) копия .env и config/ из клона Windows; 3) update.ps1 -Adopt; 4) повторный engine-setup.ps1 -Install — задача бэкапа, замер и настройки переходят на каталог развёртывания; 5) только после этого в клоне разработки другое COMPOSE_PROJECT_NAME (например domovoy-dev) — раньше ночная задача бэкапа с --cd клона искала бы проект domovoy-dev и отказала; публичная видимость пакетов domovoy-api и domovoy-migrate в GHCR — разовый шаг владельца после первой публикации; «Схема базы данных» — миграции применяет обновление, ручной путь — запасной; «Расписание», «Новый ПК» и «docker из Git Bash» — команды с --cd /srv/domovoy вместо клона. Строки, которые проверяет test_readme_points_to_logs, остаются. Запись 0034: каталог развёртывания в файловой системе дистрибутива, образы в GHCR, сервис migrate, шаги и коды update.sh, откат без отката схемы, чистка образов и кэша сборки, разметка .env.example, настройки хоста из .env каталога развёртывания, изоляция от клона разработки, разреженный диск и [experimental] .wslconfig, способ вызова для #163 без docker socket; шапка «**Частично заменяет:** [0028](0028-docker-engine-in-wsl.md)». Индекс: строка 0034 и у 0028 — «частично заменено [0030](0030-wsl-nat-portproxy.md), [0034](0034-deploy-directory-ghcr-update.md)».",
+        "after": [
+          "update",
+          "engine"
+        ]
+      }
+    ],
+    "single_slice_reason": ""
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Api/Dockerfile",
+      "action": "modify",
+      "why": "Стадии migrations (dotnet-ef и идемпотентный SQL) и migrate (postgres:16-alpine с SQL); runtime остаётся целью по умолчанию — CI compose и стенд не меняются."
+    },
+    {
+      "path": "deploy/publish.sh",
+      "action": "create",
+      "why": "Общая сборка образов api и migrate, скан слоёв gitleaks до push, push sha-тегов — для workflow публикации и живого прогона на стенде (локальный реестр)."
+    },
+    {
+      "path": ".github/workflows/ci-publish.yml",
+      "action": "create",
+      "why": "Публикация образов в GHCR на push в main; на PR — сборка и скан без push. Группа harness_quality (.github/**) — заявлено."
+    },
+    {
+      "path": "deploy/envfile.sh",
+      "action": "create",
+      "why": "Синхронизация .env по ключам .env.example с разметкой generate/owner, чтение несекретных ключей по белому списку, запись управляемых ключей обновления."
+    },
+    {
+      "path": "deploy/envfile.test.sh",
+      "action": "create",
+      "why": "Сценарии синхронизации и чтения .env на временных файлах, без docker; идёт в ci-fast."
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "Разметка # env-sync: generate|owner над секретами и ключами владельца и закомментированный блок управляемых ключей развёртывания."
+    },
+    {
+      "path": "deploy/update.sh",
+      "action": "create",
+      "why": "Сценарий обновления внутри дистрибутива: проверки, бэкап, checkout, .env, миграции, подъём, откат, чистка."
+    },
+    {
+      "path": "deploy/update.test.sh",
+      "action": "create",
+      "why": "Сценарии update.sh с поддельным docker и настоящим git на временных репозиториях (ubuntu-раннер, ci-fast): порядок тега и migrate, откат, файл состояния после kill -9; publish.sh с поддельными docker и gitleaks; на Windows — ещё и update.ps1 с поддельным wsl.exe; якоря README. Сценарии update.sh идут только на Linux (ubuntu-раннер ci-fast, дистрибутив): update.sh берёт flock в каждом запуске, а flock и setsid в Git Bash нет — там они пропускаются строкой-отметкой, не молча; случай update.ps1 — только на Windows; publish.sh и якоря README — на обоих."
+    },
+    {
+      "path": "deploy/docker-compose.deploy.yml",
+      "action": "create",
+      "why": "Надстройка каталога развёртывания: api из реестра без build, одноразовый сервис migrate под профилем migrate."
+    },
+    {
+      "path": "deploy/windows/update.ps1",
+      "action": "create",
+      "why": "Одна команда владельца на Windows: отказ при неработающем движке или недоступном каталоге до первого изменения, вызов update.sh, затем -Check."
+    },
+    {
+      "path": ".github/workflows/ci-fast.yml",
+      "action": "modify",
+      "why": "Шаги deploy/envfile.test.sh и deploy/update.test.sh. Группа harness_quality — заявлено."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "action": "modify",
+      "why": "-DeployDir и настройки стека из .env каталога развёртывания, -Uninstall в каталоге развёртывания, разреженный диск, [experimental] в .wslconfig, новые звенья -Check."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "action": "modify",
+      "why": "Новые сценарии функций (.wslconfig experimental, разреженный диск, каталог стека, настройки) и новые ожидания существующих сухих прогонов."
+    },
+    {
+      "path": "deploy/windows/measure-boot.ps1",
+      "action": "modify",
+      "why": "Зонд хронологии запускается из каталога развёртывания (-DeployDir), а не из клона через мост /mnt/<диск>."
+    },
+    {
+      "path": "ops/backup/install-schedule.ps1",
+      "action": "modify",
+      "why": "Задача бэкапа идёт в каталоге развёртывания, BACKUP_DIR — из его .env; иначе после переноса .env ночной бэкап остался бы без настроек."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Обновление одной командой, запасной ручной путь, перенос стека в каталог развёртывания, видимость пакетов GHCR, новые пути бэкапа и нового ПК."
+    },
+    {
+      "path": "docs/decisions/0034-deploy-directory-ghcr-update.md",
+      "action": "create",
+      "why": "Решение, частично заменяющее 0028 (стек не в клоне на /mnt/<диск>): каталог развёртывания, GHCR, миграции шагом обновления. Группа harness_quality (docs/decisions/**) — заявлено."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "Строка индекса 0034 и пометка у 0028. Группа harness_quality — заявлено."
+    }
+  ],
+  "boundaries": [
+    "deploy/**",
+    "src/Domovoy.Api/Dockerfile",
+    ".github/workflows/**",
+    ".env.example",
+    "ops/backup/install-schedule.ps1",
+    "README.md",
+    "docs/decisions/**",
+    "docs/tasks/162.*"
+  ],
+  "flags": {
+    "new_dependency": true,
+    "new_dependency_reason": "dotnet-ef 8.0.11 (инструмент .NET, не библиотека продукта) ставится в стадии migrations Dockerfile ради dotnet ef migrations script --idempotent; в образы runtime и migrate не попадает, вручную README его уже требует. Обоснование — комментарий оркестратора в #162 до установки; если владелец считает это новой зависимостью и против — вариант с бандлом тоже требует dotnet-ef, а без инструмента SQL генерировать нечем."
+  },
+  "tests": [
+    {
+      "name": "envfile_sync_adds_plain_key_with_example_value",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-env"
+      ],
+      "behavior": "Ключ без разметки, которого нет в .env, дописывается со значением примера ровно как в примере; остальные строки .env побайтно те же; вывод — «добавлен KEY (из примера)»."
+    },
+    {
+      "name": "envfile_sync_generates_marked_secret",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-env"
+      ],
+      "behavior": "Ключ с # env-sync: generate дописывается значением из 48 символов [A-Za-z0-9]; два прогона на двух копиях дают разные значения; сгенерированное значение не встречается ни в stdout, ни в stderr."
+    },
+    {
+      "name": "envfile_sync_reports_owner_key_without_value",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-env"
+      ],
+      "behavior": "Ключ с # env-sync: owner не дописывается, вывод — «заполните KEY»; значения-метки, заранее записанные в .env, не встречаются в выводе ни одной подкоманды sync."
+    },
+    {
+      "name": "envfile_sync_lists_extra_keys_keeps_them",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-env"
+      ],
+      "behavior": "Ключ .env вне примера остаётся в файле и перечисляется строкой «лишний ключ KEY»; управляемые COMPOSE_FILE, DOMOVOY_IMAGE_REPO, DOMOVOY_IMAGE_TAG не перечисляются; CRLF-файл получает дописанные строки с CRLF."
+    },
+    {
+      "name": "envfile_sync_dry_run_writes_nothing",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-dry",
+        "A-env"
+      ],
+      "behavior": "sync --dry-run печатает строки с префиксом «будет » для каждого случая, а sha256sum и права .env до и после совпадают."
+    },
+    {
+      "name": "envfile_get_refuses_secret_keys",
+      "file": "deploy/envfile.test.sh",
+      "new": true,
+      "covers": [
+        "A-env",
+        "A-move"
+      ],
+      "behavior": "get отдаёт KEY=значение для ключей белого списка (плейсхолдер <…> — пустое значение) и отказывает кодом 2 без вывода на POSTGRES_PASSWORD, HA_TOKEN и AUTH_ADMIN_TOKEN."
+    },
+    {
+      "name": "update_dry_run_changes_nothing",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-dry"
+      ],
+      "behavior": "update.sh --dry-run печатает целевой коммит, образы, команду бэкапа, превью синхронизации .env и план чистки; HEAD, git status, список refs (git for-each-ref) и sha256sum .env до и после равны; журнал поддельного docker не содержит pull, run, up, down, rm, rmi, tag и builder prune; временный клон удалён; файла .git/domovoy-update.state нет (git status и for-each-ref внутрь .git не смотрят — проверяется отдельно)."
+    },
+    {
+      "name": "update_refuses_without_engine",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Поддельный docker info отвечает ошибкой: код 1, первая строка stderr начинается с «update: отказ: » и называет движок; бэкап не вызывался, HEAD и .env не изменились, изменяющих вызовов docker нет, файла .git/domovoy-update.state нет."
+    },
+    {
+      "name": "update_refuses_missing_deploy_dir",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "--dir на несуществующий каталог и на каталог без .git: код 1, «update: отказ: » с текстом про каталог развёртывания, ни одного вызова docker кроме чтения; у каталога без .git файл состояния не создан."
+    },
+    {
+      "name": "update_refuses_when_image_missing",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "docker manifest inspect образа целевого коммита отвечает ошибкой (CI ещё публикует): код 1 до бэкапа и checkout, причина называет образ; файла .git/domovoy-update.state нет."
+    },
+    {
+      "name": "update_refuses_foreign_working_dir",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse",
+        "A-move"
+      ],
+      "behavior": "Метка working_dir контейнеров проекта — другой каталог: без --adopt код 1 с путём в причине и без файла .git/domovoy-update.state; с --adopt обновление идёт дальше."
+    },
+    {
+      "name": "update_backup_before_migrate_prints_path",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-migrate"
+      ],
+      "behavior": "В журнале вызовов команда бэкапа стоит раньше checkout и compose run --rm migrate; вывод содержит «update: бэкап: <путь>» с каталогом, которого не было до прогона; отказ бэкапа — код 1 без checkout и без файла .git/domovoy-update.state."
+    },
+    {
+      "name": "update_syncs_env_after_checkout",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-env"
+      ],
+      "behavior": "Целевой коммит добавляет в .env.example ключ без разметки, generate и owner: после обновления первые два в .env, третий перечислен строкой «заполните», DOMOVOY_IMAGE_TAG — sha-<целевой коммит>."
+    },
+    {
+      "name": "update_rolls_back_on_failed_health",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-rollback"
+      ],
+      "behavior": "Поддельный compose up --wait падает на новом теге: код 3, HEAD — прежний коммит, управляемые ключи .env — прежние значения (при --adopt — сняты), повторный up вызван, чистки образов и builder prune не было."
+    },
+    {
+      "name": "update_rollback_failure_exit_4",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-rollback"
+      ],
+      "behavior": "Падают и новый up, и up отката: код 4, в stderr путь бэкапа и указание на ручные шаги."
+    },
+    {
+      "name": "update_prunes_all_but_current_and_previous",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-prune"
+      ],
+      "behavior": "Поддельный image ls отдаёт четыре тега api и migrate: rm вызван для двух старых каждого репозитория и не вызван для текущего и предыдущего; builder prune --all --force вызван один раз и без --builder; всё это — только после успешной проверки /health."
+    },
+    {
+      "name": "update_lock_refuses_parallel_run",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Пока блокировка .git/domovoy-update.lock занята, второй запуск — код 1 с причиной «обновление уже идёт», без вызовов docker; файл состояния не создан, а заранее положенный — не прочитан и не удалён. Только Linux (ubuntu-раннер ci-fast): flock в Git Bash нет."
+    },
+    {
+      "name": "update_sets_target_tag_before_migrate",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-migrate"
+      ],
+      "behavior": "Поддельный docker на каждом вызове compose читает .env каталога в момент вызова и пишет в журнал значения DOMOVOY_IMAGE_TAG и COMPOSE_FILE (compose берёт тег из .env, в аргументах его нет). Обычное обновление (в .env прежний тег) и первое --adopt (управляемых ключей в .env нет): у строк compose pull и compose --profile migrate run --rm migrate тег — sha-<целевой коммит>, COMPOSE_FILE содержит deploy/docker-compose.deploy.yml; ни один вызов compose после checkout не видит прежний или пустой тег. При старом порядке (тег пишется после migrate) тест красный."
+    },
+    {
+      "name": "update_resumes_rollback_after_kill",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-rollback"
+      ],
+      "behavior": "Только Linux (ubuntu-раннер ci-fast): setsid и flock в Git Bash нет. update.sh запускается в отдельной группе процессов (setsid); поддельный compose up нового тега пишет метку и засыпает; тест дожидается метки и шлёт kill -9 всей группе (дочерняя подделка держит дескриптор блокировки — убивается и она). После обрыва: HEAD — целевой коммит, .git/domovoy-update.state есть, в нём prev_commit и prev-значения управляемых ключей, но нет ни одного значения прочих ключей .env (метки-пароли теста не встречаются). update.sh --dry-run — код 0, строка «будет выполнен откат прерванного обновления», HEAD, .env и файл состояния не изменились. Повторный обычный запуск (поддельный up прежнего тега проходит): код 3, строка «update: откат прерванного обновления», HEAD — прежний коммит, управляемые ключи — прежние значения (для --adopt — сняты), нового бэкапа и checkout другой цели нет, файл состояния удалён. Отказ поддельного up отката — код 4 и файл состояния остаётся. Повторный запуск при поддельном docker info с ошибкой (движок ещё не поднялся) — код 1 «update: отказ: », отката нет, HEAD — целевой коммит, файл состояния на месте."
+    },
+    {
+      "name": "update_survives_self_change_on_checkout",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-migrate"
+      ],
+      "behavior": "Целевой коммит дописывает и меняет строки в середине deploy/update.sh: прогон из прежнего коммита завершается кодом 0 с «update: готово», журнал вызовов совпадает с прогоном без такой правки; строк из новой версии в выводе нет."
+    },
+    {
+      "name": "publish_scans_before_push",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-ghcr"
+      ],
+      "behavior": "deploy/publish.sh --repo example.invalid/owner --sha <40 hex> --push с поддельными docker и gitleaks в PATH. Подделка gitleaks отвечает находкой (код 1) на втором образе: код 1, в журнале docker нет ни одного push; gitleaks вызван с каталогом распакованных слоёв, не пустым. Чистый скан: push ровно example.invalid/owner/domovoy-api:sha-<sha> и …/domovoy-migrate:sha-<sha>, каждый после двух вызовов gitleaks; тега main нет без --also-tag и есть с ним; build с --target runtime и --target migrate и меткой org.opencontainers.image.revision=<sha>."
+    },
+    {
+      "name": "update_ps1_refuses_stopped_engine",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-refuse"
+      ],
+      "behavior": "Только Windows: update.ps1 с поддельным wsl.exe (-WslExe) — дистрибутив не зарегистрирован, зарегистрирован но не работает, работает без каталога развёртывания: код 1 и текст причины в каждом случае; в журнале подделки нет ни одного вызова -d до проверки --list --running."
+    },
+    {
+      "name": "readme_describes_update_and_move",
+      "file": "deploy/update.test.sh",
+      "new": true,
+      "covers": [
+        "A-readme"
+      ],
+      "behavior": "В README есть заголовки «### Обновление стека» и «### Перенос стека в каталог развёртывания», команда deploy/windows/update.ps1, путь /srv/domovoy и слова «запасной путь»."
+    },
+    {
+      "name": "wslconfig_experimental_keys",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "A-wsl"
+      ],
+      "behavior": "Get-WslConfigPlan дописывает [experimental] sparseVhd=true и autoMemoryReclaim=gradual к файлу без них, с секцией и без, не трогая прочее; sparseVhd=false и autoMemoryReclaim=dropCache — Conflict; звено -Check по каждому ключу — FAIL, если ключ снят, и OK, если задан."
+    },
+    {
+      "name": "sparse_disk_check",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "A-wsl"
+      ],
+      "behavior": "Функция звена «диск дистрибутива разреженный»: атрибуты без SparseFile — FAIL с подсказкой -Install, с SparseFile — OK, файла нет — FAIL с путём."
+    },
+    {
+      "name": "deploy_settings_from_deploy_dir",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "A-move"
+      ],
+      "behavior": "Сухой прогон с -AssumeDeploySettings 'API_HTTP_PORT=28082;COMPOSE_PROJECT_NAME=example-deploy' при .env клона с другими значениями: правило firewall, portproxy и задача замера — с 28082 и example-deploy, значения клона не встречаются; без настроек и с неработающим дистрибутивом — строка settings.source: defaults. Дистрибутив работает, а каталога развёртывания нет — тоже settings.source: defaults с причиной, -Install -DryRun не отказывает, задача бэкапа в сухом прогоне — прежняя, с --cd клона."
+    },
+    {
+      "name": "stack_working_dir_check",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "A-move"
+      ],
+      "behavior": "Функция звена «стек поднят из каталога развёртывания»: метки working_dir всех контейнеров равны DeployDir — OK; хоть одна другая (клон Windows через /mnt) — FAIL с этим путём; контейнеров нет — FAIL."
+    },
+    {
+      "name": "engine_setup_dry_run",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": [
+        "A-wsl",
+        "A-move"
+      ],
+      "behavior": "Существующий сценарий с новыми ожиданиями: байты .wslconfig с [experimental], строка distro.sparse, аргументы задачи замера с -DeployDir, задача бэкапа с --cd \"/srv/domovoy\" (при -AssumeDeploySettings — каталог развёртывания считается настроенным); прежние проверки задач, правила и portproxy сохраняются."
+    },
+    {
+      "name": "uninstall_dry_run_without_rollback",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": [
+        "A-move"
+      ],
+      "behavior": "Существующий сценарий с новым ожиданием: строка uninstall.stack.stop содержит --cd /srv/domovoy, а не путь клона."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-ghcr",
+      "criterion": "Мердж в main публикует образ api в GHCR с тегом коммита.",
+      "method": "До мерджа: bash deploy/update.test.sh — publish_scans_before_push (ci-fast), «упало 0»; работа ci-publish.yml на PR зелёная (сборка и скан слоёв без push). Живой прогон на стенде агента (процедура — A-migrate): publish.sh --push в локальный реестр стенда — docker manifest inspect <реестр стенда>/domovoy-api:sha-<C1> и …/domovoy-migrate:sha-<C1> — код 0; образ выбрасываемого коммита C4 во временном origin (как C1–C3), в слой которого записана строка формата секрета, сгенерированная в прогоне (в исходниках ветки её нет), — publish.sh код 1, manifest inspect его тега — не 0. После мерджа (оркестратор, до закрытия задачи): gh run list --workflow ci-publish.yml --branch main --limit 1 — conclusion success; анонимно, без docker login: docker manifest inspect ghcr.io/<владелец>/domovoy-api:sha-<коммит мерджа> — код 0 (после разового шага владельца — публичная видимость пакета).",
+      "evidence": "Вывод теста, gh pr checks с зелёной работой публикации, коды manifest inspect и отказа скана на стенде, вывод gh run list и docker manifest inspect после мерджа — в журнале, раздел «Проверено». До мерджа сам push в GHCR непроверяем: workflow пушит только на push в main."
+    },
+    {
+      "id": "A-dry",
+      "criterion": "update с -DryRun печатает план без изменений.",
+      "method": "bash deploy/update.test.sh (update_dry_run_changes_nothing) и bash deploy/envfile.test.sh — ожидаемый итог «упало 0». Ручной запуск на стенде агента (процедура — A-migrate), в состоянии после C1: powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 -DryRun -DeployDir <временный клон стенда> -Ref <C2> — код 0, план с целевым коммитом, образами, бэкапом, превью .env и чисткой; снимок до и после равен: git -C <клон> rev-parse HEAD, git status --porcelain, git for-each-ref, sha256sum .env, docker ps --filter label=com.docker.compose.project=domovoy-stand-162 --format '{{.ID}} {{.Image}}', docker image ls -q; engine-setup.ps1 -Check обёрткой не вызывался.",
+      "evidence": "Вывод тестов (строки ok у названных сценариев), вывод -DryRun и совпадающие снимки до и после — в журнале."
+    },
+    {
+      "id": "A-migrate",
+      "criterion": "Миграция, добавленная в main, применяется к базе стека сценарием без ручных команд, бэкап снимается до неё и путь печатается.",
+      "method": "bash deploy/update.test.sh — update_backup_before_migrate_prints_path, update_sets_target_tag_before_migrate, update_survives_self_change_on_checkout — «упало 0». Живой прогон — один раз на стенде агента #164, не на боевом стеке; ведёт агент после склейки срезов (команды, которые права агенту закроют, — человек через «!»). Подготовка: (0) bash scripts/stand.sh up из worktree задачи — проект domovoy-stand-162, api 127.0.0.1:19162, HA 127.0.0.1:9162. (1) Внутри дистрибутива от root: временный bare-репозиторий как origin и клон /srv/domovoy-stand-162; коммиты только во временном origin, в ветку не попадают: C1 — голова ветки; C2 — C1 плюс пробная миграция (класс из dotnet ef migrations add во временной копии) и три размеченных ключа в .env.example (без разметки, generate, owner); C3 — C2 плюс api, падающий на старте. (2) .env клона — копия .env стенда (пробные секреты стенда, значений владельца нет), config/ — копия config/ стенда, BACKUP_DIR — временный каталог. Предпроверка: COMPOSE_PROJECT_NAME=domovoy-stand-162, API_HTTP_PORT=19162, HA_HTTP_PORT=9162, BACKUP_DIR внутри временного каталога — хоть одно не так, прогон не начинается. (3) Реестр registry:2 — контейнер domovoy-stand-162-registry на 127.0.0.1:<свободный порт>; publish.sh --push образов C1, C2, C3 в <реестр стенда>/stand; старый тег для проверки чистки — docker tag образа C1 как <реестр стенда>/stand/domovoy-api:sha-<старый коммит ветки>. Прогоны update.sh --dir /srv/domovoy-stand-162 --image-repo <реестр стенда>/stand: R1 --adopt --ref C1 — код 0, стек стенда переходит на образ реестра; R2 --ref C2 — код 0, строка «update: бэкап: <путь>», в __EFMigrationsHistory строка пробной миграции и её таблица существует (psql в контейнере postgres стенда), pg_restore --list дампа по напечатанному пути этой таблицы не содержит; R3 --ref C3 — A-rollback; отказы — A-refuse; -DryRun — A-dry. Уборка тем же ходом: bash scripts/stand.sh down; docker rm -f контейнера реестра; docker image rm всех тегов <реестр стенда>/* и registry:2, если его вытянул прогон; rm -rf клона, временного origin и каталога бэкапа; контроль — docker image ls --filter reference='127.0.0.1:*/*' и docker ps -a --filter label=com.docker.compose.project=domovoy-stand-162 пусты.",
+      "evidence": "Вывод тестов; вывод R2 со строкой бэкапа, строка __EFMigrationsHistory и вывод pg_restore --list без пробной таблицы; контрольные выводы уборки — в журнале, раздел «Проверено». Буквальное «миграция, добавленная в main» на боевой базе до мерджа и следующей миграции непроверяемо — стенд воспроизводит это пробной миграцией в образе C2."
+    },
+    {
+      "id": "A-env",
+      "criterion": "Новый ключ в .env.example после обновления оказывается в .env без ручной правки (несекретный — со значением примера, генерируемый — со случайным), ключ от владельца перечисляется в отчёте.",
+      "method": "bash deploy/envfile.test.sh и bash deploy/update.test.sh — «упало 0». Отсутствие значений в выводе проверяется грепом сгенерированного значения и меток в выводе тестов. Живой прогон на стенде (процедура — A-migrate), после R2: в .env клона ключ без разметки — со значением примера, generate — длиной 48 (проверка длины без печати значения), ключ owner назван в выводе R2 строкой «заполните» и в .env отсутствует; в выводе R2 нет ни одного значения .env.",
+      "evidence": "Вывод тестов с ok у сценариев envfile_sync_* и update_syncs_env_after_checkout, строки отчёта синхронизации из R2 и итог проверки длины — в журнале."
+    },
+    {
+      "id": "A-rollback",
+      "criterion": "Провал /health после обновления возвращает прошлый образ, проверено прогоном с заведомо плохим образом.",
+      "method": "bash deploy/update.test.sh — update_rolls_back_on_failed_health, update_rollback_failure_exit_4, update_resumes_rollback_after_kill — «упало 0». Живой прогон с заведомо плохим образом на стенде (процедура — A-migrate), R3: update.sh --ref C3, образ api C3 не проходит healthcheck; ожидается код 3, ID образа контейнера api равен ID образа C2, HEAD клона — C2, DOMOVOY_IMAGE_TAG — sha-<C2>, curl 127.0.0.1:19162/health — 200 формы стека, файла .git/domovoy-update.state нет.",
+      "evidence": "Вывод тестов; вывод R3 с кодом 3, ID образа api до и после, ответ /health — в журнале."
+    },
+    {
+      "id": "A-wsl",
+      "criterion": "После engine-setup.ps1 -Install на чистой машине диск дистрибутива разреженный, а .wslconfig содержит sparseVhd и autoMemoryReclaim; -Check краснеет, если любое из трёх снято.",
+      "method": "Агент на Windows: bash deploy/windows/engine-setup.test.sh — wslconfig_experimental_keys, sparse_disk_check, engine_setup_dry_run — «упало 0». Владелец на текущем хосте: -Install, затем -Check — три новых звена OK; снятие каждого ключа .wslconfig по очереди — FAIL своего звена; атрибут диска — fsutil sparse queryflag <ext4.vhdx>.",
+      "evidence": "Вывод тестов и строки -Check владельца — в журнале. «Чистая машина» буквально со стороны агента непроверяема: нового ПК нет, а снятие атрибута разреженности с работающего диска не делается; это записывается."
+    },
+    {
+      "id": "A-prune",
+      "criterion": "После обновления в движке остаются только текущий и предыдущий образ api, кэша сборки нет.",
+      "method": "bash deploy/update.test.sh — update_prunes_all_but_current_and_previous. Живой прогон на стенде (процедура — A-migrate), после R2: docker image ls <реестр стенда>/stand/domovoy-api и …/domovoy-migrate — ровно теги sha-<C1> и sha-<C2>, старый тег снят; локального образа domovoy-stand-162-api прежней сборки стенда нет; docker builder du встроенного строителя пусто (образы прогона собирались им же) — строка Build Cache в docker system df — 0B.",
+      "evidence": "Вывод теста и снимки docker image ls, docker builder du и docker system df после R2 — в журнале."
+    },
+    {
+      "id": "A-refuse",
+      "criterion": "При неработающем движке или каталоге развёртывания сценарий отказывает до первого изменения с текстом причины.",
+      "method": "bash deploy/update.test.sh — update_refuses_without_engine, update_refuses_missing_deploy_dir, update_refuses_when_image_missing, update_refuses_foreign_working_dir, update_lock_refuses_parallel_run; на Windows ещё update_ps1_refuses_stopped_engine. Ожидается код 1, первая строка stderr «update: отказ: …» (обёртка — свой текст), в журнале подделок нет изменяющих вызовов. Живой прогон на стенде (процедура — A-migrate): DOCKER_HOST=unix:///nonexistent.sock bash deploy/update.sh --dir /srv/domovoy-stand-162 --ref <C2> — код 1, причина называет движок; bash deploy/update.sh --dir /srv/domovoy-stand-162-absent — код 1, причина называет каталог развёртывания; update.ps1 -Distro domovoy-engine-absent -DeployDir /srv/domovoy-stand-162 — код 1, дистрибутив не зарегистрирован; после каждого HEAD и sha256sum .env клона и контейнеры стенда те же. Зарегистрированный, но остановленный domovoy-engine вживую не проверяется: его остановка останавливает боевой стек; этот случай — только update_ps1_refuses_stopped_engine с поддельным wsl.exe.",
+      "evidence": "Вывод тестов с ok у названных сценариев на ubuntu-раннере (ci-fast) и на Windows; коды и первые строки stderr трёх живых отказов со снимками до и после — в журнале."
+    },
+    {
+      "id": "A-readme",
+      "criterion": "README: обновление стека — одна команда; ручные шаги — запасной путь; перенос стека в каталог развёртывания описан.",
+      "method": "bash deploy/update.test.sh — readme_describes_update_and_move; чтение раздела ревью: в «### Обновление стека» одна команда update.ps1, ручные команды помечены запасным путём, в «### Перенос стека в каталог развёртывания» — шаги из контракта среза docs.",
+      "evidence": "Вывод теста и цитаты README.md:<строка> обоих заголовков — в журнале."
+    },
+    {
+      "id": "A-move",
+      "criterion": "Что делается, п. 2 (не строка критерия, но цель задачи): рабочий клон владельца на боевой стек больше не влияет — бэкап, остановка при сносе, настройки хоста и проверки идут из каталога развёртывания.",
+      "method": "bash deploy/windows/engine-setup.test.sh — deploy_settings_from_deploy_dir, stack_working_dir_check, engine_setup_dry_run, uninstall_dry_run_without_rollback; bash deploy/update.test.sh — update_refuses_foreign_working_dir; bash deploy/envfile.test.sh — envfile_get_refuses_secret_keys. Владелец после переноса: engine-setup.ps1 -Check — звено «стек поднят из каталога развёртывания» OK, install-schedule.ps1 -Check — задача с --cd \"/srv/domovoy\".",
+      "evidence": "Вывод тестов и строки -Check владельца — в журнале."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Текущий WSL может требовать для --set-sparse флаг --allow-unsafe с предупреждением о возможной порче данных (поведение версии не проверено: агенту вызов wsl.exe в этой сессии закрыт). Тогда требование issue «диск разреженный» ставит под риск базу на этом диске.",
+      "mitigation": "Срез engine начинается с пробы на версии WSL владельца; требование --allow-unsafe или предупреждение — стоп и вопрос владельцу до правки, флаг молча не ставится. Звенья -Check проверяют атрибут файла и ключи .wslconfig, а не обещание WSL."
+    },
+    {
+      "risk": "Пакет GHCR после первой публикации приватный — анонимный pull из движка получит отказ; ghcr.io может быть недоступен из сети хоста.",
+      "mitigation": "update.sh проверяет оба образа docker manifest inspect до первого изменения и отказывает с причиной; README описывает разовый шаг владельца — публичная видимость пакетов; ручной путь остаётся запасным."
+    },
+    {
+      "risk": "Клон разработки с COMPOSE_PROJECT_NAME=domovoy (так в .env.example) поднимет и пересоздаст боевые контейнеры из своих исходников.",
+      "mitigation": "Звено -Check «стек поднят из каталога развёртывания» и отказ update.sh без --adopt по метке working_dir; README переноса требует другое имя проекта в клоне разработки."
+    },
+    {
+      "risk": "update.sh делает checkout коммита, в котором лежит сам: bash дочитывает изменённый файл и исполняет чужие строки.",
+      "mitigation": "Тело в функции, вызов последней строкой с exit на той же строке — контракт среза update; тест update_survives_self_change_on_checkout меняет сам update.sh в целевом коммите."
+    },
+    {
+      "risk": "dotnet ef migrations script в стадии Docker строит хост Domovoy.Api без config/ и user-secrets и может упасть; генерация в сборке образа ещё не проверялась.",
+      "mitigation": "Первый шаг реализации, до запуска остальных срезов: срез image правит Dockerfile и собирает bash deploy/windows/docker-wsl.sh build --target migrate (карточка, executor; у envfile after — image); падение — стоп и пересмотр подхода к миграциям до остальной работы. Дальше стадия собирается в работе публикации на каждом PR; runtime от неё не зависит, поэтому CI compose и стенд не задеты."
+    },
+    {
+      "risk": "Частично применённая миграция или миграция, нарушившая expand/contract, — откат образа вернёт старый код к новой схеме.",
+      "mitigation": "psql --single-transaction и ON_ERROR_STOP: миграция применяется целиком или никак; бэкап снимается до неё и путь печатается; откат схему не трогает и пишет об этом; правило expand/contract в .claude/CLAUDE.md остаётся условием отката, update.sh его не обходит."
+    },
+    {
+      "risk": "Значения .env (пароль базы, токены) утекут в вывод обновления, в аргументы процессов или в журнал задачи.",
+      "mitigation": "envfile.sh не печатает значения ни в одной подкоманде, get — только белый список несекретных ключей; пароль psql — переменная PGPASSWORD окружения контейнера migrate из .env, не аргумент; тесты грепают сгенерированные значения и метки в выводе."
+    },
+    {
+      "risk": "Скан gitleaks слоёв образа даст ложную находку в сторонних сборках .NET и закроет публикацию.",
+      "mitigation": "Находка — красная работа до мерджа; разбор по существу, .gitleaks.toml не ослабляется (группа former_protected); если находка ложная и не обходится без правки правил — вопрос человеку."
+    },
+    {
+      "risk": "Ключи [experimental] .wslconfig действуют на все дистрибутивы пользователя и применяются только после wsl --shutdown; поддерживаемость autoMemoryReclaim=gradual и sparseVhd зависит от версии WSL.",
+      "mitigation": "Чужое значение — отказ, как у networkingMode; прежний файл — копией .domovoy-backup; -Uninstall возвращает файл; README называет wsl --shutdown шагом владельца; живая проверка владельцем на текущем хосте."
+    },
+    {
+      "risk": "restore.sh в каталоге развёртывания собирает api из исходников (up --build с явными файлами compose) — после восстановления образ локальный и есть кэш сборки.",
+      "mitigation": "Следующий update.sh удаляет локальный образ <проект>-api и кэш встроенного строителя; README нового ПК ведёт к update.ps1 сразу после restore.sh. Переход restore.sh на образы реестра — вне задачи."
+    },
+    {
+      "risk": "Размер: около двадцати файлов в одном PR при пороге 11, а в диффе update.sh и envfile.sh будут слова, поднимающие уровень по диффу (password, secret, sha256).",
+      "mitigation": "Объём одним PR — решение владельца (журнал, «Объём»); срезы с контрактами исполняются раздельно; уровень по диффу ожидаемо high — маршрут high заложить сразу, а не ловить триггером «уровень по диффу выше»."
+    },
+    {
+      "risk": "Ночной бэкап в 03:30 и обновление одновременно: бэкап снимет базу в середине миграции.",
+      "mitigation": "Миграция — одной транзакцией, дамп pg_dump видит согласованный снимок; README советует не запускать обновление в окне бэкапа. Общая блокировка с бэкапом — вне задачи."
+    },
+    {
+      "risk": "Процесс update.sh обрывается после checkout (закрыто окно WSL, wsl --shutdown, kill, обрыв вызова кнопкой #163) — каталог остаётся на новом коммите и теге без отката.",
+      "mitigation": "Файл состояния .git/domovoy-update.state пишется до первого изменения и удаляется только после успеха или завершённого отката; следующий запуск update.sh сначала доводит откат по нему (код 3 или 4), --dry-run о нём сообщает; тест update_resumes_rollback_after_kill с kill -9 группы процессов."
+    },
+    {
+      "risk": "Живой прогон на стенде задевает боевой стек: update.sh действует на проект из .env каталога, своей защиты от проекта domovoy у него нет.",
+      "mitigation": "Предпроверка до первого шага прогона — COMPOSE_PROJECT_NAME=domovoy-stand-162, порты 19162 и 9162, BACKUP_DIR во временном каталоге (контракт приёмки A-migrate); .env клона — копия .env стенда, значения владельца не используются; stand.sh отказывает на боевых портах и проекте сам."
+    },
+    {
+      "risk": "Живой прогон оставляет в общем движке то, что stand.sh down не убирает: теги локального реестра (--rmi local их не снимает), контейнер и образ registry:2, временный клон и каталог бэкапа; docker builder prune --all --force в update.sh чистит кэш встроенного строителя всего движка, а шапка stand.sh обещает общий кэш не трогать.",
+      "mitigation": "Уборка — явным списком в процедуре A-migrate с контрольными выводами (образы 127.0.0.1:*/* и контейнеры проекта стенда — пусто). Очистка кэша встроенного строителя — осознанное касание, без шва: это ровно то, что сделает первое обновление боевого стека и что проверяет A-prune; образы, контейнеры и тома боевого стека она не трогает, строитель стенда (buildx, драйвер docker-container) — отдельный и не затрагивается; кэш в нём — от сборок образов самого прогона и сборок клона разработки, следующая сборка в клоне разработки пойдёт без кэша."
+    },
+    {
+      "risk": "docker manifest inspect и pull из реестра на 127.0.0.1 по http могут потребовать --insecure, которого у update.sh нет.",
+      "mitigation": "Движок по умолчанию считает 127.0.0.0/8 небезопасным реестром, которому http разрешён; первый шаг прогона — manifest inspect образа C1 из реестра стенда до R1. Отказ — стоп и вопрос человеку, а не флаг --insecure в update.sh: боевой путь ходит в GHCR по https."
+    }
+  ],
+  "out_of_scope": [
+    "Кнопка в админке и любой триггер обновления по HTTP — #163; здесь только контракт вызова update.sh из командной строки.",
+    "Перевод restore.sh на образы из реестра — он по-прежнему собирает api из исходников каталога, где запущен.",
+    "Откат схемы базы и down-миграции.",
+    "Автоматическое обновление по таймеру или по событию мерджа — обновление запускает владелец.",
+    "Подпись и проверка подлинности образов (cosign, provenance).",
+    "Правка .gitleaks.toml и правил поиска секретов.",
+    "Сквозной тест обновления в CI и правка ci-heavy.yml — живые проверки делаются одним прогоном на стенде агента #164, результат в журнале.",
+    "Живые проверки на боевом стеке: миграция с бэкапом, откат с плохим образом, синхронизация .env и отказы проверяются на стенде агента; на хосте владельца остаются только настройки хоста (A-wsl, A-move).",
+    "Перенос самих хост-сценариев (engine-setup.ps1, measure-boot.ps1, install-schedule.ps1) из клона Windows — они настраивают хост и запускаются владельцем явно.",
+    "Удаление или чистка .env и config/ в клоне Windows после переноса.",
+    "Попутное: в .env.example блок «Администрирование устройств» ссылается на запись 0032, а админ-эндпоинты — запись 0033; правка — в «Попутно» тела PR, не в этом диффе."
+  ]
+}

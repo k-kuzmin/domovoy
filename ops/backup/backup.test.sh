@@ -639,7 +639,7 @@ test_install_schedule_dry_run() {
   engine_arg="-d domovoy-engine --cd \"$(cygpath -w "$work/clone")\" --exec bash ops/backup/backup.sh"
   local first=''
   for shell in "${shells[@]}"; do
-    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+    run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
     if [ "$rc" -ne 0 ]; then fail "$name/$shell" "код $rc"; show_out; return; fi
     tr -d '\r' <"$work/out" >"$work/out.$shell"
     grep -qx 'Task: domovoy-backup' "$work/out.$shell" || { fail "$name/$shell" "нет имени задачи"; show_out; return; }
@@ -670,7 +670,7 @@ test_install_schedule_dry_run() {
   for shell in "${shells[@]}"; do
     for i in "${!dotenv_raw[@]}"; do
       fake_clone "$(printf 'HA_TOKEN=x\r\nBACKUP_DIR=%s\r\n' "${dotenv_raw[i]}")"
-      run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
       if ! tr -d '\r' <"$work/out" | grep -qxF "BACKUP_DIR: ${dotenv_expected[i]}"; then
         fail "$name/$shell" "«${dotenv_raw[i]}» не разобран в «${dotenv_expected[i]}»"; show_out; return
       fi
@@ -680,9 +680,9 @@ test_install_schedule_dry_run() {
   fake_clone "$(printf 'HA_TOKEN=<ha-long-lived-token>\r\nBACKUP_DIR="%s"\r\nBACKUP_MAX_SIZE_GB=5\r\n' "$(cygpath -m "$work/sched-dest")")"
 
   name=install_schedule_custom_time
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 04:15
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent -At 04:15
   tr -d '\r' <"$work/out" | grep -qx 'Daily: 04:15' || { fail "$name" "-At не применён"; show_out; return; }
-  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -At 25:00
+  run "${shells[0]}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent -At 25:00
   if [ "$rc" -eq 0 ]; then fail "$name" "-At 25:00 принят"; return; fi
   ok "$name"
 
@@ -692,11 +692,43 @@ test_install_schedule_dry_run() {
   for shell in "${shells[@]}"; do
     for env_text in $'HA_TOKEN=x\r\n' $'BACKUP_DIR=\r\n' $'BACKUP_DIR=<внешний-диск>/domovoy-backups\r\n'; do
       fake_clone "$env_text"
-      BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun
+      BACKUP_DIR="$(cygpath -m "$work/sched-dest")" run "$shell" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$ps1" -DryRun -AssumeEngineState Absent
       if [ "$rc" -eq 0 ]; then fail "$name/$shell" "«${env_text%%$'\r'*}»: задача собрана без BACKUP_DIR в .env"; show_out; return; fi
       grep -q 'BACKUP_DIR' "$work/out" || { fail "$name/$shell" "в выводе нет BACKUP_DIR"; show_out; return; }
     done
   done
+  ok "$name"
+}
+
+# -Check: каталог развёртывания есть, а задача бэкапа идёт не из него —
+# причина (код 1 у -Check); каталога нет — задача клона допустима. Решение
+# — функция Get-TaskPlacementProblem: -Check читает настоящую задачу
+# Планировщика, а функция берётся из файла разбором, без запуска сценария.
+test_install_schedule_check_task_placement() {
+  local name=install_schedule_check_task_placement shell=''
+  if command -v pwsh >/dev/null 2>&1; then shell=pwsh
+  elif command -v powershell.exe >/dev/null 2>&1; then shell=powershell.exe
+  else skip "$name" "нет ни pwsh, ни powershell.exe"; return; fi
+  local path="$here/install-schedule.ps1"
+  if command -v cygpath >/dev/null 2>&1; then path="$(cygpath -w "$path")"; fi
+  # shellcheck disable=SC2016
+  PS1_PATH="$path" run "$shell" -NoProfile -NonInteractive -Command '
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:PS1_PATH, [ref]$null, [ref]$null)
+    $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Get-TaskPlacementProblem" }, $true)
+    if (@($fn).Count -ne 1) { "no function Get-TaskPlacementProblem"; exit 1 }
+    . ([scriptblock]::Create(@($fn)[0].Extent.Text))
+    $deployTask = "-d domovoy-engine -u root --cd ""/srv/example-deploy"" --exec bash ops/backup/backup.sh"
+    $cloneTask = "-d domovoy-engine --cd ""C:\example\clone"" --exec bash ops/backup/backup.sh"
+    $bad = 0
+    if (Get-TaskPlacementProblem $deployTask "deploy" "/srv/example-deploy") { "deploy task in deploy dir: problem"; $bad = 1 }
+    if (-not (Get-TaskPlacementProblem $cloneTask "deploy" "/srv/example-deploy")) { "clone task with deploy dir present: no problem"; $bad = 1 }
+    if (-not (Get-TaskPlacementProblem $deployTask "deploy" "/srv/example")) { "prefix of deploy dir accepted"; $bad = 1 }
+    if (Get-TaskPlacementProblem $cloneTask "clone" "/srv/example-deploy") { "clone task without deploy dir: problem"; $bad = 1 }
+    exit $bad'
+  if [ "$rc" -ne 0 ]; then fail "$name" "решение о месте задачи неверно"; show_out; return; fi
+  # Причина ведёт к ненулевому коду -Check.
+  grep -q 'if (\$placement) { exit 1 }' "$here/install-schedule.ps1" \
+    || { fail "$name" "-Check не завершается кодом 1 при задаче не в каталоге развёртывания"; return; }
   ok "$name"
 }
 
@@ -887,6 +919,10 @@ SQL
   if grep -qE '(-wal|-shm)$' <<<"$listing"; then fail "$name" "в архиве -wal/-shm"; return 1; fi
   grep -qxF 'domovoy-marker.txt' <<<"$listing" || { fail "$name" "в архиве нет файла-маркера"; return 1; }
   grep -q 'успех' "$work/dest/backup.log" || { fail "$name" "в backup.log нет строки успеха"; return 1; }
+  # deploy/update.sh берёт свой каталог из этой строки вывода, а не из
+  # содержимого каталога назначения.
+  [ "$(grep -cE "^успех: ${backup##*/}( |$)" "$work/out")" = 1 ] \
+    || { fail "$name" "в выводе нет ровно одной строки «успех: ${backup##*/}»"; return 1; }
   if grep -qE 'example_|Bearer|Password=' "$work/dest/backup.log" "$work/out" "$backup/manifest.txt"; then
     fail "$name" "в выводе, логе или манифесте entity_id или секрет"; return 1
   fi
@@ -1101,6 +1137,7 @@ test_backup_reads_settings_from_env_file
 test_backup_max_size_from_env_file
 test_restore_check_defaults_to_latest_backup
 test_install_schedule_dry_run
+test_install_schedule_check_task_placement
 
 if [ "$static_only" -eq 0 ]; then
   tree_before="$(git status --porcelain --ignored)"

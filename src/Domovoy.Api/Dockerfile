@@ -6,6 +6,7 @@
 # работает.
 #
 #   docker build -f src/Domovoy.Api/Dockerfile .
+#   docker build -f src/Domovoy.Api/Dockerfile --target migrate .
 # ============================================================
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
@@ -31,6 +32,37 @@ RUN dotnet publish src/Domovoy.Api/Domovoy.Api.csproj \
         --no-restore \
         --output /app/publish
 
+# Идемпотентный SQL-скрипт миграций: образ migrate применяет его psql, без
+# SDK и без исходников. Версия dotnet-ef — та же, что EF Core в
+# Directory.Packages.props (#162). --no-transactions: своих START
+# TRANSACTION/COMMIT в скрипте нет, транзакцию держит psql в образе migrate.
+FROM build AS migrations
+RUN dotnet tool install --tool-path /tools dotnet-ef --version 8.0.11
+RUN /tools/dotnet-ef migrations script \
+        --idempotent \
+        --no-transactions \
+        --output /out/migrate.sql \
+        --project src/Domovoy.Data \
+        --startup-project src/Domovoy.Api \
+        --configuration Release
+
+# Образ применения миграций: только psql и скрипт. Подключение — переменные
+# PGHOST, PGPORT, PGUSER, PGDATABASE, PGPASSWORD из окружения; значений в
+# образе нет. Весь скрипт — одна транзакция psql (--single-transaction),
+# первая ошибка (ON_ERROR_STOP) откатывает её целиком.
+#
+# Скан секретов (deploy/publish.sh) смотрит только пути, которые
+# добавляет этот Dockerfile, — переменная scan_paths в шапке сценария. Новая
+# точка COPY в этой стадии добавляется в scan_paths той же правкой.
+FROM postgres:16-alpine AS migrate
+COPY --from=migrations /out/migrate.sql /migrations/migrate.sql
+ENTRYPOINT ["psql", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "/migrations/migrate.sql"]
+
+# runtime — последняя стадия и цель сборки по умолчанию.
+#
+# Скан секретов (deploy/publish.sh) смотрит только пути, которые
+# добавляет этот Dockerfile, — переменная scan_paths в шапке сценария. Новая
+# точка COPY в этой стадии добавляется в scan_paths той же правкой.
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 
 # curl нужен для healthcheck контейнера: в образе aspnet его нет.

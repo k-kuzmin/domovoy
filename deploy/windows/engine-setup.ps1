@@ -22,7 +22,15 @@
        того же каталога — это проверка целостности загрузки, не подлинности:
        подпись SHA256SUMS не проверяется, и подменённый на сервере образ
        вместе с его суммой проверку пройдёт; уже зарегистрированный не
-       трогается;
+       трогается. Диск дистрибутива — разреженный: сразу после импорта
+       wsl --manage domovoy-engine --set-sparse true; у зарегистрированного
+       без атрибута SparseFile у ext4.vhdx (путь — BasePath из
+       HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss) — то же в окне
+       после wsl --terminate шага 2, до возврата держалки. Флаг
+       --allow-unsafe сценарий не ставит. Отказ wsl -Install не обрывает:
+       остальные шаги доводятся, в конце — ненулевой код с текстом wsl
+       (как при отказе расписания бэкапа); решение за владельцем, звено
+       -Check «диск дистрибутива разреженный» красное, пока диск не разрежен;
     2. провижининг внутри под root — deploy/windows/provision-engine.sh:
        systemd, Docker Engine с compose, git, safe.directory клона, журнал
        systemd на диске со сбросом раз в 10 с и драйвер логов docker
@@ -41,15 +49,21 @@
        из клона, а клон пользователь может менять — под SYSTEM это было бы
        повышением прав. deploy/windows/measure-boot.ps1 -Port <порт API>
        -Distro domovoy-engine -Project <COMPOSE_PROJECT_NAME>
+       -DeployDir <каталог развёртывания>
        -LogPath %LOCALAPPDATA%\domovoy-engine\measure-boot.log — хронология
        загрузки: дистрибутив, docker, контейнеры проекта, статус /health;
+       зонд внутри дистрибутива идёт в каталоге развёртывания;
     5. %USERPROFILE%\.wslconfig: [wsl2] networkingMode=nat (запись 0030) —
-       127.0.0.1 и ::1 хоста доводит до движка wslrelay (localhostForwarding).
+       127.0.0.1 и ::1 хоста доводит до движка wslrelay (localhostForwarding);
+       [experimental] sparseVhd=true (новые диски разреженные) и
+       autoMemoryReclaim=gradual (ВМ отдаёт хосту освободившуюся память).
        Прежний файл сохраняется копией .wslconfig.domovoy-backup, отсутствие —
        отметкой .wslconfig.domovoy-absent; уже сохранённое не перезаписывается.
        mirrored, записанный прежним -Install по 0028 (рядом копия или
-       отметка), переписывается на nat. Другое значение networkingMode или
-       localhostForwarding=false — отказ: чужая настройка не переписывается.
+       отметка), переписывается на nat. Другое значение networkingMode,
+       localhostForwarding=false, sparseVhd иное, чем true, или
+       autoMemoryReclaim иное, чем gradual, — отказ до первого изменения:
+       чужая настройка не переписывается.
        Применяется после wsl --shutdown — его -Install не выполняет (гасит
        все дистрибутивы пользователя), выполняет владелец (README);
     6. правило firewall Windows domovoy-engine-ports: входящие TCP на порты
@@ -72,11 +86,20 @@
        вывод не попадает. Сменился адрес (DHCP, другая сеть) — повторный
        -Install;
     8. последним шагом — расписание бэкапа:
-       ops/backup/install-schedule.ps1 -Install (S4U).
+       ops/backup/install-schedule.ps1 -Install -DeployDir <каталог> (S4U).
 
-  Порты: API_HTTP_PORT и HA_HTTP_PORT из .env клона, без них — значения по
-  умолчанию из docker-compose.yml. Проект compose — COMPOSE_PROJECT_NAME так
-  же. Чисел портов в сценарии нет.
+  Настройки стека — API_HTTP_PORT, HA_HTTP_PORT, COMPOSE_PROJECT_NAME — из
+  .env каталога развёртывания -DeployDir (по умолчанию /srv/domovoy) внутри
+  дистрибутива, только несекретные ключи и только через
+  wsl.exe -d domovoy-engine -u root --cd <DeployDir> --exec bash deploy/envfile.sh get .env <ключи>
+  Читаются в -Install, если дистрибутив зарегистрирован; в -Install -DryRun,
+  -Check и -Uninstall — только если он уже работает. Иначе, а также если в
+  каталоге нет .env или deploy/envfile.sh (хост до переноса стека), —
+  значения по умолчанию из docker-compose.yml с причиной: строка
+  settings.source сухого прогона, звено SKIP «настройки каталога
+  развёртывания» в -Check; -Install при этом не обрывается. Каталог есть, а
+  get отказал — отказ, а не значения по умолчанию. .env клона не читается.
+  Чисел портов в сценарии нет.
 
   -Check только читает: ничего не запускает и не останавливает, внутрь
   дистрибутива заходит, только если он уже работает. Каждое звено — строка
@@ -86,8 +109,11 @@
   диске со сбросом не реже 10 с (systemd-analyze cat-config), драйвер логов
   docker journald (docker info), restart: unless-stopped и драйвер логов
   journald у контейнеров проекта (созданные до смены драйвера — FAIL с
-  подсказкой --force-recreate), порт замера. Сеть: .wslconfig с nat,
-  правило firewall Windows, профили firewall Domain, Private и Public —
+  подсказкой --force-recreate), порт замера, стек поднят из каталога
+  развёртывания (метка com.docker.compose.project.working_dir контейнеров
+  проекта). Диск дистрибутива разреженный (атрибут SparseFile ext4.vhdx).
+  Сеть и память: .wslconfig с nat, sparseVhd=true и autoMemoryReclaim=gradual —
+  каждый ключ звеном, правило firewall Windows, профили firewall Domain, Private и Public —
   каждый звеном (включён, входящие по умолчанию блокируются), адрес в ЛВС,
   записи portproxy на нём,
   IP Helper, слушатель portproxy на адресе и /health на 127.0.0.1, [::1] и
@@ -95,7 +121,7 @@
 
   -Uninstall — снос движка (терминал администратора), без отката куда-либо:
     1. если дистрибутив работает — docker compose --profile ha stop внутри
-       него, в клоне; отказ — выход до любых удалений. Не работает — стек
+       него, в каталоге развёртывания; отказ — выход до любых удалений. Не работает — стек
        не трогается (дистрибутив ради этого не запускается);
     2. задачи domovoy-engine и domovoy-measure-boot снимаются, работающая
        держалка перед этим останавливается;
@@ -141,7 +167,16 @@ param(
     # все три включены и блокируют входящие; имя профиля — этот пропускает
     # входящие по умолчанию.
     [ValidateSet('', 'None', 'Domain', 'Private', 'Public')]
-    [string]$AssumeOpenFirewallProfile = ''
+    [string]$AssumeOpenFirewallProfile = '',
+    # Каталог развёртывания внутри дистрибутива: оттуда настройки стека,
+    # бэкап, зонд замера и остановка при сносе (#162).
+    [string]$DeployDir = '/srv/domovoy',
+    # Только с -DryRun: подмена настроек каталога развёртывания для теста,
+    # 'KEY=значение;KEY=значение' — ключи белого списка deploy/envfile.sh get.
+    # Каталог развёртывания при этом считается настроенным.
+    [string]$AssumeDeploySettings = '',
+    # Только с -DryRun: wsl.exe для теста (подделка пишет вызовы).
+    [string]$WslExe = ''
 )
 
 Set-StrictMode -Version Latest
@@ -197,35 +232,49 @@ if ($AssumeListenAddress) {
         Stop-WithError '-AssumeListenAddress — IPv4-адрес узла (не петля и не 0.0.0.0)' 2
     }
 }
+if ($AssumeDeploySettings -and -not $DryRun) { Stop-WithError '-AssumeDeploySettings — только с -DryRun' 2 }
+if ($WslExe -and -not $DryRun) { Stop-WithError '-WslExe — только с -DryRun' 2 }
+# Абсолютный путь Linux без пробелов, кавычек и сегментов . и ..: он уходит
+# в аргументы wsl.exe и задач Планировщика.
+if ($DeployDir -cnotmatch '^(/[A-Za-z0-9_][A-Za-z0-9._-]*)+$') {
+    Stop-WithError "-DeployDir — абсолютный путь внутри дистрибутива (/srv/domovoy), без пробелов и кавычек: «$DeployDir»" 2
+}
+
+# Ключи настроек каталога развёртывания — белый список deploy/envfile.sh get
+# (GET_KEYS): -AssumeDeploySettings вне его не принимается.
+$DeploySettingKeys = @('API_HTTP_PORT', 'HA_HTTP_PORT', 'COMPOSE_PROJECT_NAME', 'BACKUP_DIR', 'BACKUP_MAX_SIZE_GB', 'COMPOSE_FILE', 'DOMOVOY_IMAGE_REPO', 'DOMOVOY_IMAGE_TAG')
+# Настройки стека, которые читает этот сценарий.
+$StackSettingKeys = @('API_HTTP_PORT', 'HA_HTTP_PORT', 'COMPOSE_PROJECT_NAME')
+
+# 'KEY=значение;KEY=значение' -> хеш-таблица; $null — форма не та или ключ
+# вне белого списка.
+function ConvertFrom-AssumedSettings([string]$Text, [string[]]$Allowed) {
+    $values = @{}
+    foreach ($part in ($Text -split ';')) {
+        $m = [regex]::Match($part, '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$')
+        if (-not $m.Success -or $Allowed -cnotcontains $m.Groups[1].Value) { return $null }
+        $values[$m.Groups[1].Value] = $m.Groups[2].Value
+    }
+    return $values
+}
+
+$assumedSettings = $null
+if ($AssumeDeploySettings) {
+    $assumedSettings = ConvertFrom-AssumedSettings $AssumeDeploySettings $DeploySettingKeys
+    if ($null -eq $assumedSettings) {
+        Stop-WithError ("-AssumeDeploySettings — 'KEY=значение;KEY=значение', ключи: {0}" -f ($DeploySettingKeys -join ', ')) 2
+    }
+}
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).ProviderPath
-$envFile = Join-Path $root '.env'
 $composeFile = Join-Path $root 'docker-compose.yml'
 $measureScript = Join-Path $root 'deploy\windows\measure-boot.ps1'
 $scheduleScript = Join-Path $root 'ops\backup\install-schedule.ps1'
-$wslExe = Join-Path $env:SystemRoot 'System32\wsl.exe'
+# $WslExe и $wslExe — одна переменная (имена без учёта регистра): подделка
+# запоминается до замены.
+$wslFake = $WslExe
+$wslExe = if ($wslFake) { $wslFake } else { Join-Path $env:SystemRoot 'System32\wsl.exe' }
 $invariant = [Globalization.CultureInfo]::InvariantCulture
-
-# Значение ключа из .env без исполнения файла — та же логика, что
-# Get-DotEnvValue в ops/backup/install-schedule.ps1 и ops/backup/dotenv.sh.
-function Get-DotEnvValue([string]$Path, [string]$Key) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
-    $value = ''
-    foreach ($line in [IO.File]::ReadAllLines($Path)) {
-        if ($line.StartsWith("$Key=", [StringComparison]::Ordinal)) {
-            $value = $line.Substring($Key.Length + 1)
-        }
-    }
-    $value = $value.TrimEnd("`r").TrimStart(' ', "`t")
-    if ($value -cmatch '^"([^"]*)"[ \t]*(#.*)?$' -or $value -cmatch "^'([^']*)'[ \t]*(#.*)?$") {
-        $value = $Matches[1]
-    }
-    else {
-        $value = ($value -creplace '[ \t]#.*$', '').TrimEnd(' ', "`t")
-    }
-    if ($value -match '<.*>') { return '' }
-    return $value
-}
 
 # Значение по умолчанию переменной из docker-compose.yml: ${KEY:-значение}.
 function Get-ComposeDefault([string]$Key) {
@@ -235,8 +284,11 @@ function Get-ComposeDefault([string]$Key) {
     return ''
 }
 
+# Значение настройки: из каталога развёртывания ($deploySettings, ниже),
+# пустое или не прочитанное — значение по умолчанию из docker-compose.yml.
 function Get-Setting([string]$Key) {
-    $value = Get-DotEnvValue $envFile $Key
+    $value = ''
+    if ($deploySettings.Values.ContainsKey($Key)) { $value = [string]$deploySettings.Values[$Key] }
     if (-not $value) { $value = Get-ComposeDefault $Key }
     return $value
 }
@@ -245,7 +297,7 @@ function Get-Port([string]$Key) {
     $value = Get-Setting $Key
     $port = 0
     if (-not [int]::TryParse($value, [ref]$port) -or $port -lt 1 -or $port -gt 65535) {
-        Stop-WithError "$Key — не порт: «$value» (.env клона или значение по умолчанию в docker-compose.yml)" 2
+        Stop-WithError "$Key — не порт: «$value» (.env каталога развёртывания или значение по умолчанию в docker-compose.yml)" 2
     }
     return $port
 }
@@ -319,68 +371,190 @@ function Get-WslNames([string[]]$Arguments) {
     return @($result.Text -split "`r?`n" | ForEach-Object { $_.Trim([char]0, ' ') } | Where-Object { $_ })
 }
 
-# Новое содержимое .wslconfig: nat в [wsl2], прочее не трогается (запись
-# 0030). В NAT 127.0.0.1 и ::1 хоста принимает wslrelay и доводит до
-# движка — для этого нужен localhostForwarding, он включён по умолчанию.
-# Changed = $false — файл уже такой; Conflict — чужая настройка парой
-# ключ=значение: networkingMode не nat или localhostForwarding=false.
-# Исключение — свой mirrored: его записал -Install по 0028, и рядом лежит
-# копия .domovoy-backup или отметка .domovoy-absent — он переписывается на
-# nat на месте, OwnMirrored = $true. firewall=false не мешает: порты стека
-# на адресе хоста закрывает firewall Windows, а не firewall Hyper-V для VM WSL.
+# Новое содержимое .wslconfig, прочее не трогается: nat в [wsl2] (запись
+# 0030) и в [experimental] sparseVhd=true и autoMemoryReclaim=gradual (#162).
+# В NAT 127.0.0.1 и ::1 хоста принимает wslrelay и доводит до движка — для
+# этого нужен localhostForwarding, он включён по умолчанию.
+# Changed = $false — файл уже такой. Conflicts — чужие настройки парами
+# ключ=значение (Conflict — они же строкой): networkingMode не nat,
+# localhostForwarding=false, sparseVhd не true, autoMemoryReclaim не
+# gradual; при них файл не меняется. Missing — ключи, которые -Install
+# дописывает. Исключение из конфликтов — свой mirrored: его записал -Install
+# по 0028, и рядом лежит копия .domovoy-backup или отметка .domovoy-absent —
+# он переписывается на nat на месте, OwnMirrored = $true. firewall=false не
+# мешает: порты стека на адресе хоста закрывает firewall Windows, а не
+# firewall Hyper-V для VM WSL. Ключ ищется во всём файле, без учёта секции —
+# как networkingMode.
 function Get-WslConfigPlan([string]$Path) {
     $exists = Test-Path -LiteralPath $Path -PathType Leaf
     $current = if ($exists) { [IO.File]::ReadAllText($Path) } else { '' }
     $owned = (Test-Path -LiteralPath "$Path.domovoy-backup" -PathType Leaf) -or (Test-Path -LiteralPath "$Path.domovoy-absent" -PathType Leaf)
+    $conflicts = @()
+    $conflictKeys = @()
+    $missing = @()
+    $ownMirrored = $false
     $forwarding = [regex]::Match($current, '(?im)^\s*localhostForwarding\s*=\s*(\S+)\s*$')
     if ($forwarding.Success -and $forwarding.Groups[1].Value -ieq 'false') {
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "localhostForwarding=$($forwarding.Groups[1].Value)"; Content = $current; OwnMirrored = $false }
+        $conflicts += "localhostForwarding=$($forwarding.Groups[1].Value)"; $conflictKeys += 'localhostForwarding'
     }
+    $content = $current
     $mode = [regex]::Match($current, '(?im)^\s*networkingMode\s*=\s*(\S+)\s*$')
     if ($mode.Success) {
         $value = $mode.Groups[1].Value
-        if ($value -ieq 'nat') {
-            return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ''; Content = $current; OwnMirrored = $false }
-        }
         if ($value -ieq 'mirrored' -and $owned) {
             # Замена значения в той же строке: отступ, пробелы у «=» и
             # перевод строки остаются как в файле.
             $line = '(?im)^([ \t]*networkingMode[ \t]*=[ \t]*)mirrored(?=[ \t]*\r?$)'
             $content = ([regex]$line).Replace($current, '${1}nat', 1)
             # Строка не той формы — не заменена: отказ, а не запись mirrored.
-            if ($content -ceq $current) { return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false } }
-            return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $true }
+            if ($content -ceq $current) { $conflicts += "networkingMode=$value"; $conflictKeys += 'networkingMode' }
+            else { $ownMirrored = $true }
         }
-        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = "networkingMode=$value"; Content = $current; OwnMirrored = $false }
+        elseif ($value -ine 'nat') { $conflicts += "networkingMode=$value"; $conflictKeys += 'networkingMode' }
     }
-    # Вставка — перед переводом строки после [wsl2] и тем же переводом, что
-    # в файле. \s в заголовке захватил бы CR: в .NET $ при (?m) стоит
-    # только перед LF.
-    $wsl2 = '(?im)^([ \t]*\[wsl2\][ \t]*)(?=\r?$)'
-    # Файл без CRLF остаётся с LF; новый или с CRLF — CRLF.
+    else { $missing += 'networkingMode' }
+    $experimental = [ordered]@{ sparseVhd = 'true'; autoMemoryReclaim = 'gradual' }
+    foreach ($key in $experimental.Keys) {
+        $found = [regex]::Match($current, '(?im)^\s*' + $key + '\s*=\s*(\S+)\s*$')
+        if (-not $found.Success) { $missing += $key }
+        elseif ($found.Groups[1].Value -ine $experimental[$key]) { $conflicts += "$key=$($found.Groups[1].Value)"; $conflictKeys += $key }
+    }
+    if ($conflicts.Count) {
+        return [pscustomobject]@{ Exists = $exists; Changed = $false; Conflict = ($conflicts -join '; '); Conflicts = $conflicts; ConflictKeys = $conflictKeys
+            Missing = $missing; Content = $current; OwnMirrored = $false }
+    }
+    # Перевод строки — тот, что в файле: без CRLF остаётся LF; новый или с
+    # CRLF — CRLF.
     $newline = if ($current -and -not $current.Contains("`r`n") -and $current.Contains("`n")) { "`n" } else { "`r`n" }
-    if ($current -match $wsl2) {
-        # Экземпляр, а не [regex]::Replace: у статического четвёртый аргумент —
-        # RegexOptions, а не число замен.
-        $content = ([regex]$wsl2).Replace($current, "`$1${newline}networkingMode=nat", 1)
+    if ($missing -contains 'networkingMode') {
+        # Вставка — перед переводом строки после [wsl2] и тем же переводом,
+        # что в файле. \s в заголовке захватил бы CR: в .NET $ при (?m)
+        # стоит только перед LF.
+        $wsl2 = '(?im)^([ \t]*\[wsl2\][ \t]*)(?=\r?$)'
+        if ($content -match $wsl2) {
+            # Экземпляр, а не [regex]::Replace: у статического четвёртый
+            # аргумент — RegexOptions, а не число замен.
+            $content = ([regex]$wsl2).Replace($content, "`$1${newline}networkingMode=nat", 1)
+        }
+        elseif ($content.Trim()) {
+            $content = $content.TrimEnd() + "$newline$newline[wsl2]${newline}networkingMode=nat$newline"
+        }
+        else {
+            $content = "[wsl2]${newline}networkingMode=nat$newline"
+        }
     }
-    elseif ($current.Trim()) {
-        $content = $current.TrimEnd() + "$newline$newline[wsl2]${newline}networkingMode=nat$newline"
+    $add = @($experimental.Keys | Where-Object { $missing -contains $_ } | ForEach-Object { "$_=$($experimental[$_])" })
+    if ($add.Count) {
+        # Секция [experimental] есть — ключи сразу после заголовка, тем же
+        # способом, что nat после [wsl2]; нет — секция в конце файла.
+        $section = '(?im)^([ \t]*\[experimental\][ \t]*)(?=\r?$)'
+        if ($content -match $section) {
+            $content = ([regex]$section).Replace($content, "`$1$newline" + ($add -join $newline), 1)
+        }
+        else {
+            $content = $content.TrimEnd() + "$newline$newline[experimental]$newline" + ($add -join $newline) + $newline
+        }
     }
-    else {
-        $content = "[wsl2]`r`nnetworkingMode=nat`r`n"
-    }
-    return [pscustomobject]@{ Exists = $exists; Changed = $true; Conflict = ''; Content = $content; OwnMirrored = $false }
+    return [pscustomobject]@{ Exists = $exists; Changed = ($content -cne $current); Conflict = ''; Conflicts = @(); ConflictKeys = @()
+        Missing = $missing; Content = $content; OwnMirrored = $ownMirrored }
 }
 
 # Звено -Check «.wslconfig: networkingMode=nat» по плану Get-WslConfigPlan:
-# State OK или FAIL и деталь. Свой mirrored прежней установки — не «не
-# задан»: значение задано, и его переписывает -Install.
+# State OK или FAIL и деталь — только по networkingMode и
+# localhostForwarding. Свой mirrored прежней установки — не «не задан»:
+# значение задано, и его переписывает -Install.
 function Get-WslConfigCheck($Plan) {
-    if ($Plan.Conflict) { return [pscustomobject]@{ State = 'FAIL'; Detail = "задан $($Plan.Conflict)" } }
+    $own = @($Plan.Conflicts | Where-Object { $_ -match '^(networkingMode|localhostForwarding)=' })
+    if ($own.Count) { return [pscustomobject]@{ State = 'FAIL'; Detail = "задан $($own -join '; ')" } }
     if ($Plan.OwnMirrored) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'задан mirrored прежней установки — engine-setup.ps1 -Install, затем wsl --shutdown' } }
-    if ($Plan.Changed) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    if (@($Plan.Missing) -contains 'networkingMode') { return [pscustomobject]@{ State = 'FAIL'; Detail = 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' } }
     return [pscustomobject]@{ State = 'OK'; Detail = '' }
+}
+
+# Звено -Check «.wslconfig: <ключ>» по ключу [experimental] (sparseVhd,
+# autoMemoryReclaim) по плану Get-WslConfigPlan: только по этому ключу.
+function Get-WslConfigKeyCheck($Plan, [string]$Key) {
+    $own = @($Plan.Conflicts | Where-Object { $_ -like "$Key=*" })
+    if ($own.Count) { return [pscustomobject]@{ State = 'FAIL'; Detail = "задан $($own -join '; ') — чужая настройка, -Install её не переписывает" } }
+    if (@($Plan.Missing) -contains $Key) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'не задан — engine-setup.ps1 -Install, затем wsl --shutdown' } }
+    return [pscustomobject]@{ State = 'OK'; Detail = '' }
+}
+
+# Путь ext4.vhdx дистрибутива по записям реестра
+# HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss\{guid} (объекты с
+# DistributionName и BasePath): имя — без учёта регистра; BasePath может
+# прийти с префиксом \\?\. '' — записи нет.
+function Select-DistroDiskPath($Entries, [string]$Name) {
+    foreach ($entry in @($Entries)) {
+        if ($null -eq $entry) { continue }
+        $nameProp = $entry.PSObject.Properties['DistributionName']
+        $baseProp = $entry.PSObject.Properties['BasePath']
+        if (-not $nameProp -or -not $baseProp -or [string]$nameProp.Value -ine $Name) { continue }
+        $base = [string]$baseProp.Value
+        if ($base.StartsWith('\\?\')) { $base = $base.Substring(4) }
+        if (-not $base) { continue }
+        return ($base.TrimEnd('\') + '\ext4.vhdx')
+    }
+    return ''
+}
+
+# Записи Lxss текущего пользователя — только чтение реестра.
+function Get-DistroDiskPath([string]$Name) {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    if (-not (Test-Path -LiteralPath $key)) { return '' }
+    $entries = @(Get-ChildItem -LiteralPath $key -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue })
+    return Select-DistroDiskPath $entries $Name
+}
+
+# Атрибуты файла диска; $null — файла нет.
+function Get-DiskAttributes([string]$Path) {
+    if (-not $Path) { return $null }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return $null }
+    return $item.Attributes
+}
+
+# Звено -Check «диск дистрибутива разреженный»: атрибут SparseFile у
+# ext4.vhdx. $Attributes — [IO.FileAttributes] или $null, если файла нет.
+function Get-SparseDiskCheck([string]$Path, $Attributes) {
+    if (-not $Path) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'путь ext4.vhdx дистрибутива не найден в HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss' } }
+    if ($null -eq $Attributes) { return [pscustomobject]@{ State = 'FAIL'; Detail = "нет файла $Path" } }
+    if (([IO.FileAttributes]$Attributes -band [IO.FileAttributes]::SparseFile) -ne 0) { return [pscustomobject]@{ State = 'OK'; Detail = "SparseFile: $Path" } }
+    return [pscustomobject]@{ State = 'FAIL'; Detail = "у $Path нет атрибута SparseFile — engine-setup.ps1 -Install (wsl --manage --set-sparse true при остановленном дистрибутиве)" }
+}
+
+# Разреженный диск дистрибутива: wsl --manage <имя> --set-sparse true, без
+# --allow-unsafe. '' — сделано; иначе текст отказа wsl и что делать
+# владельцу. Не обрывает -Install: остальные шаги доводятся, отказ уходит в
+# ненулевой код в конце; звено -Check «диск дистрибутива разреженный»
+# остаётся красным, пока диск не разрежен.
+function Set-DistroSparse([string]$Name) {
+    $result = Invoke-Wsl @('--manage', $Name, '--set-sparse', 'true')
+    if ($result.Code -eq 0) { return '' }
+    return "wsl --manage $Name --set-sparse true: код $($result.Code): $(Format-Native $result) — диск дистрибутива не разреженный. Флаг --allow-unsafe сценарий не ставит: если WSL требует его из-за риска порчи данных, решение за владельцем (wsl --version, wsl --manage $Name --set-sparse true вручную при остановленном дистрибутиве); повторный -Install попробует снова"
+}
+
+# Аргументы wsl.exe: метка working_dir каждого контейнера проекта, строкой
+# на контейнер. Имя метки — строкой Go в обратных кавычках: двойные кавычки
+# Windows PowerShell 5.1 в аргументах внешней программы не экранирует.
+function Get-WorkingDirQuery([string]$Distro, [string]$Project) {
+    return @('-d', $Distro, '-u', 'root', '--exec', 'docker', 'ps', '-a', '--filter', "label=com.docker.compose.project=$Project",
+        '--format', '{{.Label `com.docker.compose.project.working_dir`}}')
+}
+
+# Звено -Check «стек поднят из каталога развёртывания»: метки working_dir
+# всех контейнеров проекта равны $DeployDir (без / в конце). Контейнеров
+# нет или у контейнера нет метки — FAIL: проверять нечего.
+function Get-StackWorkingDirCheck([string[]]$WorkingDirs, [string]$DeployDir) {
+    $dirs = @($WorkingDirs | Where-Object { $null -ne $_ } | ForEach-Object { ([string]$_).Trim() })
+    if (-not $dirs.Count) { return [pscustomobject]@{ State = 'FAIL'; Detail = 'контейнеров проекта нет' } }
+    $want = $DeployDir.TrimEnd('/')
+    $other = @($dirs | Where-Object { $_.TrimEnd('/') -cne $want } | Sort-Object -Unique)
+    if ($other.Count) {
+        $shown = @($other | ForEach-Object { if ($_) { $_ } else { '(без метки)' } }) -join ', '
+        return [pscustomobject]@{ State = 'FAIL'; Detail = "контейнеры подняты из $shown, а не из $DeployDir — стек поднят не из каталога развёртывания" }
+    }
+    return [pscustomobject]@{ State = 'OK'; Detail = "$($dirs.Count) контейнеров, $DeployDir" }
 }
 
 # Как сохраняется прежнее состояние .wslconfig перед записью: копия или
@@ -707,11 +881,74 @@ function Remove-LegacyHyperVRule {
     return "прежнего правила Hyper-V $RuleName нет"
 }
 
+# Состояние дистрибутива — до чтения настроек: чтение в -Install поднимает
+# остановленный дистрибутив, а решение о держалке смотрит на состояние до
+# запуска сценария.
+$registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
+$distroRunning = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
+if ($AssumeEngineState) {
+    $distroRunning = $AssumeEngineState -eq 'Running'
+    if ($AssumeEngineState -eq 'Absent') { $registered = $false }
+}
+
+# Настройки стека из .env каталога развёртывания — только ключи
+# $StackSettingKeys, через deploy/envfile.sh get. Source: deploy, assumed
+# или defaults; Reason — причина defaults для сухого прогона (ASCII), Detail —
+# она же для -Check и -Install; Error — каталог есть, а прочитать не
+# удалось (не тихие значения по умолчанию).
+function Read-DeploySettings {
+    if ($null -ne $assumedSettings) {
+        return [pscustomobject]@{ Source = 'assumed'; Reason = '-AssumeDeploySettings'; Detail = 'подменены -AssumeDeploySettings'; Error = ''; Values = $assumedSettings }
+    }
+    function Defaults([string]$Reason, [string]$Detail) {
+        return [pscustomobject]@{ Source = 'defaults'; Reason = $Reason; Detail = $Detail; Error = ''; Values = @{} }
+    }
+    # -Install читает, если дистрибутив зарегистрирован (дистрибутив при
+    # этом поднимается); прочие режимы и сухой прогон — только работающий.
+    $read = if ($Install -and -not $DryRun) { $registered } else { $distroRunning }
+    if (-not $registered -and -not $distroRunning) { return Defaults 'distro not registered' "дистрибутива $Distro нет" }
+    if (-not $read) { return Defaults 'distro not running' "дистрибутив $Distro не работает — внутрь сценарий не заходит" }
+    # Подменённое состояние без подделки wsl.exe: настоящий дистрибутив
+    # сухой прогон не читает.
+    if ($AssumeEngineState -and -not $wslFake) { return Defaults 'engine state assumed, distro not read' 'состояние движка подменено' }
+    $present = Invoke-Wsl @('-d', $Distro, '-u', 'root', '--exec', 'test', '-f', "$DeployDir/.env", '-a', '-f', "$DeployDir/deploy/envfile.sh")
+    if ($present.Code -eq 1) {
+        return Defaults "deploy dir ${DeployDir}: no .env or deploy/envfile.sh" "в каталоге развёртывания $DeployDir нет .env или deploy/envfile.sh — стек ещё не перенесён"
+    }
+    if ($present.Code -ne 0) {
+        return [pscustomobject]@{ Source = 'defaults'; Reason = ''; Detail = ''; Values = @{}
+            Error = "проверка каталога развёртывания $DeployDir внутри ${Distro}: wsl.exe код $($present.Code): $(Format-Native $present)" }
+    }
+    $got = Invoke-Wsl (@('-d', $Distro, '-u', 'root', '--cd', $DeployDir, '--exec', 'bash', 'deploy/envfile.sh', 'get', '.env') + $StackSettingKeys)
+    if ($got.Code -ne 0) {
+        # Только stderr: get печатает значения лишь несекретных ключей, но
+        # в отказе им взяться неоткуда.
+        return [pscustomobject]@{ Source = 'defaults'; Reason = ''; Detail = ''; Values = @{}
+            Error = "deploy/envfile.sh get в $DeployDir внутри ${Distro}: код $($got.Code): $($got.Err)" }
+    }
+    $values = @{}
+    foreach ($line in $got.Lines) {
+        $m = [regex]::Match([string]$line, '^([A-Z_][A-Z0-9_]*)=(.*)$')
+        if ($m.Success -and $StackSettingKeys -ccontains $m.Groups[1].Value) { $values[$m.Groups[1].Value] = $m.Groups[2].Value.TrimEnd("`r") }
+    }
+    return [pscustomobject]@{ Source = 'deploy'; Reason = "$DeployDir/.env"; Detail = "$DeployDir/.env"; Error = ''; Values = $values }
+}
+
+$deploySettings = Read-DeploySettings
+# Отказ чтения — до первого изменения; -Check показывает его звеном.
+if ($deploySettings.Error -and -not $Check) { Stop-WithError "настройки стека не прочитаны: $($deploySettings.Error)" }
+
 $apiPort = Get-Port 'API_HTTP_PORT'
 $haPort = Get-Port 'HA_HTTP_PORT'
 $stackPorts = @($apiPort, $haPort)
 $project = Get-Setting 'COMPOSE_PROJECT_NAME'
 $userId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+# Строка сухого прогона об источнике настроек (ASCII).
+function Format-SettingsSource {
+    if ($deploySettings.Source -eq 'defaults') { return "settings.source: defaults ($($deploySettings.Reason))" }
+    return "settings.source: $($deploySettings.Source) ($($deploySettings.Reason))"
+}
 
 # Предел ожидания состояния Running у задачи держалки после запуска.
 $KeeperWaitSeconds = 30
@@ -739,16 +976,10 @@ function Start-Keeper {
 if ($Uninstall) {
     # Снос движка без отката. Состояние читается до любых действий: стек
     # останавливается, только пока дистрибутив работает, — запускать его
-    # ради остановки сценарий не станет.
-    $registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
-    if ($AssumeEngineState) {
-        $engineRunning = $AssumeEngineState -eq 'Running'
-        if ($AssumeEngineState -eq 'Absent') { $registered = $false }
-    }
-    else {
-        $engineRunning = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
-    }
-    $stopArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'docker', 'compose', '--profile', 'ha', 'stop')
+    # ради остановки сценарий не станет. Стек останавливается в каталоге
+    # развёртывания: оттуда его поднимает deploy/update.sh.
+    $engineRunning = $distroRunning
+    $stopArgs = @('-d', $Distro, '-u', 'root', '--cd', $DeployDir, '--exec', 'docker', 'compose', '--profile', 'ha', 'stop')
     # Расписание бэкапа снимается: без движка задача ночью будила бы WSL.
     # У install-schedule.ps1 -Uninstall сухого прогона нет — -DryRun его
     # только печатает.
@@ -763,6 +994,7 @@ if ($Uninstall) {
 
     if ($DryRun) {
         # ASCII, как строки сухого прогона -Install.
+        Write-Output (Format-SettingsSource)
         Write-Output "uninstall.distro: $Distro"
         Write-Output ('uninstall.distro.registered: {0}' -f $registered)
         Write-Output ('uninstall.engine.running: {0}' -f [bool]$engineRunning)
@@ -800,7 +1032,7 @@ if ($Uninstall) {
         }
         finally { Restore-NativeOutputEncoding $encoding }
         if ($stopCode -ne 0) {
-            Stop-WithError "docker compose --profile ha stop внутри ${Distro}: код $stopCode — ничего не удалено"
+            Stop-WithError "docker compose --profile ha stop внутри $Distro в ${DeployDir}: код $stopCode — ничего не удалено"
         }
         Write-Output "стек внутри $Distro остановлен (stop, тома целы)"
     }
@@ -890,7 +1122,8 @@ if ($Install) {
     # Объекты задач и параметры правила собираются до любых действий; сухой
     # прогон печатает их свойства: что напечатано, то и регистрируется.
     $bootTrigger = New-ScheduledTaskTrigger -AtStartup
-    $keeperAction = New-ScheduledTaskAction -Execute $wslExe -Argument ('-d {0} --exec sleep infinity' -f $Distro)
+    # Задача — всегда с wsl.exe системы, и при подделке -WslExe.
+    $keeperAction = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wsl.exe') -Argument ('-d {0} --exec sleep infinity' -f $Distro)
     $keeperPrincipal = New-ScheduledTaskPrincipal -UserId $userId -LogonType S4U -RunLevel Limited
     $keeperSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
@@ -902,9 +1135,11 @@ if ($Install) {
     # Дистрибутив и проект compose — для зонда хронологии (boot-probe.sh):
     # замер спрашивает о контейнерах этого проекта.
     if ($project -cnotmatch '^[a-z0-9][a-z0-9_-]*$') {
-        Stop-WithError "COMPOSE_PROJECT_NAME «$project» — строчные буквы, цифры, - и _ (имя проекта compose; .env клона или значение по умолчанию в docker-compose.yml)" 2
+        Stop-WithError "COMPOSE_PROJECT_NAME «$project» — строчные буквы, цифры, - и _ (имя проекта compose; .env каталога развёртывания или значение по умолчанию в docker-compose.yml)" 2
     }
-    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1} -Distro {3} -Project {4} -LogPath "{2}"' -f $measureScript, $apiPort, $measureLog, $Distro, $project
+    # Зонд замера — в каталоге развёртывания; каталога нет — measure-boot.ps1
+    # сам идёт в клон.
+    $measureArgument = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1} -Distro {3} -Project {4} -DeployDir "{5}" -LogPath "{2}"' -f $measureScript, $apiPort, $measureLog, $Distro, $project, $DeployDir
     $measureAction = New-ScheduledTaskAction -Execute $powershellExe -Argument $measureArgument
     # Не SYSTEM: действие исполняет файл из клона, который пользователь
     # может менять. Журнал System (Kernel-General 12), LastBootUpTime и
@@ -970,38 +1205,62 @@ if ($Install) {
 
     $wslConfig = Get-WslConfigPlan $WslConfigPath
     $wslSave = Get-WslConfigSave $WslConfigPath $wslConfig.Exists
-    $registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
     # Провижининг делает wsl --terminate дистрибутива: держалка и движок
     # гибнут. Работали до -Install — держалка запускается снова после
-    # регистрации задач, иначе стек лежал бы до перезагрузки.
+    # регистрации задач, иначе стек лежал бы до перезагрузки. Состояние —
+    # прочитанное до настроек каталога развёртывания.
     if ($AssumeEngineState) {
-        $engineRunning = $AssumeEngineState -eq 'Running'
-        if ($AssumeEngineState -eq 'Absent') { $registered = $false }
+        $engineRunning = $distroRunning
     }
     else {
         $keeperNow = Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue
-        $engineRunning = ($keeperNow -and [string]$keeperNow.State -eq 'Running') -or
-            ((Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro)
+        $engineRunning = ($keeperNow -and [string]$keeperNow.State -eq 'Running') -or $distroRunning
     }
     $diskDir = Join-Path $DistroDir 'disk'
     $downloadDir = Join-Path $DistroDir 'download'
     $tar = Join-Path $downloadDir $ImageFile
     $importArgs = @('--import', $Distro, $diskDir, $tar, '--version', '2')
     $provisionArgs = @('-d', $Distro, '-u', 'root', '--cd', $root, '--exec', 'bash', 'deploy/windows/provision-engine.sh')
+    # Разреженный диск: новый — сразу после импорта; зарегистрированный без
+    # атрибута SparseFile — в окне после wsl --terminate провижининга, до
+    # возврата держалки: --set-sparse требует остановленного дистрибутива.
+    # --allow-unsafe не ставится.
+    $sparseArgs = @('--manage', $Distro, '--set-sparse', 'true')
+    if (-not $registered) { $sparseStep = 'after-import' }
+    elseif ($DryRun -and ($AssumeEngineState -or $wslFake)) { $sparseStep = 'not-inspected' }
+    else {
+        $diskPath = Get-DistroDiskPath $Distro
+        $sparseStep = if ((Get-SparseDiskCheck $diskPath (Get-DiskAttributes $diskPath)).State -eq 'OK') { 'none' } else { 'after-provision' }
+    }
+    # Отказ --set-sparse -Install не обрывает: остальные шаги доводятся, в
+    # конце — ненулевой код с этим текстом, как при отказе расписания бэкапа.
+    $sparseProblem = ''
     $scheduleArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Install')
     if ($DryRun) { $scheduleArgs += '-DryRun' }
+    $scheduleArgs += @('-DeployDir', $DeployDir)
+    # Подмены сухого прогона — и вложенному сухому прогону расписания.
+    if ($DryRun) {
+        if ($AssumeEngineState) { $scheduleArgs += @('-AssumeEngineState', $AssumeEngineState) }
+        if ($AssumeDeploySettings) { $scheduleArgs += @('-AssumeDeploySettings', $AssumeDeploySettings) }
+        if ($wslFake) { $scheduleArgs += @('-WslExe', $wslFake) }
+    }
 
     if ($DryRun) {
+        Write-Output (Format-SettingsSource)
         Write-Output "distro: $Distro"
         Write-Output ('distro.registered: {0}' -f $registered)
         if (-not $registered) {
             Write-Output "distro.image: $ImageBase/$ImageFile"
             Write-Output "distro.sha256sums: $ImageBase/SHA256SUMS"
             Write-Output ('distro.import: wsl.exe {0}' -f ($importArgs -join ' '))
+            Write-Output ('distro.sparse: wsl.exe {0} (after import)' -f ($sparseArgs -join ' '))
         }
         Write-Output ('provision: wsl.exe {0}' -f ($provisionArgs -join ' '))
         Write-Output ('provision.restart: код 3 — wsl.exe --terminate {0} и повтор' -f $Distro)
         Write-Output ('provision.terminate: wsl.exe --terminate {0}' -f $Distro)
+        if ($sparseStep -eq 'after-provision') { Write-Output ('distro.sparse: wsl.exe {0} (disk not sparse; after provision terminate, before keeper resume)' -f ($sparseArgs -join ' ')) }
+        elseif ($sparseStep -eq 'none') { Write-Output 'distro.sparse: none (ext4.vhdx already SparseFile)' }
+        elseif ($sparseStep -eq 'not-inspected') { Write-Output ('distro.sparse: disk not inspected (assumed engine state or -WslExe); not SparseFile - wsl.exe {0} after provision terminate' -f ($sparseArgs -join ' ')) }
         Write-Output ('engine.running: {0}' -f [bool]$engineRunning)
         if ($engineRunning) { Write-Output ('keeper.resume: Start-ScheduledTask {0}' -f $KeeperTask) }
         # ASCII, как остальные строки сухого прогона: кириллица в выводе
@@ -1088,8 +1347,10 @@ if ($Install) {
         Stop-WithError 'нужен терминал администратора. Запустите терминал «от имени администратора» и повторите.'
     }
     if ($wslConfig.Conflict) {
-        Stop-WithError "$WslConfigPath задаёт $($wslConfig.Conflict) — чужая настройка не переписывается; движку нужны networkingMode=nat и localhostForwarding (README, «Автозапуск после перезагрузки»)"
+        Stop-WithError "$WslConfigPath задаёт $($wslConfig.Conflict) — чужая настройка не переписывается; движку нужны networkingMode=nat, localhostForwarding, sparseVhd=true и autoMemoryReclaim=gradual (README, «Автозапуск после перезагрузки»)"
     }
+    if ($deploySettings.Source -eq 'deploy') { Write-Output "настройки стека: из $DeployDir/.env внутри $Distro" }
+    else { Write-Output "настройки стека: значения по умолчанию из docker-compose.yml — $($deploySettings.Detail)" }
     if ($listen.Reason) { Stop-WithError "адрес хоста в ЛВС для portproxy: $($listen.Reason)" }
     if ($ipHelperProblem) { Stop-WithError $ipHelperProblem }
     if ($firewallProfileProblem) { Stop-WithError $firewallProfileProblem }
@@ -1121,6 +1382,10 @@ if ($Install) {
         if ($import.Code -ne 0) { Stop-WithError "wsl --import: код $($import.Code): $(Format-Native $import)" }
         Remove-Item -LiteralPath $tar, $sumsFile -Force -ErrorAction SilentlyContinue
         Write-Output "дистрибутив $Distro создан из $ImageFile (целостность загрузки: SHA256 сошёлся с SHA256SUMS того же сервера; подлинность не проверялась)"
+        # Разреженный диск — сразу после импорта: дистрибутив ещё не запущен.
+        $sparseProblem = Set-DistroSparse $Distro
+        if (-not $sparseProblem) { Write-Output "диск дистрибутива $Distro разреженный (wsl --manage --set-sparse true)" }
+        else { Write-Warning $sparseProblem }
     }
 
     # Держалка снова, если работала до -Install: $true — запущена.
@@ -1169,6 +1434,15 @@ if ($Install) {
     if ($disabled.Count) { Stop-Install "не в автозапуске systemd дистрибутива: $($disabled -join '; ')" }
     Write-Output "$($EngineUnits -join ', ') в автозапуске systemd дистрибутива"
 
+    # Разреженный диск зарегистрированного дистрибутива без SparseFile — в
+    # окне после wsl --terminate выше, до возврата держалки: --set-sparse
+    # требует остановленного дистрибутива.
+    if ($sparseStep -eq 'after-provision') {
+        $sparseProblem = Set-DistroSparse $Distro
+        if (-not $sparseProblem) { Write-Output "диск дистрибутива $Distro сделан разреженным (wsl --manage --set-sparse true)" }
+        else { Write-Warning $sparseProblem }
+    }
+
     # 3–4. Задачи; -Force заменяет прежние.
     # Отказ регистрации — тоже после остановки дистрибутива: через Stop-Install.
     try {
@@ -1194,10 +1468,10 @@ if ($Install) {
         if ($wslSave -eq 'backup') { Copy-Item -LiteralPath $WslConfigPath -Destination "$WslConfigPath.domovoy-backup" }
         elseif ($wslSave -eq 'absent') { $null = New-Item -ItemType File -Path "$WslConfigPath.domovoy-absent" }
         [IO.File]::WriteAllText($WslConfigPath, $wslConfig.Content, (New-Object Text.UTF8Encoding($false)))
-        Write-Output "${WslConfigPath}: networkingMode=nat записан; применится после wsl --shutdown (README)"
+        Write-Output ("${WslConfigPath}: дописано {0}; применится после wsl --shutdown (README)" -f ((@($wslConfig.Missing) + @(if ($wslConfig.OwnMirrored) { 'networkingMode=nat вместо своего mirrored' })) -join ', '))
     }
     else {
-        Write-Output "${WslConfigPath}: networkingMode=nat уже задан"
+        Write-Output "${WslConfigPath}: networkingMode=nat, sparseVhd=true и autoMemoryReclaim=gradual уже заданы"
     }
 
     # 6. Правило firewall Windows: пересоздаётся с теми же параметрами.
@@ -1244,14 +1518,21 @@ if ($Install) {
         Write-Output @"
 
 Дальше (README, «Автозапуск после перезагрузки»): wsl --shutdown — применяет
-networkingMode=nat и гасит все дистрибутивы пользователя; затем
+.wslconfig (networkingMode=nat, sparseVhd, autoMemoryReclaim) и гасит все
+дистрибутивы пользователя; затем
 Start-ScheduledTask $KeeperTask и проверка всех звеньев — -Check.
 Предусловия: BIOS — включаться после пропадания питания; BitLocker без PIN;
 адрес хоста в ЛВС закреплён в DHCP роутера — сменился адрес, повторите -Install.
 "@
     }
+    # Отказы шагов, после которых остальное доведено: ненулевой код в конце.
+    $finalProblems = @()
+    if ($sparseProblem) { $finalProblems += $sparseProblem }
     if ($scheduleCode -ne 0) {
-        Stop-WithError "расписание бэкапа не поставлено (ops/backup/install-schedule.ps1, код $scheduleCode) — остальное настроено"
+        $finalProblems += "расписание бэкапа не поставлено (ops/backup/install-schedule.ps1, код $scheduleCode)"
+    }
+    if ($finalProblems.Count) {
+        Stop-WithError (($finalProblems -join '; ') + ' — остальное настроено')
     }
     exit 0
 }
@@ -1265,9 +1546,24 @@ function Add-Result([string]$State, [string]$Link, [string]$Detail) {
     Write-Output $line
 }
 
-$registered = (Get-WslNames @('--list', '--quiet')) -contains $Distro
 if ($registered) { Add-Result 'OK' 'дистрибутив зарегистрирован' $Distro }
 else { Add-Result 'FAIL' 'дистрибутив зарегистрирован' "нет $Distro — engine-setup.ps1 -Install" }
+
+# Настройки стека (порты, проект) — из .env каталога развёртывания; не
+# прочитаны — дальше звенья идут по значениям по умолчанию.
+$settingsLink = 'настройки каталога развёртывания'
+if ($deploySettings.Error) { Add-Result 'FAIL' $settingsLink "$($deploySettings.Error) — дальше значения по умолчанию из docker-compose.yml" }
+elseif ($deploySettings.Source -eq 'deploy') { Add-Result 'OK' $settingsLink $deploySettings.Detail }
+else { Add-Result 'SKIP' $settingsLink "не прочитаны: $($deploySettings.Detail) — дальше значения по умолчанию из docker-compose.yml" }
+
+# Диск дистрибутива — разреженный: атрибут файла, а не обещание WSL.
+$sparseLink = 'диск дистрибутива разреженный'
+if (-not $registered) { Add-Result 'SKIP' $sparseLink 'не проверено — дистрибутив не зарегистрирован' }
+else {
+    $diskPath = Get-DistroDiskPath $Distro
+    $sparseCheck = Get-SparseDiskCheck $diskPath (Get-DiskAttributes $diskPath)
+    Add-Result $sparseCheck.State $sparseLink $sparseCheck.Detail
+}
 
 $keeper = Get-ScheduledTask -TaskName $KeeperTask -ErrorAction SilentlyContinue
 if (-not $keeper) {
@@ -1304,9 +1600,14 @@ else {
     $measureProject = if ($m.Success) { $m.Groups[1].Value } else { '' }
     $m = [regex]::Match($measureArgs, '-Distro\s+(\S+)')
     $measureDistro = if ($m.Success) { $m.Groups[1].Value } else { '' }
+    $m = [regex]::Match($measureArgs, '-DeployDir\s+"?([^"\s]+)')
+    $measureDeployDir = if ($m.Success) { $m.Groups[1].Value } else { '' }
     if ($measurePort -ne $apiPort) { Add-Result 'FAIL' 'задача замера' "порт задачи $measurePort, API_HTTP_PORT $apiPort — переустановите: -Install" }
     elseif ($measureProject -cne $project -or $measureDistro -cne $Distro) {
         Add-Result 'FAIL' 'задача замера' "проект задачи «$measureProject», COMPOSE_PROJECT_NAME «$project»; дистрибутив «$measureDistro» — хронология контейнеров не та; переустановите: -Install"
+    }
+    elseif ($measureDeployDir -cne $DeployDir) {
+        Add-Result 'FAIL' 'задача замера' "каталог развёртывания задачи «$measureDeployDir», нужен «$DeployDir» — зонд идёт не там; переустановите: -Install"
     }
     elseif ([string]$measure.Principal.LogonType -ne 'S4U' -or [string]$measure.Principal.RunLevel -ne 'Limited') {
         Add-Result 'FAIL' 'задача замера' "принципал $($measure.Principal.UserId), $($measure.Principal.LogonType), $($measure.Principal.RunLevel) — нужен пользователь с S4U и Limited: задача исполняет файл из клона"
@@ -1314,8 +1615,13 @@ else {
     else { Add-Result 'OK' 'задача замера' "порт $measurePort, проект $measureProject" }
 }
 
-$wslCheck = Get-WslConfigCheck (Get-WslConfigPlan $WslConfigPath)
+$wslPlan = Get-WslConfigPlan $WslConfigPath
+$wslCheck = Get-WslConfigCheck $wslPlan
 Add-Result $wslCheck.State '.wslconfig: networkingMode=nat' $wslCheck.Detail
+$wslCheck = Get-WslConfigKeyCheck $wslPlan 'sparseVhd'
+Add-Result $wslCheck.State '.wslconfig: sparseVhd=true' $wslCheck.Detail
+$wslCheck = Get-WslConfigKeyCheck $wslPlan 'autoMemoryReclaim'
+Add-Result $wslCheck.State '.wslconfig: autoMemoryReclaim=gradual' $wslCheck.Detail
 
 # Правило firewall Windows: через него устройства в ЛВС доходят до
 # portproxy на адресе хоста.
@@ -1402,7 +1708,8 @@ $running = (Get-WslNames @('--list', '--running', '--quiet')) -contains $Distro
 $journalLink = 'журнал systemd на диске, сброс ≤ 10 с'
 $driverLink = 'docker: драйвер логов journald'
 $containerLogLink = 'логи контейнеров проекта в journald'
-$inner = @($EngineUnits | ForEach-Object { "$_ в автозапуске" }) + @($journalLink, $driverLink, 'restart: unless-stopped у контейнеров проекта', $containerLogLink, 'порт замера = опубликованный порт api')
+$workingDirLink = 'стек поднят из каталога развёртывания'
+$inner = @($EngineUnits | ForEach-Object { "$_ в автозапуске" }) + @($journalLink, $driverLink, 'restart: unless-stopped у контейнеров проекта', $containerLogLink, 'порт замера = опубликованный порт api', $workingDirLink)
 if (-not $running) {
     foreach ($link in $inner) { Add-Result 'SKIP' $link 'не проверено — дистрибутив не запущен' }
 }
@@ -1471,6 +1778,15 @@ else {
     elseif (-not $published.Success) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' 'api не запущен или порт не опубликован' }
     elseif ([int]$published.Groups[1].Value -ne $measurePort) { Add-Result 'FAIL' 'порт замера = опубликованный порт api' "api опубликован на $($published.Groups[1].Value), задача замера — $measurePort" }
     else { Add-Result 'OK' 'порт замера = опубликованный порт api' "$measurePort" }
+    # Стек поднят из каталога развёртывания, а не из клона Windows: метка
+    # working_dir, которую compose ставит контейнерам при создании.
+    $workingDirs = Invoke-Wsl (Get-WorkingDirQuery $Distro $project)
+    if ($workingDirs.Code -ne 0) { Add-Result 'FAIL' $workingDirLink "docker ps: код $($workingDirs.Code): $(Format-Native $workingDirs)" }
+    else {
+        # Строка на контейнер; пустая — контейнер без метки.
+        $workingDirCheck = Get-StackWorkingDirCheck @($workingDirs.Lines) $DeployDir
+        Add-Result $workingDirCheck.State $workingDirLink $workingDirCheck.Detail
+    }
 }
 
 # /health с хоста тремя путями, все в итоге. 127.0.0.1 и [::1] — петля, в
@@ -1498,7 +1814,7 @@ if (-not $backupTaskObject) {
     Add-Result 'FAIL' 'расписание бэкапа' "нет задачи $BackupTask"
 }
 else {
-    $schedule = Invoke-Native (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Check')
+    $schedule = Invoke-Native (Get-Process -Id $PID).Path @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $scheduleScript, '-Check', '-DeployDir', $DeployDir)
     $scheduleCode = $schedule.Code
     foreach ($line in $schedule.Lines) { Write-Output "     | $line" }
     foreach ($line in $schedule.ErrLines) { Write-Output "     | stderr: $line" }
