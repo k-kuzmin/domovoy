@@ -18,7 +18,8 @@
 #     (образы, строители, контейнеры-потребители образов, слушатели портов),
 #     а sh, wslpath и ss исполняются локально, с HOME во временном каталоге —
 #     это и есть файловая система «дистрибутива»;
-#   - cygpath и wslpath — пути как есть;
+#   - cygpath — путь как есть; wslpath — как есть или по карте wslpath_map
+#     (её же подделка wsl.exe применяет обратно к аргументам команд);
 #   - ss и netstat — слушатели из файлов состояния;
 #   - netsh.exe — исключённые диапазоны портов Windows из файла состояния;
 #   - git — подменяет только worktree list, остальное отдаёт настоящему git;
@@ -134,6 +135,20 @@ if [ "$cmd" = sh ] && [ -f "$FAKE_STATE/race" ]; then
             ;;
     esac
 fi
+# Путь дистрибутива из wslpath_map ведёт в каталог хоста — как /mnt/d/… в
+# настоящем WSL. Только с границей каталога: /srv/domovoy не трогает
+# /srv/domovoy-dev.
+if [ -f "$FAKE_STATE/wslpath_map" ]; then
+    mapped=()
+    for a in "$@"; do
+        while IFS=$'\t' read -r from to; do
+            if [ "$a" = "$to" ]; then a="$from"; break; fi
+            case "$a" in "$to"/*) a="$from${a#"$to"}"; break ;; esac
+        done < "$FAKE_STATE/wslpath_map"
+        mapped+=("$a")
+    done
+    set -- "${mapped[@]}"
+fi
 HOME="$FAKE_HOME" exec "$cmd" "$@"
 EOF
 
@@ -234,9 +249,17 @@ cat > "$BIN/cygpath" <<'EOF'
 printf '%s\n' "${*: -1}"
 EOF
 
+# Отображение путей — строки «<путь хоста>\t<путь в дистрибутиве>» файла
+# wslpath_map; без строки путь как есть.
 cat > "$BIN/wslpath" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "${*: -1}"
+arg="${*: -1}"
+if [ -f "$FAKE_STATE/wslpath_map" ]; then
+    while IFS=$'\t' read -r from to; do
+        [ "$arg" = "$from" ] && { printf '%s\n' "$to"; exit 0; }
+    done < "$FAKE_STATE/wslpath_map"
+fi
+printf '%s\n' "$arg"
 EOF
 
 cat > "$BIN/ss" <<'EOF'
@@ -471,8 +494,39 @@ end_case
 begin_case 'отказ: каталог боевого стека — источник равен основному дереву'
 run_stand "$CLONE" up --name 7
 expect_status 1
-expect_err_first "каталог проекта — каталог боевого стека: $CLONE"
+expect_err_first "каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: $CLONE"
 expect_no_changes
+end_case
+
+begin_case 'отказ: источник — каталог развёртывания /srv/domovoy'
+for wd in /srv/domovoy /srv/domovoy/; do
+    for sub in up down; do
+        reset_engine
+        printf '%s\n' "$wd" > "$STATE/prod_wd"
+        printf '%s\t/srv/domovoy\n' "$WORKTREE" > "$STATE/wslpath_map"
+        run_stand "$WORKTREE" "$sub" --name 7
+        expect_status 1
+        first="$(printf '%s\n' "$ERR" | head -n 1)"
+        [ "$first" = 'stand: отказ: каталог проекта — каталог боевого стека: /srv/domovoy' ] \
+            || fail_case "метка «$wd», $sub: первая строка stderr «$first»"
+        expect_no_changes
+    done
+done
+end_case
+
+begin_case 'контроль: боевой стек в /srv/domovoy, источник рядом проходит'
+printf '/srv/domovoy\n' > "$STATE/prod_wd"
+# Ловушка префикса: /srv/domovoy-dev начинается с /srv/domovoy.
+printf '%s\t/srv/domovoy-dev\n' "$WORKTREE" > "$STATE/wslpath_map"
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+log_has 'compose -p domovoy-stand-7'
+log_has 'DOMOVOY_STAND_SOURCE=/srv/domovoy-dev '
+reset_engine
+printf '/srv/domovoy\n' > "$STATE/prod_wd"
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+log_has 'compose -p domovoy-stand-7'
 end_case
 
 begin_case 'отказ: каталог боевого стека — источник равен working_dir'
