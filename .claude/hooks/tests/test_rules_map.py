@@ -38,11 +38,18 @@ NUMBER_WORDS = {3: ("трёх", "три пункта"), 4: ("четырёх", "�
                 6: ("шести", "шесть пунктов"), 7: ("семи", "семь пунктов"), 8: ("восьми", "восемь пунктов")}
 
 
+def triage_points(text):
+    """Нумерованные пункты верхнего уровня под заголовком критериев (до следующего «## »),
+    каждый — одной строкой: перенос по ширине не рвёт фразу."""
+    section = text.split(TRIAGE_HEADING, 1)[1].split("\n## ", 1)[0] if TRIAGE_HEADING in text else ""
+    parts = re.split(r"(?m)^\d+\.\s", section)[1:]
+    return [" ".join(p.split()) for p in parts]
+
+
 def triage_point_mismatch(text):
     """Фразы вердикта, которых нет в тексте при фактическом числе нумерованных пунктов
     верхнего уровня под заголовком критериев (до следующего «## »)."""
-    section = text.split(TRIAGE_HEADING, 1)[1].split("\n## ", 1)[0] if TRIAGE_HEADING in text else ""
-    n = len(re.findall(r"(?m)^\d+\.\s", section))
+    n = len(triage_points(text))
     if n not in NUMBER_WORDS:
         return ["пунктов: %d" % n]
     gen, nom = NUMBER_WORDS[n]
@@ -225,7 +232,12 @@ class TableShape(unittest.TestCase):
         """Вердикт «готова» в docs/rules/triage.md называет число пунктов словом; новый пункт
         без правки фраз вердикта оставил бы его необязательным для ready."""
         with io.open(os.path.join(REPO_ROOT, "docs", "rules", "triage.md"), encoding="utf-8") as fh:
-            self.assertEqual(triage_point_mismatch(fh.read()), [])
+            text = fh.read()
+        self.assertEqual(triage_point_mismatch(text), [])
+        # Пункт 5 — задача, опирающаяся на ещё не закрытую, «не готова до #<номер>» (#169).
+        points = triage_points(text)
+        self.assertEqual(len(points), 5)
+        self.assertIn("не готова до #", points[4])
 
     def test_triage_mismatch_is_caught(self):
         text = ("## Задача готова к работе, если выполнено всё\n\n1. а\n   продолжение\n2. б\n3. в\n"
