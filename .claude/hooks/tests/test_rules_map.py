@@ -32,6 +32,23 @@ def dead_docs(table, root=REPO_ROOT):
             if not os.path.exists(os.path.join(root, r.get("doc") or "docs/rules/%s.md" % r["name"]))]
 
 
+TRIAGE_HEADING = "## Задача готова к работе, если выполнено всё"
+# Число пунктов — словом в двух формах вердикта: «при выполнении всех N» и «выполнены все N».
+NUMBER_WORDS = {3: ("трёх", "три пункта"), 4: ("четырёх", "четыре пункта"), 5: ("пяти", "пять пунктов"),
+                6: ("шести", "шесть пунктов"), 7: ("семи", "семь пунктов"), 8: ("восьми", "восемь пунктов")}
+
+
+def triage_point_mismatch(text):
+    """Фразы вердикта, которых нет в тексте при фактическом числе нумерованных пунктов
+    верхнего уровня под заголовком критериев (до следующего «## »)."""
+    section = text.split(TRIAGE_HEADING, 1)[1].split("\n## ", 1)[0] if TRIAGE_HEADING in text else ""
+    n = len(re.findall(r"(?m)^\d+\.\s", section))
+    if n not in NUMBER_WORDS:
+        return ["пунктов: %d" % n]
+    gen, nom = NUMBER_WORDS[n]
+    return [p for p in ("всех %s пунктов" % gen, "все %s" % nom) if p not in text]
+
+
 def step_agents():
     names = [os.path.splitext(os.path.basename(p))[0]
              for p in glob.glob(os.path.join(REPO_ROOT, ".claude", "agents", "step-*.md"))]
@@ -203,6 +220,18 @@ class TableShape(unittest.TestCase):
         self.assertRegex(note, r"п\. 10[–-]11")
         self.assertIn("BEHIND", note)
         self.assertIn("DIRTY", note)
+
+    def test_triage_verdict_counts_every_point(self):
+        """Вердикт «готова» в docs/rules/triage.md называет число пунктов словом; новый пункт
+        без правки фраз вердикта оставил бы его необязательным для ready."""
+        with io.open(os.path.join(REPO_ROOT, "docs", "rules", "triage.md"), encoding="utf-8") as fh:
+            self.assertEqual(triage_point_mismatch(fh.read()), [])
+
+    def test_triage_mismatch_is_caught(self):
+        text = ("## Задача готова к работе, если выполнено всё\n\n1. а\n   продолжение\n2. б\n3. в\n"
+                "4. г\n5. д\n\nтолько при выполнении всех четырёх пунктов.\n\n## Дальше\n\n6. е\n"
+                "- **ready** — true только если выполнены все четыре пункта\n")
+        self.assertEqual(triage_point_mismatch(text), ["всех пяти пунктов", "все пять пунктов"])
 
     def test_for_subagents_and_note_go_together(self):
         half = [r["name"] for r in TABLE if bool(r.get("for_subagents")) != bool(r.get("subagent_note"))]
