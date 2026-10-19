@@ -414,10 +414,14 @@ cmd_up() {
     # config/ внутри читает непривилегированный пользователь контейнера api.
     say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
     claim="$(in_distro 'umask 022; mkdir -p "${1%/*}" 2>/dev/null; if mkdir "$1" 2>/dev/null; then if { printf "%s\n" "$3" > "$1/$2"; } 2>/dev/null; then echo claimed; else rmdir "$1"; echo error; fi; elif [ -e "$1" ]; then echo taken; else echo error; fi' \
-        "$standdir" "$STAND_MARK" "$project")"
+        "$standdir" "$STAND_MARK" "$project" 2>/dev/null)" || claim=''
+    # Пустой ответ — вызов не прошёл целиком (движок пропал, wsl.exe вернул
+    # ошибку): причина — движок, а не права на родителя. stderr вызова
+    # глушится, чтобы строка отказа шла в stderr первой.
     case "$claim" in
         claimed) ;;
         taken) refuse "$busy_reason" ;;
+        '') refuse "$engine_down_reason" ;;
         *) refuse "каталог стенда $standdir не создан: родитель ~/domovoy-stand недоступен или нет прав" ;;
     esac
     # Дальше refuse нет: каждый выход — через fail_up, который сносит каталог

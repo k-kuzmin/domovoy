@@ -109,6 +109,12 @@ if [ -f "$FAKE_STATE/no_distro" ]; then
     exit 1
 fi
 printf '%s\n' "$*" >> "$FAKE_LOG"
+# Сбой самого вызова захвата: wsl.exe вернул ошибку, скрипт захвата не выполнен.
+if [ -f "$FAKE_STATE/claim_fail" ]; then
+    case "$*" in
+        *claimed*) echo 'Catastrophic failure' >&2; exit 1 ;;
+    esac
+fi
 cmd="$1"
 shift
 if [ "$cmd" = env ]; then
@@ -621,6 +627,16 @@ expect_status 1
 expect_err_first "каталог стенда $FAKE_HOME/domovoy-stand/7 не создан"
 case "$ERR" in *'уже поднят'*) fail_case 'ошибка mkdir выдана за занятый номер' ;; esac
 [ "$(cat "$FAKE_HOME/domovoy-stand" 2>/dev/null)" = not-a-dir ] || fail_case 'файл ~/domovoy-stand изменён или удалён'
+log_lacks_re 'compose -p|buildx'
+log_lacks_re 'rm -rf'
+end_case
+
+begin_case 'up: вызов захвата не прошёл — отказ причиной движка, а не прав'
+: > "$STATE/claim_fail"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first 'недоступен; Docker Desktop не запускать'
+case "$ERR" in *'нет прав'*) fail_case 'сбой вызова выдан за отсутствие прав' ;; esac
 log_lacks_re 'compose -p|buildx'
 log_lacks_re 'rm -rf'
 end_case
