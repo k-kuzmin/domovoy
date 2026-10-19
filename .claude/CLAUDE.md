@@ -64,7 +64,13 @@ python хук пропускает вызов, а не отказывает). `s
   worktree at …» значит, что ветку ведёт другая сессия, — стоп и вопрос
   человеку. Основное дерево не переключается — `git switch` и `git checkout`
   в нём не делаются: там может идти параллельная сессия, и чистый
-  `git status` этого не доказывает.
+  `git status` этого не доказывает. `git pull --ff-only` — не
+  переключение: ветка не меняется, история не переписывается. Он делается
+  только в уборке п. 11 «Рекомендованного порядка» и только при двух
+  условиях: `git branch --show-current` — `main`, а
+  `git status --porcelain` пуст. Риск при этом принятый, а не исключённый:
+  параллельная сессия в основном дереве увидит новые файлы `main` — тот же
+  исход, что от её собственного `git pull`.
 - **«Только до маршрута» — стоп на маршруте.** Если просили довести до
   уровня риска и маршрута, дальше не идти.
 
@@ -121,15 +127,50 @@ python хук пропускает вызов, а не отказывает). `s
     «ожидание мерджа PR #N»: ожидание живёт не дольше сессии, а
     возобновлённая сессия начинает с
     `gh pr view <N> --json state,mergeStateStatus`. Исход
-    `MERGED` — оркестратор закрывает задачу, ставит статус доски
-    `bash scripts/board.sh <номер issue> Done` — до выхода из worktree: в основном
-    дереве сценария может ещё не быть; ненулевой код шаг не останавливает и
-    уходит сообщением человеку в сессии, а не в журнал — журнал уже в `main`,
-    а коммитов после мерджа нет (раздел «Git»). Затем оркестратор выходит из
-    worktree (ExitWorktree, `action: keep`) и из основного дерева убирает
-    `git worktree remove .claude/worktrees/<N>` (и worktree срезов с их
-    ветками, если остались), затем локальную ветку — `git branch -D` — и
-    `git fetch --prune`: ветку на origin GitHub удаляет при мердже сам.
+    `MERGED` — оркестратор закрывает задачу и убирает за ней по порядку:
+
+    1. **Статус доски** — `bash scripts/board.sh <номер issue> Done`, ещё
+       в worktree задачи: в основном дереве сценария может ещё не быть;
+       ненулевой код шаг не останавливает и уходит сообщением человеку в
+       сессии, а не в журнал — журнал уже в `main`, а коммитов после
+       мерджа нет (раздел «Git»).
+    2. **Стенды задачи — до выхода из worktree:** из основного дерева
+       `stand.sh` отказывает. Номер задачи и номера срезов из журнала —
+       `bash scripts/stand.sh status --name <N>`; поднятый стенд —
+       `bash scripts/stand.sh down --name <N>`.
+    3. **Остатки проб в движке — до выхода из worktree.** Пробы задачи —
+       `bash deploy/windows/docker-wsl.sh ps -a --filter label=domovoy-stand.probe=<N>`
+       (их удаляет и `stand.sh down`), оставшиеся —
+       `bash deploy/windows/docker-wsl.sh rm -f -v <ID>`. Затем контрольные
+       `bash deploy/windows/docker-wsl.sh ps -a`,
+       `bash deploy/windows/docker-wsl.sh volume ls --filter dangling=true`
+       и `bash deploy/windows/docker-wsl.sh image ls` — сверка с базовым
+       снимком в журнале (`docs/rules/implement.md`, «Живая проверка — на
+       стенде»). Удаляется только появившееся за задачу, остальное —
+       сообщением человеку.
+    4. **Выход из worktree** — ExitWorktree, `action: keep`. Дальше — из
+       основного дерева.
+    5. **`git fetch --prune`** — до сверки веток: без него `origin/main`
+       ещё без мерджа PR, и `git cherry` ниже печатает «+» на каждом
+       коммите. Ветку на origin GitHub удаляет при мердже сам.
+    6. **Worktree и ветки.** `git worktree remove .claude/worktrees/<N>`,
+       затем локальная ветка задачи — `git branch -D`. Worktree и ветки
+       срезов ищутся тремя способами: `git worktree list`, каталоги
+       `.claude/worktrees/agent-*` на диске (и выпавшие из списка),
+       `git branch --list 'slice/<N>-*' 'worktree-agent-*'`. Удаляются
+       worktree на ветке `slice/<N>-*`, затем ветки `slice/<N>-*` и
+       `worktree-agent-*`, которые не выбраны ни в одном worktree и у
+       которых `git cherry origin/main <ветка>` не печатает ни одной строки
+       с «+» — все их коммиты уже в `main`. Остальное, включая каталоги
+       вне `git worktree list`, — списком человеку, а не удалением: в
+       основном дереве может работать параллельная сессия, и её свежий
+       worktree агента ещё без коммитов. Отказ `git worktree remove`
+       (Permission denied) — сообщение человеку.
+    7. **Подтягивание main в основном дереве.** `git branch --show-current`
+       печатает `main`, а `git status --porcelain` пуст —
+       `git pull --ff-only`; иначе — сообщение человеку с причиной, без
+       `switch`, `stash` и `reset` («Первые ходы»).
+
     Исход `CLOSED` без мерджа — вопрос человеку, ничего не удаляется. Исходы
     `BEHIND` и `DIRTY` — main ушёл вперёд (без конфликта или с ним), и
     смерджить PR владелец не может. Исход только будит оркестратора, решает
@@ -354,10 +395,14 @@ gitleaks git --redact --no-banner                # вся история
 gitleaks dir . --redact --no-banner              # рабочий каталог
 
 # Стек — docker только в движке domovoy-engine, через обёртку.
-# Боевой стек (проект domovoy) поднимает и сносит владелец — «Команды
-# человека» ниже; агенту — только чтение.
-bash deploy/windows/docker-wsl.sh compose logs -f api
-bash deploy/windows/docker-wsl.sh compose ps
+# Боевой стек (проект domovoy, каталог развёртывания /srv/domovoy)
+# обновляет владелец — deploy/windows/update.ps1, «Команды человека» ниже;
+# агенту — только чтение, и только с явным -p domovoy: без него обёртка
+# читает проект текущего клона. Клон разработки работает со своим
+# COMPOSE_PROJECT_NAME (не domovoy) — иначе его compose пересоздаёт
+# боевые контейнеры.
+bash deploy/windows/docker-wsl.sh compose -p domovoy logs -f api
+bash deploy/windows/docker-wsl.sh compose -p domovoy ps
 curl -s http://localhost:18080/health
 
 # Стенд агента для живой проверки — docs/rules/implement.md,
@@ -366,6 +411,7 @@ bash scripts/stand.sh up     [--name <N>]
 bash scripts/stand.sh status [--name <N>]
 bash scripts/stand.sh logs   [--name <N>] [--] [аргументы compose logs]
 bash scripts/stand.sh down   [--name <N>]
+bash scripts/stand.sh probe  [--name <N>] <ресурс>
 
 # Обвязка: риск, план, совет, гейт, построчные замечания, ожидание мерджа,
 # статус доски
@@ -387,20 +433,30 @@ python3 -m unittest discover -s .claude/hooks/tests -v
 
 **Команды человека.** Применение миграций к базе и секреты агенту закрыты
 правами `.claude/settings.json`: их человек запускает сам, в сессии — через
-`!`. Секреты локально — только так, никогда в файлах проекта. Подъём и
-снос боевого стека правами не закрыты, но тоже команды человека: агенту —
+`!`. Секреты локально — только так, никогда в файлах проекта. Обновление
+боевого стека правами не закрыто, но тоже команда человека: агенту —
 стенд (`docs/rules/implement.md`, «Живая проверка — на стенде»).
+
+Боевой стек живёт в каталоге развёртывания `/srv/domovoy` внутри движка, а
+не в клоне Windows: клон разработки и worktree задачи — не путь боевого
+стека. `compose` с подъёмом или сносом из клона или worktree агент не
+запускает: без своего `COMPOSE_PROJECT_NAME` он поднял бы или снёс проект
+`domovoy` поверх боевого.
 
 ```bash
 dotnet ef database update --project src/Domovoy.Data --startup-project src/Domovoy.Api
 cd src/Domovoy.Api && dotnet user-secrets set "Ha:Token" "<значение>"
 cd src/Domovoy.Api && dotnet user-secrets list
 
-# Подъём и снос боевого стека (проект domovoy) — из каталога боевого стека:
-# из worktree без .env обёртка подняла бы или снесла тот же проект domovoy.
-bash deploy/windows/docker-wsl.sh compose up -d --build --wait
-bash deploy/windows/docker-wsl.sh compose down
+# Обновление боевого стека в /srv/domovoy одной командой: бэкап, миграция,
+# перезапуск, проверка /health, откат при провале. -DryRun — только план.
+powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 [-DryRun]
+# Ручной путь изнутри дистрибутива — шапка deploy/update.sh.
 ```
+
+Команда владельцу с путём дистрибутива (`/srv/…`) пишется в форме
+PowerShell или с префиксом `MSYS_NO_PATHCONV=1`: Git Bash переписывает
+аргумент `/srv/…` в путь Windows, и команда уходит не туда.
 
 ### Поиск по коду
 

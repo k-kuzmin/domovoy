@@ -6,6 +6,7 @@
 #   bash scripts/stand.sh status [--name <N>]
 #   bash scripts/stand.sh logs   [--name <N>] [--] [аргументы compose logs]
 #   bash scripts/stand.sh down   [--name <N>]
+#   bash scripts/stand.sh probe  [--name <N>] <ресурс>
 #
 # ЧТО ЭТО
 #
@@ -22,7 +23,10 @@
 # config/ владельца стенду недостижимы при любом каталоге запуска. .env
 # стенда собирается только из .env.example, config/ — из config/*.example.*.
 #
-# up: проверки отказа до первого изменения → postgres и HA → затравка
+# up: проверки отказа до первого изменения, среди них — стенд с этим N уже
+# поднят или поднимается (свой каталог с меткой) и порты → захват каталога
+# стенда одним mkdir с меткой (каталог появился в другой сессии — тот же
+# отказ, без сноса) → postgres и HA → затравка
 # configuration.yaml HA до его первого старта → онбординг и переименование
 # сущностей demo в id реестра-примера (deploy/stand/ha-onboard.py внутри
 # контейнера HA) → долгоживущий токен HA в .env стенда, без вывода → сборка
@@ -35,10 +39,35 @@
 # без своего тега, тома и сеть проекта), buildx rm строителя стенда без
 # --keep-state (контейнер и том состояния с кэшем сборки), базовые образы,
 # которые вытянул сам стенд, — по ID из pulled-images каталога стенда, без -f
-# и только если их не держит ни один контейнер. Общий кэш движка, образы
+# и только если их не держит ни один контейнер. Пока жив соседний стенд
+# (каталог ~/domovoy-stand/<M> с меткой), такой образ не удаляется, а его ID
+# дописывается в pulled-images соседа: образ удаляет последний снесённый
+# стенд. Предел: down перечисляет соседей один раз; стенд, захвативший
+# каталог позже и заставший образ, его не записал — образ останется в
+# движке лишним (утечка, а не потеря: недостающее вытягивают compose и
+# buildx). Так же и при одновременном down двух стендов: каждый видит
+# другого соседом и передаёт ему запись, оба удаляют свои каталоги —
+# запись теряется, образ остаётся. Брошенный каталог стенда с меткой (обрыв
+# процесса, забытый down) тоже считается соседом: образ передаётся ему и
+# живёт, пока не снесут этот стенд. Остаток виден по image ls движка. Общий кэш движка, образы
 # боевого стека и чужие объекты не трогаются: prune здесь нет. Каталог
 # стенда без метки .domovoy-stand, которую up пишет первой записью, не трогает
 # ни одна подкоманда: отказ.
+#
+# probe — имя, порт и метка временного контейнера пробы вне стенда
+# (реестр, postgres): три строки STAND_PROBE_NAME=domovoy-probe-<N>-<ресурс>,
+# STAND_PROBE_PORT — первый свободный из 20000+10·N…+9, STAND_PROBE_LABEL —
+# метка, по которой down удаляет контейнеры проб с томами (rm -f -v) до
+# сноса стенда. Ресурс — [a-z][a-z0-9-]{0,15}. probe ничего не меняет и не
+# требует поднятого стенда. Предел: порт не резервируется — два probe подряд
+# до запуска первого контейнера вернут один порт; контейнер пробы
+# запускается сразу после probe, следующий probe — после его запуска.
+#
+# Порт занят, если его слушает процесс в дистрибутиве (ss) или на хосте
+# (netstat) или он внутри исключённого диапазона Windows (netsh.exe
+# excludedportrange). Предел: исключения динамические, и между проверкой и
+# bind порт может в них попасть — проброс падает, up сносится через fail_up,
+# повтор probe берёт следующий порт десятка.
 #
 # Коды: 0 — успех; 1 — отказ по существу, первая строка stderr начинается
 # с «stand: отказ: »; 2 — ошибка вызова. Стенда нет (нет каталога стенда):
@@ -70,6 +99,7 @@ source_lx=''
 usage() {
     [ $# -gt 0 ] && printf 'stand: %s\n' "$1" >&2
     printf 'использование: bash scripts/stand.sh up|down|status|logs [--name <N>] [--] [аргументы logs]\n' >&2
+    printf '               bash scripts/stand.sh probe [--name <N>] <ресурс>\n' >&2
     exit 2
 }
 
@@ -88,12 +118,14 @@ say() {
 cmd="$1"
 shift
 case "$cmd" in
-    up|down|status|logs) ;;
+    up|down|status|logs|probe) ;;
     *) usage "неизвестная подкоманда: $cmd" ;;
 esac
 
 name=''
 extra=()
+resource=''
+have_resource=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --name)
@@ -111,12 +143,23 @@ while [ $# -gt 0 ]; do
             break
             ;;
         *)
-            [ "$cmd" = logs ] || usage "неизвестный аргумент: $1"
-            extra+=("$1")
+            if [ "$cmd" = probe ] && [ "$have_resource" -eq 0 ]; then
+                resource="$1"
+                have_resource=1
+            else
+                [ "$cmd" = logs ] || usage "неизвестный аргумент: $1"
+                extra+=("$1")
+            fi
             shift
             ;;
     esac
 done
+
+if [ "$cmd" = probe ]; then
+    [ "$have_resource" -eq 1 ] || usage 'probe без ресурса'
+    [[ "$resource" =~ ^[a-z][a-z0-9-]{0,15}$ ]] \
+        || usage "ресурс пробы — [a-z][a-z0-9-]{0,15}, получено «$resource»"
+fi
 
 if [ -z "$name" ]; then
     case "$SOURCE_DIR" in
@@ -139,6 +182,12 @@ project="domovoy-stand-$N"
 builder="$project-build"
 api_port=$((19000 + N))
 ha_port=$((9000 + N))
+# Пробы вне стенда: десяток портов 20000+10·N…+9 (20010–29999 не задевает
+# порты стендов и боевые) и метка, которую down сравнивает целиком. Ключ —
+# не «domovoy», точка и слово: такую форму gitleaks принимает за домен.
+probe_label="domovoy-stand.probe=$N"
+probe_first=$((20000 + 10 * N))
+probe_last=$((probe_first + 9))
 
 # --- Движок ------------------------------------------------------------------
 
@@ -199,9 +248,11 @@ while IFS= read -r wd; do
     esac
     [ "$source_lx" = "$wd" ] && refuse "каталог проекта — каталог боевого стека: $wd"
 done <<< "$(printf '%s\n' "$prod_dirs" | sort -u)"
-# Основное дерево не используется (.claude/CLAUDE.md, «Первые ходы»): стенд
-# запускается из worktree задачи.
-[ "$source_lx" = "${main_lx%/}" ] && refuse "каталог проекта — каталог боевого стека: $main_lx"
+# Основное дерево — клон разработки, а не каталог боевого стека (тот после
+# #162 в /srv/domovoy и узнаётся по метке выше); стенд из него не
+# запускается (.claude/CLAUDE.md, «Первые ходы»): только из worktree задачи.
+[ "$source_lx" = "${main_lx%/}" ] \
+    && refuse "каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: $main_lx"
 
 # Метка working_dir есть, только пока у боевого проекта есть контейнеры
 # (ps -a видит и остановленные). Не зависит от них принадлежность самого
@@ -214,6 +265,11 @@ owner="$(in_distro 'if [ ! -e "$1" ]; then echo absent; elif [ -f "$1/$2" ]; the
     "$standdir" "$STAND_MARK")" || refuse "$engine_down_reason"
 [ "$owner" = foreign ] \
     && refuse "каталог $standdir существует, но не принадлежит стенду: нет метки $STAND_MARK"
+# Свой каталог с меткой при up — стенд с этим N уже поднят или поднимается в
+# другой сессии. Проверка до портов: иначе живой стенд отказывал бы текстом
+# «порт занят», а не называл бы номер.
+busy_reason="стенд $project уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name $N или другой --name"
+[ "$cmd" = up ] && [ "$owner" = own ] && refuse "$busy_reason"
 if [ "$owner" = absent ]; then
     case "$cmd" in
         status) say "стенд $project не поднят"; exit 0 ;;
@@ -239,6 +295,14 @@ port_busy() {
             | awk -v p=":$port" '$1 ~ /^TCP/ { if (substr($2, length($2) - length(p) + 1) == p) f = 1 } END { exit !f }' \
             && return 0
     fi
+    # Исключённые диапазоны Windows (Hyper-V, WSL): слушателя там нет, а
+    # проброс порта на хосте падает. Строки из двух чисел — «начало конец»
+    # включительно; шапка на языке системы и подвал отсеиваются сами.
+    if command -v netsh.exe >/dev/null 2>&1; then
+        netsh.exe int ipv4 show excludedportrange protocol=tcp 2>/dev/null | tr -d '\r*' \
+            | awk -v p="$port" 'NF == 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { if ($1 + 0 <= p + 0 && p + 0 <= $2 + 0) f = 1 } END { exit !f }' \
+            && return 0
+    fi
     return 1
 }
 
@@ -262,7 +326,7 @@ record_pulled() {
 }
 
 do_down() {
-    local rc=0 pulled id users
+    local rc=0 pulled id users neighbors m
     case "$standdir" in
         /*/domovoy-stand/[1-9]*) ;;
         *) refuse "каталог стенда не разрешился: «$standdir»" ;;
@@ -274,7 +338,24 @@ do_down() {
         engine buildx rm "$builder" || rc=1
     fi
     pulled="$(in_distro 'cat "$1" 2>/dev/null || true' "$standdir/pulled-images")"
+    # Базовый образ, вытянутый стендом, удаляет последний снесённый стенд:
+    # пока жив соседний (каталог с меткой), запись переходит к нему, а образ
+    # остаётся — сосед, который ещё собирается, его не потеряет.
+    neighbors="$(in_distro 'for d in "$1"/*; do m="${d##*/}"; [ "$m" = "$2" ] && continue; case "$m" in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) continue ;; esac; [ -f "$d/$3" ] && printf "%s\n" "$m"; done; exit 0' \
+        "${standdir%/*}" "$N" "$STAND_MARK")"
     for id in $pulled; do
+        if [ -n "$neighbors" ]; then
+            for m in $neighbors; do
+                if in_distro 'grep -qxF "$2" "$1" 2>/dev/null || printf "%s\n" "$2" >> "$1"' \
+                    "${standdir%/*}/$m/pulled-images" "$id"; then
+                    say "образ $id передан стенду domovoy-stand-$m"
+                else
+                    say "образ $id не передан стенду domovoy-stand-$m: запись не дописана"
+                    rc=1
+                fi
+            done
+            continue
+        fi
         users="$(engine ps -a -q --filter "ancestor=$id")"
         if [ -n "$users" ]; then
             say "оставлен образ $id: его использует контейнер вне стенда"
@@ -323,10 +404,34 @@ build_env() {
 }
 
 cmd_up() {
-    local port ref refs token code api_image
+    local port ref refs token code api_image claim
     for port in "$api_port" "$ha_port"; do
         port_busy "$port" && refuse "порт $port занят"
     done
+
+    # --- Первое изменение: захват каталога стенда. ---
+    # mkdir без -p — атомарный захват номера: из двух одновременных up каталог
+    # создаёт один, второй получает taken. Родитель общий для всех стендов и
+    # до первого up в дистрибутиве его нет — ему -p. Метка — тем же вызовом:
+    # каталога без метки, созданного up, не бывает; не записалась — каталог
+    # снимается, иначе down отказывал бы на нём как на чужом. umask 022:
+    # config/ внутри читает непривилегированный пользователь контейнера api.
+    say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
+    claim="$(in_distro 'umask 022; mkdir -p "${1%/*}" 2>/dev/null; if mkdir "$1" 2>/dev/null; then if { printf "%s\n" "$3" > "$1/$2"; } 2>/dev/null; then echo claimed; else rmdir "$1"; echo error; fi; elif [ -e "$1" ]; then echo taken; else echo error; fi' \
+        "$standdir" "$STAND_MARK" "$project" 2>/dev/null)" || claim=''
+    # Пустой ответ — вызов не прошёл целиком (движок пропал, wsl.exe вернул
+    # ошибку): причина — движок, а не права на родителя. stderr вызова
+    # глушится, чтобы строка отказа шла в stderr первой.
+    case "$claim" in
+        claimed) ;;
+        taken) refuse "$busy_reason" ;;
+        '') refuse "$engine_down_reason" ;;
+        *) refuse "каталог стенда $standdir не создан: родитель ~/domovoy-stand недоступен или нет прав" ;;
+    esac
+    # Дальше refuse нет: каждый выход — через fail_up, который сносит каталог
+    # вместе с меткой. Обрыв процесса оставляет каталог с меткой — его снимает
+    # down, названный в отказе занятого номера.
+
     # Список — заранее, а не циклом read: wsl.exe читает stdin и съел бы
     # остаток списка после первого образа.
     mapfile -t refs < <(base_images)
@@ -335,13 +440,11 @@ cmd_up() {
         engine image inspect -f '{{.Id}}' "$ref" >/dev/null 2>&1 < /dev/null || absent_images+=("$ref")
     done
 
-    # --- Первое изменение. Дальше неудача сносит стенд. ---
-    say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
     # config/ — копии примеров, секретов в них нет; читать их должен
     # непривилегированный пользователь контейнера api, поэтому umask 022.
-    # .env — 077: его читает только compose.
-    in_distro 'umask 022; mkdir -p "$1/config" && printf "%s\n" "$3" > "$1/$4" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
-        "$standdir" "$source_lx" "$project" "$STAND_MARK" || fail_up 'каталог стенда не создан'
+    # .env — 077: его читает только compose. Метка уже записана захватом.
+    in_distro 'umask 022; mkdir -p "$1/config" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
+        "$standdir" "$source_lx" || fail_up 'config/ стенда не скопирован'
     build_env | in_distro 'umask 077; cat > "$1"' "$standdir/.env" || fail_up '.env стенда не записан'
 
     stand_compose create homeassistant || fail_up 'контейнер HA не создан'
@@ -390,6 +493,29 @@ cmd_up() {
     say "стенд поднят: api http://127.0.0.1:$api_port, HA http://127.0.0.1:$ha_port"
 }
 
+# Имя, порт и метка пробы. Ничего не создаёт и порт не резервирует.
+cmd_probe() {
+    local port
+    for ((port = probe_first; port <= probe_last; port++)); do
+        port_busy "$port" && continue
+        printf 'STAND_PROBE_NAME=domovoy-probe-%s-%s\n' "$N" "$resource"
+        printf 'STAND_PROBE_PORT=%s\n' "$port"
+        printf 'STAND_PROBE_LABEL=%s\n' "$probe_label"
+        return 0
+    done
+    refuse "порты проб $probe_first…$probe_last заняты"
+}
+
+# Контейнеры проб стенда — с анонимными томами. Только при down: неудача up
+# через fail_up пробы не трогает.
+remove_probes() {
+    local out ids
+    out="$(engine ps -a -q --filter "label=$probe_label")" || return 1
+    [ -n "$out" ] || return 0
+    mapfile -t ids <<< "$out"
+    engine rm -f -v "${ids[@]}" >/dev/null
+}
+
 cmd_status() {
     local report code renamed missing
     say "проект $project, api :$api_port, HA :$ha_port"
@@ -420,9 +546,13 @@ cmd_status() {
 case "$cmd" in
     up) cmd_up ;;
     down)
-        do_down || { printf 'stand: down завершился с ошибками\n' >&2; exit 1; }
+        rc=0
+        remove_probes || rc=1
+        do_down || rc=1
+        [ "$rc" -eq 0 ] || { printf 'stand: down завершился с ошибками\n' >&2; exit 1; }
         say "стенд $project снесён"
         ;;
     status) cmd_status ;;
     logs) stand_compose logs "${extra[@]}" ;;
+    probe) cmd_probe ;;
 esac

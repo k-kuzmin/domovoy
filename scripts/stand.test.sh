@@ -18,8 +18,10 @@
 #     (образы, строители, контейнеры-потребители образов, слушатели портов),
 #     а sh, wslpath и ss исполняются локально, с HOME во временном каталоге —
 #     это и есть файловая система «дистрибутива»;
-#   - cygpath и wslpath — пути как есть;
+#   - cygpath — путь как есть; wslpath — как есть или по карте wslpath_map
+#     (её же подделка wsl.exe применяет обратно к аргументам команд);
 #   - ss и netstat — слушатели из файлов состояния;
+#   - netsh.exe — исключённые диапазоны портов Windows из файла состояния;
 #   - git — подменяет только worktree list, остальное отдаёт настоящему git;
 #   - docker — голый docker хоста: пишет свой журнал, который обязан
 #     остаться пустым;
@@ -107,6 +109,12 @@ if [ -f "$FAKE_STATE/no_distro" ]; then
     exit 1
 fi
 printf '%s\n' "$*" >> "$FAKE_LOG"
+# Сбой самого вызова захвата: wsl.exe вернул ошибку, скрипт захвата не выполнен.
+if [ -f "$FAKE_STATE/claim_fail" ]; then
+    case "$*" in
+        *claimed*) echo 'Catastrophic failure' >&2; exit 1 ;;
+    esac
+fi
 cmd="$1"
 shift
 if [ "$cmd" = env ]; then
@@ -120,6 +128,33 @@ if [ "$cmd" = docker ]; then
     case " $* " in *' exec '*) ;; *) cat > /dev/null ;; esac
     exec "$FAKE_BIN/engine-docker" "$@"
 fi
+# Гонка двух up: флаг race называет каталог стенда, который «другая сессия»
+# создаёт с меткой прямо перед скриптом захвата (его узнаём по слову claimed).
+if [ "$cmd" = sh ] && [ -f "$FAKE_STATE/race" ]; then
+    case "$*" in
+        *claimed*)
+            d="$(cat "$FAKE_STATE/race")"
+            rm -f "$FAKE_STATE/race"
+            mkdir -p "$d"
+            printf 'other-session\n' > "$d/.domovoy-stand"
+            printf 'other-session\n' > "$d/marker"
+            ;;
+    esac
+fi
+# Путь дистрибутива из wslpath_map ведёт в каталог хоста — как /mnt/d/… в
+# настоящем WSL. Только с границей каталога: /srv/domovoy не трогает
+# /srv/domovoy-dev.
+if [ -f "$FAKE_STATE/wslpath_map" ]; then
+    mapped=()
+    for a in "$@"; do
+        while IFS=$'\t' read -r from to; do
+            if [ "$a" = "$to" ]; then a="$from"; break; fi
+            case "$a" in "$to"/*) a="$from${a#"$to"}"; break ;; esac
+        done < "$FAKE_STATE/wslpath_map"
+        mapped+=("$a")
+    done
+    set -- "${mapped[@]}"
+fi
 HOME="$FAKE_HOME" exec "$cmd" "$@"
 EOF
 
@@ -131,8 +166,9 @@ cat > "$BIN/engine-docker" <<'EOF'
 #   ancestors  — строки «<ID образа> <ID контейнера>»
 #   prod_wd    — метка working_dir контейнеров проекта domovoy
 #   engine_down — docker info отвечает ошибкой
+#   probes     — строки «<значение метки domovoy-stand.probe> <ID контейнера>»
 S="$FAKE_STATE"
-touch "$S/images" "$S/builders" "$S/ancestors"
+touch "$S/images" "$S/builders" "$S/ancestors" "$S/probes"
 args="$*"
 id_of() { printf 'sha256:id-%s' "$(printf '%s' "$1" | tr -c 'a-z0-9' '-')"; }
 add_image() { grep -q "^$1 " "$S/images" || printf '%s %s\n' "$1" "$(id_of "$1")" >> "$S/images"; }
@@ -150,7 +186,18 @@ case "$1" in
             *ancestor=*)
                 id="${args##*ancestor=}"; id="${id%% *}"
                 awk -v i="$id" '$1 == i { print $2 }' "$S/ancestors" ;;
+            *label=domovoy-stand.probe=*)
+                # Метка сравнивается целиком, как в настоящем движке.
+                v="${args##*label=domovoy-stand.probe=}"; v="${v%% *}"
+                awk -v v="$v" '$1 == v { print $2 }' "$S/probes" ;;
         esac
+        ;;
+    rm)
+        shift
+        while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do shift; done
+        for c in "$@"; do
+            awk -v c="$c" '$2 != c' "$S/probes" > "$S/probes.tmp"; mv "$S/probes.tmp" "$S/probes"
+        done
         ;;
     image)
         case "$2" in
@@ -208,9 +255,17 @@ cat > "$BIN/cygpath" <<'EOF'
 printf '%s\n' "${*: -1}"
 EOF
 
+# Отображение путей — строки «<путь хоста>\t<путь в дистрибутиве>» файла
+# wslpath_map; без строки путь как есть.
 cat > "$BIN/wslpath" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "${*: -1}"
+arg="${*: -1}"
+if [ -f "$FAKE_STATE/wslpath_map" ]; then
+    while IFS=$'\t' read -r from to; do
+        [ "$arg" = "$from" ] && { printf '%s\n' "$to"; exit 0; }
+    done < "$FAKE_STATE/wslpath_map"
+fi
+printf '%s\n' "$arg"
 EOF
 
 cat > "$BIN/ss" <<'EOF'
@@ -222,6 +277,14 @@ EOF
 cat > "$BIN/netstat" <<'EOF'
 #!/usr/bin/env bash
 [ -f "$FAKE_STATE/netstat" ] && cat "$FAKE_STATE/netstat"
+exit 0
+EOF
+
+# Перекрывает netsh.exe из System32: исключённые диапазоны портов Windows —
+# из файла состояния, по умолчанию их нет.
+cat > "$BIN/netsh.exe" <<'EOF'
+#!/usr/bin/env bash
+[ -f "$FAKE_STATE/excluded" ] && cat "$FAKE_STATE/excluded"
 exit 0
 EOF
 
@@ -350,6 +413,8 @@ expect_no_bare_docker() {
 
 pulled_file() { printf '%s/domovoy-stand/%s/pulled-images' "$FAKE_HOME" "$1"; }
 
+probe_port() { printf '%s\n' "$OUT" | sed -n 's/^STAND_PROBE_PORT=//p'; }
+
 # --- Отказы ------------------------------------------------------------------
 
 begin_case 'отказ: имя domovoy'
@@ -378,6 +443,24 @@ run_stand "$WORKTREE" up --name 7
 expect_status 1
 expect_err_first 'порт 9007 занят'
 expect_no_changes
+end_case
+
+begin_case 'порты: исключённый диапазон Windows считается занятым'
+# Шапка на русском, подвал со звёздочкой, CRLF — как у настоящего netsh.
+printf '\r\nДиапазоны исключенных портов для протокола tcp\r\n\r\nНачальный порт    Конечный порт\r\n----------    --------\r\n     20060       20069\r\n     20070       20070\r\n     19007       19007 *\r\n\r\n* - Административно исключенные диапазоны портов.\r\n' \
+    > "$STATE/excluded"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20071 ] || fail_case "порт пробы «$(probe_port)», ожидался 20071 (20070 исключён)"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first 'порт 19007 занят'
+expect_no_changes
+rm -f "$STATE/excluded"
+: > "$LOG"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20070 ] || fail_case "без исключений порт пробы «$(probe_port)», ожидался 20070"
 end_case
 
 begin_case 'отказ: движок недоступен'
@@ -417,8 +500,39 @@ end_case
 begin_case 'отказ: каталог боевого стека — источник равен основному дереву'
 run_stand "$CLONE" up --name 7
 expect_status 1
-expect_err_first "каталог проекта — каталог боевого стека: $CLONE"
+expect_err_first "каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: $CLONE"
 expect_no_changes
+end_case
+
+begin_case 'отказ: источник — каталог развёртывания /srv/domovoy'
+for wd in /srv/domovoy /srv/domovoy/; do
+    for sub in up down; do
+        reset_engine
+        printf '%s\n' "$wd" > "$STATE/prod_wd"
+        printf '%s\t/srv/domovoy\n' "$WORKTREE" > "$STATE/wslpath_map"
+        run_stand "$WORKTREE" "$sub" --name 7
+        expect_status 1
+        first="$(printf '%s\n' "$ERR" | head -n 1)"
+        [ "$first" = 'stand: отказ: каталог проекта — каталог боевого стека: /srv/domovoy' ] \
+            || fail_case "метка «$wd», $sub: первая строка stderr «$first»"
+        expect_no_changes
+    done
+done
+end_case
+
+begin_case 'контроль: боевой стек в /srv/domovoy, источник рядом проходит'
+printf '/srv/domovoy\n' > "$STATE/prod_wd"
+# Ловушка префикса: /srv/domovoy-dev начинается с /srv/domovoy.
+printf '%s\t/srv/domovoy-dev\n' "$WORKTREE" > "$STATE/wslpath_map"
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+log_has 'compose -p domovoy-stand-7'
+log_has 'DOMOVOY_STAND_SOURCE=/srv/domovoy-dev '
+reset_engine
+printf '/srv/domovoy\n' > "$STATE/prod_wd"
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+log_has 'compose -p domovoy-stand-7'
 end_case
 
 begin_case 'отказ: каталог боевого стека — источник равен working_dir'
@@ -455,6 +569,76 @@ for sub in up down status logs; do
     log_lacks_re 'image rm|mkdir|cat >|rm -rf'
     [ "$(cat "$foreign/.env" 2>/dev/null)" = owner ] || fail_case "$sub: чужой .env в каталоге стенда изменён или удалён"
 done
+end_case
+
+# --- Номер стенда занят ------------------------------------------------------
+
+BUSY_REASON='стенд domovoy-stand-7 уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name 7 или другой --name'
+
+begin_case 'up: занятый номер — отказ, чужой стенд цел'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+d7="$FAKE_HOME/domovoy-stand/7"
+mkdir -p "$SANDBOX/before"
+for f in .env .domovoy-stand pulled-images; do cp "$d7/$f" "$SANDBOX/before/$f"; done
+# Живой стенд слушает свои порты: отказ обязан назвать номер, а не порт.
+printf 'LISTEN 0 4096 0.0.0.0:19007 0.0.0.0:*\nLISTEN 0 4096 0.0.0.0:9007 0.0.0.0:*\n' > "$STATE/ss"
+: > "$LOG"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first "$BUSY_REASON"
+for f in .env .domovoy-stand pulled-images; do
+    cmp -s "$d7/$f" "$SANDBOX/before/$f" || fail_case "$f первого стенда изменён"
+done
+log_lacks_re 'compose .* (create|up|down)( |$)'
+log_lacks_re 'buildx (create|rm)'
+log_lacks_re 'image rm|rm -rf'
+end_case
+
+begin_case 'up: каталог появился между проверкой и захватом — отказ без сноса'
+d7="$FAKE_HOME/domovoy-stand/7"
+printf '%s\n' "$d7" > "$STATE/race"
+run_stand "$WORKTREE" up --name 7
+[ ! -e "$STATE/race" ] || fail_case 'подделка гонки не сработала: нет скрипта захвата со словом claimed'
+expect_status 1
+expect_err_first "$BUSY_REASON"
+[ "$(cat "$d7/marker" 2>/dev/null)" = other-session ] || fail_case 'маркерный файл другой сессии удалён или изменён'
+[ "$(cat "$d7/.domovoy-stand" 2>/dev/null)" = other-session ] || fail_case 'метка другой сессии удалена или перезаписана'
+[ ! -e "$d7/.env" ] || fail_case '.env записан в чужой каталог'
+log_lacks_re 'compose .* (create|up|down)( |$)'
+log_lacks_re 'buildx (create|rm)'
+log_lacks_re 'image rm|rm -rf'
+end_case
+
+begin_case 'up: родителя ~/domovoy-stand нет — захват проходит'
+[ ! -e "$FAKE_HOME/domovoy-stand" ] || fail_case 'родитель ~/domovoy-stand есть до up — сценарий проверяет не то'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+case "$ERR" in *'уже поднят'*) fail_case 'отказ занятого номера на первом up' ;; esac
+[ -f "$FAKE_HOME/domovoy-stand/7/.domovoy-stand" ] || fail_case 'нет метки .domovoy-stand в каталоге стенда'
+log_has 'compose -p domovoy-stand-7'
+log_has 'up -d --wait --no-build'
+end_case
+
+begin_case 'up: родитель каталога стенда — не каталог — отказ с другой причиной'
+printf 'not-a-dir\n' > "$FAKE_HOME/domovoy-stand"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first "каталог стенда $FAKE_HOME/domovoy-stand/7 не создан"
+case "$ERR" in *'уже поднят'*) fail_case 'ошибка mkdir выдана за занятый номер' ;; esac
+[ "$(cat "$FAKE_HOME/domovoy-stand" 2>/dev/null)" = not-a-dir ] || fail_case 'файл ~/domovoy-stand изменён или удалён'
+log_lacks_re 'compose -p|buildx'
+log_lacks_re 'rm -rf'
+end_case
+
+begin_case 'up: вызов захвата не прошёл — отказ причиной движка, а не прав'
+: > "$STATE/claim_fail"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first 'недоступен; Docker Desktop не запускать'
+case "$ERR" in *'нет прав'*) fail_case 'сбой вызова выдан за отсутствие прав' ;; esac
+log_lacks_re 'compose -p|buildx'
+log_lacks_re 'rm -rf'
 end_case
 
 # --- Имя, порты, проект ------------------------------------------------------
@@ -693,6 +877,54 @@ log_lacks_re "image rm $BUILDKIT"
 grep -q 'sha256:retagged' "$STATE/images" || fail_case 'удалён образ под переставленным тегом'
 end_case
 
+begin_case 'down: базовый образ передаётся живому соседнему стенду'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+bk_id="$(awk -v r="$BUILDKIT" '$1 == r { print $2 }' "$STATE/images")"
+[ "$(cat "$(pulled_file 7)" 2>/dev/null)" = "$bk_id" ] || fail_case 'стенд 7 не записал вытянутый buildkit'
+run_stand "$WORKTREE" up --name 8
+expect_status 0
+[ ! -s "$(pulled_file 8)" ] || fail_case "стенд 8 записал образ, который застал: $(cat "$(pulled_file 8)")"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_lacks_re 'image rm'
+grep -q "^$BUILDKIT " "$STATE/images" || fail_case 'buildkit удалён, пока жив стенд 8'
+[ "$(grep -cxF "$bk_id" "$(pulled_file 8)" 2>/dev/null)" = 1 ] \
+    || fail_case "ID buildkit в pulled-images стенда 8 — не ровно один раз: $(cat "$(pulled_file 8)" 2>/dev/null | tr '\n' ';')"
+printf '%s\n' "$OUT" | grep -qxF "stand: образ $bk_id передан стенду domovoy-stand-8" \
+    || fail_case 'нет строки «образ … передан стенду domovoy-stand-8»'
+: > "$LOG"
+run_stand "$WORKTREE" down --name 8
+expect_status 0
+log_has "image rm $bk_id"
+grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'buildkit остался после сноса последнего стенда'
+end_case
+
+begin_case 'down: последний стенд удаляет переданный образ'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+run_stand "$WORKTREE" up --name 8
+expect_status 0
+bk_id="$(cat "$(pulled_file 7)")"
+# Оба стенда не застали образ и записали его.
+printf '%s\n' "$bk_id" >> "$(pulled_file 8)"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 8
+expect_status 0
+grep -q "^$BUILDKIT " "$STATE/images" || fail_case 'buildkit удалён, пока жив стенд 7'
+[ "$(grep -cxF "$bk_id" "$(pulled_file 7)")" = 1 ] || fail_case 'запись у стенда 7 удвоена'
+printf '%s\n' "$OUT" | grep -qxF "stand: образ $bk_id передан стенду domovoy-stand-7" \
+    || fail_case 'нет строки «образ … передан стенду domovoy-stand-7»'
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'buildkit остался после сноса последнего стенда'
+[ "$(grep -c 'image rm' "$LOG")" = 1 ] || fail_case "image rm за сценарий — $(grep -c 'image rm' "$LOG") раз, ожидался один"
+grep -q "^$PG_IMAGE " "$STATE/images" || fail_case 'удалён образ postgres боевого стека'
+grep -q "^$HA_IMAGE " "$STATE/images" || fail_case 'удалён образ HA боевого стека'
+grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'
+end_case
+
 begin_case 'down не трогает чужое'
 run_stand "$WORKTREE" up --name 1
 expect_status 0
@@ -713,6 +945,68 @@ grep -qx 'domovoy-stand-16-build' "$STATE/builders" || fail_case 'удалён �
 grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'
 grep -q '^domovoy-stand-7-api ' "$STATE/images" || fail_case 'удалён образ domovoy-stand-7-api'
 expect_no_bare_docker
+end_case
+
+# --- Пробы -------------------------------------------------------------------
+
+begin_case 'probe: имя, порт и метка выводятся из N'
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+want="$(printf 'STAND_PROBE_NAME=domovoy-probe-7-registry\nSTAND_PROBE_PORT=20070\nSTAND_PROBE_LABEL=domovoy-stand.probe=7')"
+[ "$OUT" = "$want" ] || fail_case "stdout probe — «$OUT», ожидались ровно три строки «$want»"
+printf 'LISTEN 0 4096 127.0.0.1:20070 0.0.0.0:*\n' > "$STATE/ss"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20071 ] || fail_case "20070 занят: порт пробы «$(probe_port)», ожидался 20071"
+for p in $(seq 20070 20079); do printf 'LISTEN 0 4096 127.0.0.1:%s 0.0.0.0:*\n' "$p"; done > "$STATE/ss"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 1
+expect_err_first 'порты проб 20070…20079 заняты'
+rm -f "$STATE/ss"
+run_stand "$WORKTREE" probe --name 16 registry
+[ "$(probe_port)" = 20160 ] || fail_case "--name 16: порт «$(probe_port)», ожидался 20160"
+run_stand "$WORKTREE" probe --name 160 registry
+[ "$(probe_port)" = 21600 ] || fail_case "--name 160: порт «$(probe_port)», ожидался 21600"
+for bad in Reg_1 1reg -reg registry-name-is-long; do
+    run_stand "$WORKTREE" probe --name 7 "$bad"
+    [ "$STATUS" -eq 2 ] || fail_case "ресурс «$bad»: код $STATUS, ожидался 2"
+done
+run_stand "$WORKTREE" probe --name 7
+[ "$STATUS" -eq 2 ] || fail_case "probe без ресурса: код $STATUS, ожидался 2"
+run_stand "$WORKTREE" probe --name 7 registry postgres
+[ "$STATUS" -eq 2 ] || fail_case "probe с двумя ресурсами: код $STATUS, ожидался 2"
+expect_no_changes
+log_lacks_re '(^| )docker (run|rm|create)( |$)'
+expect_no_bare_docker
+end_case
+
+begin_case 'down: контейнеры проб стенда удаляются с томами'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+printf '7 c-probe-7a\n7 c-probe-7b\n70 c-probe-70\n' > "$STATE/probes"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_has 'ps -a -q --filter label=domovoy-stand.probe=7'
+log_has 'docker rm -f -v c-probe-7a c-probe-7b'
+if grep -E '(^| )docker rm ' "$LOG" | grep -vqE ' docker rm -f -v '; then
+    fail_case "rm без -f -v: $(grep -E '(^| )docker rm ' "$LOG" | tr '\n' ';')"
+fi
+grep -E '(^| )docker rm ' "$LOG" | grep -qE 'c-probe-70|c-prod' && fail_case 'rm задел пробу стенда 70 или боевой стек'
+grep -q ' c-probe-70$' "$STATE/probes" || fail_case 'удалена проба стенда 70'
+grep -q ' c-probe-7[ab]$' "$STATE/probes" && fail_case 'проба стенда 7 осталась'
+# Пробы — до compose down стенда.
+rm_line="$(grep -nE '(^| )docker rm ' "$LOG" | head -n 1 | cut -d: -f1)"
+down_line="$(grep -nE 'compose .* down( |$)' "$LOG" | head -n 1 | cut -d: -f1)"
+[ -n "$rm_line" ] && [ -n "$down_line" ] && [ "$rm_line" -lt "$down_line" ] \
+    || fail_case "rm проб (строка ${rm_line:-—}) не раньше compose down (строка ${down_line:-—})"
+# Проб нет — rm не вызывается вовсе.
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_lacks_re '(^| )docker rm '
 end_case
 
 # --- Голый docker ------------------------------------------------------------

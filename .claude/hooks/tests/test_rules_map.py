@@ -32,6 +32,30 @@ def dead_docs(table, root=REPO_ROOT):
             if not os.path.exists(os.path.join(root, r.get("doc") or "docs/rules/%s.md" % r["name"]))]
 
 
+TRIAGE_HEADING = "## Задача готова к работе, если выполнено всё"
+# Число пунктов — словом в двух формах вердикта: «при выполнении всех N» и «выполнены все N».
+NUMBER_WORDS = {3: ("трёх", "три пункта"), 4: ("четырёх", "четыре пункта"), 5: ("пяти", "пять пунктов"),
+                6: ("шести", "шесть пунктов"), 7: ("семи", "семь пунктов"), 8: ("восьми", "восемь пунктов")}
+
+
+def triage_points(text):
+    """Нумерованные пункты верхнего уровня под заголовком критериев (до следующего «## »),
+    каждый — одной строкой: перенос по ширине не рвёт фразу."""
+    section = text.split(TRIAGE_HEADING, 1)[1].split("\n## ", 1)[0] if TRIAGE_HEADING in text else ""
+    parts = re.split(r"(?m)^\d+\.\s", section)[1:]
+    return [" ".join(p.split()) for p in parts]
+
+
+def triage_point_mismatch(text):
+    """Фразы вердикта, которых нет в тексте при фактическом числе нумерованных пунктов
+    верхнего уровня под заголовком критериев (до следующего «## »)."""
+    n = len(triage_points(text))
+    if n not in NUMBER_WORDS:
+        return ["пунктов: %d" % n]
+    gen, nom = NUMBER_WORDS[n]
+    return [p for p in ("всех %s пунктов" % gen, "все %s" % nom) if p not in text]
+
+
 def step_agents():
     names = [os.path.splitext(os.path.basename(p))[0]
              for p in glob.glob(os.path.join(REPO_ROOT, ".claude", "agents", "step-*.md"))]
@@ -126,6 +150,28 @@ PROBES = {
          bash("docker compose logs -f api", "PowerShell")],
         [bash("bash deploy/windows/docker-wsl.sh compose ps"), bash("bash scripts/stand.sh up --name 7"),
          bash("grep docker README.md"), bash("echo 'docker ps'")]),
+    "prod-stack-from-clone": (
+        [bash("bash deploy/windows/docker-wsl.sh compose up -d --build --wait"),
+         bash("bash deploy/windows/docker-wsl.sh compose down"),
+         bash("bash deploy/windows/docker-wsl.sh compose up -d --build --wait", "PowerShell")],
+        [bash("bash deploy/windows/docker-wsl.sh compose ps"),
+         bash("bash deploy/windows/docker-wsl.sh compose -p domovoy logs -f api"),
+         bash("bash scripts/stand.sh down --name 7"),
+         bash("echo 'bash deploy/windows/docker-wsl.sh compose down'")]),
+    "probe-container-cleanup": (
+        [bash("bash deploy/windows/docker-wsl.sh run -d -p 20070:5000 registry:2"),
+         bash("bash deploy/windows/docker-wsl.sh container run -d registry:2"),
+         bash("wsl.exe -d domovoy-engine --exec docker run -d postgres:16-alpine", "PowerShell")],
+        [bash("bash deploy/windows/docker-wsl.sh run --rm -d registry:2"),
+         bash("bash deploy/windows/docker-wsl.sh compose run --rm migrate"),
+         bash("wsl.exe -d domovoy-engine --exec docker run --rm postgres:16-alpine"),
+         bash("bash deploy/windows/docker-wsl.sh ps -a")]),
+    "post-merge-cleanup": (
+        [bash("bash scripts/board.sh 169 Done"), bash("bash scripts/board.sh 169 'Done'", "PowerShell"),
+         bash('bash scripts/board.sh 169 "Done"')],
+        [bash("bash scripts/board.sh 169 Review"), bash("bash scripts/board.sh 169 'In progress'"),
+         bash("bash scripts/board.test.sh"), bash("git worktree remove .claude/worktrees/agent-x"),
+         bash("echo 'board.sh 169 Done'")]),
     "rule-wiring": (
         [edit("docs/rules/new-rule.md", "x", "Write"),
          bash("cat > docs/rules/other-rule.md <<'E'\nx\nE")],
@@ -181,6 +227,23 @@ class TableShape(unittest.TestCase):
         self.assertRegex(note, r"п\. 10[–-]11")
         self.assertIn("BEHIND", note)
         self.assertIn("DIRTY", note)
+
+    def test_triage_verdict_counts_every_point(self):
+        """Вердикт «готова» в docs/rules/triage.md называет число пунктов словом; новый пункт
+        без правки фраз вердикта оставил бы его необязательным для ready."""
+        with io.open(os.path.join(REPO_ROOT, "docs", "rules", "triage.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(triage_point_mismatch(text), [])
+        # Пункт 5 — задача, опирающаяся на ещё не закрытую, «не готова до #<номер>» (#169).
+        points = triage_points(text)
+        self.assertEqual(len(points), 5)
+        self.assertIn("не готова до #", points[4])
+
+    def test_triage_mismatch_is_caught(self):
+        text = ("## Задача готова к работе, если выполнено всё\n\n1. а\n   продолжение\n2. б\n3. в\n"
+                "4. г\n5. д\n\nтолько при выполнении всех четырёх пунктов.\n\n## Дальше\n\n6. е\n"
+                "- **ready** — true только если выполнены все четыре пункта\n")
+        self.assertEqual(triage_point_mismatch(text), ["всех пяти пунктов", "все пять пунктов"])
 
     def test_for_subagents_and_note_go_together(self):
         half = [r["name"] for r in TABLE if bool(r.get("for_subagents")) != bool(r.get("subagent_note"))]
