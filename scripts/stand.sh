@@ -39,7 +39,13 @@
 # без своего тега, тома и сеть проекта), buildx rm строителя стенда без
 # --keep-state (контейнер и том состояния с кэшем сборки), базовые образы,
 # которые вытянул сам стенд, — по ID из pulled-images каталога стенда, без -f
-# и только если их не держит ни один контейнер. Общий кэш движка, образы
+# и только если их не держит ни один контейнер. Пока жив соседний стенд
+# (каталог ~/domovoy-stand/<M> с меткой), такой образ не удаляется, а его ID
+# дописывается в pulled-images соседа: образ удаляет последний снесённый
+# стенд. Предел: down перечисляет соседей один раз; стенд, захвативший
+# каталог позже и заставший образ, его не записал — образ останется в
+# движке лишним (утечка, а не потеря: недостающее вытягивают compose и
+# buildx). Остаток виден по image ls движка. Общий кэш движка, образы
 # боевого стека и чужие объекты не трогаются: prune здесь нет. Каталог
 # стенда без метки .domovoy-stand, которую up пишет первой записью, не трогает
 # ни одна подкоманда: отказ.
@@ -314,7 +320,7 @@ record_pulled() {
 }
 
 do_down() {
-    local rc=0 pulled id users
+    local rc=0 pulled id users neighbors m
     case "$standdir" in
         /*/domovoy-stand/[1-9]*) ;;
         *) refuse "каталог стенда не разрешился: «$standdir»" ;;
@@ -326,7 +332,24 @@ do_down() {
         engine buildx rm "$builder" || rc=1
     fi
     pulled="$(in_distro 'cat "$1" 2>/dev/null || true' "$standdir/pulled-images")"
+    # Базовый образ, вытянутый стендом, удаляет последний снесённый стенд:
+    # пока жив соседний (каталог с меткой), запись переходит к нему, а образ
+    # остаётся — сосед, который ещё собирается, его не потеряет.
+    neighbors="$(in_distro 'for d in "$1"/*; do m="${d##*/}"; [ "$m" = "$2" ] && continue; case "$m" in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) continue ;; esac; [ -f "$d/$3" ] && printf "%s\n" "$m"; done; exit 0' \
+        "${standdir%/*}" "$N" "$STAND_MARK")"
     for id in $pulled; do
+        if [ -n "$neighbors" ]; then
+            for m in $neighbors; do
+                if in_distro 'grep -qxF "$2" "$1" 2>/dev/null || printf "%s\n" "$2" >> "$1"' \
+                    "${standdir%/*}/$m/pulled-images" "$id"; then
+                    say "образ $id передан стенду domovoy-stand-$m"
+                else
+                    say "образ $id не передан стенду domovoy-stand-$m: запись не дописана"
+                    rc=1
+                fi
+            done
+            continue
+        fi
         users="$(engine ps -a -q --filter "ancestor=$id")"
         if [ -n "$users" ]; then
             say "оставлен образ $id: его использует контейнер вне стенда"

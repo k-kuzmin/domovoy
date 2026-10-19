@@ -807,6 +807,54 @@ log_lacks_re "image rm $BUILDKIT"
 grep -q 'sha256:retagged' "$STATE/images" || fail_case 'удалён образ под переставленным тегом'
 end_case
 
+begin_case 'down: базовый образ передаётся живому соседнему стенду'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+bk_id="$(awk -v r="$BUILDKIT" '$1 == r { print $2 }' "$STATE/images")"
+[ "$(cat "$(pulled_file 7)" 2>/dev/null)" = "$bk_id" ] || fail_case 'стенд 7 не записал вытянутый buildkit'
+run_stand "$WORKTREE" up --name 8
+expect_status 0
+[ ! -s "$(pulled_file 8)" ] || fail_case "стенд 8 записал образ, который застал: $(cat "$(pulled_file 8)")"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_lacks_re 'image rm'
+grep -q "^$BUILDKIT " "$STATE/images" || fail_case 'buildkit удалён, пока жив стенд 8'
+[ "$(grep -cxF "$bk_id" "$(pulled_file 8)" 2>/dev/null)" = 1 ] \
+    || fail_case "ID buildkit в pulled-images стенда 8 — не ровно один раз: $(cat "$(pulled_file 8)" 2>/dev/null | tr '\n' ';')"
+printf '%s\n' "$OUT" | grep -qxF "stand: образ $bk_id передан стенду domovoy-stand-8" \
+    || fail_case 'нет строки «образ … передан стенду domovoy-stand-8»'
+: > "$LOG"
+run_stand "$WORKTREE" down --name 8
+expect_status 0
+log_has "image rm $bk_id"
+grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'buildkit остался после сноса последнего стенда'
+end_case
+
+begin_case 'down: последний стенд удаляет переданный образ'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+run_stand "$WORKTREE" up --name 8
+expect_status 0
+bk_id="$(cat "$(pulled_file 7)")"
+# Оба стенда не застали образ и записали его.
+printf '%s\n' "$bk_id" >> "$(pulled_file 8)"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 8
+expect_status 0
+grep -q "^$BUILDKIT " "$STATE/images" || fail_case 'buildkit удалён, пока жив стенд 7'
+[ "$(grep -cxF "$bk_id" "$(pulled_file 7)")" = 1 ] || fail_case 'запись у стенда 7 удвоена'
+printf '%s\n' "$OUT" | grep -qxF "stand: образ $bk_id передан стенду domovoy-stand-7" \
+    || fail_case 'нет строки «образ … передан стенду domovoy-stand-7»'
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'buildkit остался после сноса последнего стенда'
+[ "$(grep -c 'image rm' "$LOG")" = 1 ] || fail_case "image rm за сценарий — $(grep -c 'image rm' "$LOG") раз, ожидался один"
+grep -q "^$PG_IMAGE " "$STATE/images" || fail_case 'удалён образ postgres боевого стека'
+grep -q "^$HA_IMAGE " "$STATE/images" || fail_case 'удалён образ HA боевого стека'
+grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'
+end_case
+
 begin_case 'down не трогает чужое'
 run_stand "$WORKTREE" up --name 1
 expect_status 0
