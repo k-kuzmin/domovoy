@@ -6,6 +6,7 @@
 #   bash scripts/stand.sh status [--name <N>]
 #   bash scripts/stand.sh logs   [--name <N>] [--] [аргументы compose logs]
 #   bash scripts/stand.sh down   [--name <N>]
+#   bash scripts/stand.sh probe  [--name <N>] <ресурс>
 #
 # ЧТО ЭТО
 #
@@ -40,6 +41,15 @@
 # стенда без метки .domovoy-stand, которую up пишет первой записью, не трогает
 # ни одна подкоманда: отказ.
 #
+# probe — имя, порт и метка временного контейнера пробы вне стенда
+# (реестр, postgres): три строки STAND_PROBE_NAME=domovoy-probe-<N>-<ресурс>,
+# STAND_PROBE_PORT — первый свободный из 20000+10·N…+9, STAND_PROBE_LABEL —
+# метка, по которой down удаляет контейнеры проб с томами (rm -f -v) до
+# сноса стенда. Ресурс — [a-z][a-z0-9-]{0,15}. probe ничего не меняет и не
+# требует поднятого стенда. Предел: порт не резервируется — два probe подряд
+# до запуска первого контейнера вернут один порт; контейнер пробы
+# запускается сразу после probe, следующий probe — после его запуска.
+#
 # Коды: 0 — успех; 1 — отказ по существу, первая строка stderr начинается
 # с «stand: отказ: »; 2 — ошибка вызова. Стенда нет (нет каталога стенда):
 # status печатает «стенд domovoy-stand-<N> не поднят» и выходит с 0 — это
@@ -70,6 +80,7 @@ source_lx=''
 usage() {
     [ $# -gt 0 ] && printf 'stand: %s\n' "$1" >&2
     printf 'использование: bash scripts/stand.sh up|down|status|logs [--name <N>] [--] [аргументы logs]\n' >&2
+    printf '               bash scripts/stand.sh probe [--name <N>] <ресурс>\n' >&2
     exit 2
 }
 
@@ -88,12 +99,14 @@ say() {
 cmd="$1"
 shift
 case "$cmd" in
-    up|down|status|logs) ;;
+    up|down|status|logs|probe) ;;
     *) usage "неизвестная подкоманда: $cmd" ;;
 esac
 
 name=''
 extra=()
+resource=''
+have_resource=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --name)
@@ -111,12 +124,23 @@ while [ $# -gt 0 ]; do
             break
             ;;
         *)
-            [ "$cmd" = logs ] || usage "неизвестный аргумент: $1"
-            extra+=("$1")
+            if [ "$cmd" = probe ] && [ "$have_resource" -eq 0 ]; then
+                resource="$1"
+                have_resource=1
+            else
+                [ "$cmd" = logs ] || usage "неизвестный аргумент: $1"
+                extra+=("$1")
+            fi
             shift
             ;;
     esac
 done
+
+if [ "$cmd" = probe ]; then
+    [ "$have_resource" -eq 1 ] || usage 'probe без ресурса'
+    [[ "$resource" =~ ^[a-z][a-z0-9-]{0,15}$ ]] \
+        || usage "ресурс пробы — [a-z][a-z0-9-]{0,15}, получено «$resource»"
+fi
 
 if [ -z "$name" ]; then
     case "$SOURCE_DIR" in
@@ -139,6 +163,12 @@ project="domovoy-stand-$N"
 builder="$project-build"
 api_port=$((19000 + N))
 ha_port=$((9000 + N))
+# Пробы вне стенда: десяток портов 20000+10·N…+9 (20010–29999 не задевает
+# порты стендов и боевые) и метка, которую down сравнивает целиком. Ключ —
+# не «domovoy», точка и слово: такую форму gitleaks принимает за домен.
+probe_label="domovoy-stand.probe=$N"
+probe_first=$((20000 + 10 * N))
+probe_last=$((probe_first + 9))
 
 # --- Движок ------------------------------------------------------------------
 
@@ -390,6 +420,29 @@ cmd_up() {
     say "стенд поднят: api http://127.0.0.1:$api_port, HA http://127.0.0.1:$ha_port"
 }
 
+# Имя, порт и метка пробы. Ничего не создаёт и порт не резервирует.
+cmd_probe() {
+    local port
+    for ((port = probe_first; port <= probe_last; port++)); do
+        port_busy "$port" && continue
+        printf 'STAND_PROBE_NAME=domovoy-probe-%s-%s\n' "$N" "$resource"
+        printf 'STAND_PROBE_PORT=%s\n' "$port"
+        printf 'STAND_PROBE_LABEL=%s\n' "$probe_label"
+        return 0
+    done
+    refuse "порты проб $probe_first…$probe_last заняты"
+}
+
+# Контейнеры проб стенда — с анонимными томами. Только при down: неудача up
+# через fail_up пробы не трогает.
+remove_probes() {
+    local out ids
+    out="$(engine ps -a -q --filter "label=$probe_label")" || return 1
+    [ -n "$out" ] || return 0
+    mapfile -t ids <<< "$out"
+    engine rm -f -v "${ids[@]}" >/dev/null
+}
+
 cmd_status() {
     local report code renamed missing
     say "проект $project, api :$api_port, HA :$ha_port"
@@ -420,9 +473,13 @@ cmd_status() {
 case "$cmd" in
     up) cmd_up ;;
     down)
-        do_down || { printf 'stand: down завершился с ошибками\n' >&2; exit 1; }
+        rc=0
+        remove_probes || rc=1
+        do_down || rc=1
+        [ "$rc" -eq 0 ] || { printf 'stand: down завершился с ошибками\n' >&2; exit 1; }
         say "стенд $project снесён"
         ;;
     status) cmd_status ;;
     logs) stand_compose logs "${extra[@]}" ;;
+    probe) cmd_probe ;;
 esac

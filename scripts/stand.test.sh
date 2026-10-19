@@ -20,6 +20,7 @@
 #     это и есть файловая система «дистрибутива»;
 #   - cygpath и wslpath — пути как есть;
 #   - ss и netstat — слушатели из файлов состояния;
+#   - netsh.exe — исключённые диапазоны портов Windows из файла состояния;
 #   - git — подменяет только worktree list, остальное отдаёт настоящему git;
 #   - docker — голый docker хоста: пишет свой журнал, который обязан
 #     остаться пустым;
@@ -131,8 +132,9 @@ cat > "$BIN/engine-docker" <<'EOF'
 #   ancestors  — строки «<ID образа> <ID контейнера>»
 #   prod_wd    — метка working_dir контейнеров проекта domovoy
 #   engine_down — docker info отвечает ошибкой
+#   probes     — строки «<значение метки domovoy-stand.probe> <ID контейнера>»
 S="$FAKE_STATE"
-touch "$S/images" "$S/builders" "$S/ancestors"
+touch "$S/images" "$S/builders" "$S/ancestors" "$S/probes"
 args="$*"
 id_of() { printf 'sha256:id-%s' "$(printf '%s' "$1" | tr -c 'a-z0-9' '-')"; }
 add_image() { grep -q "^$1 " "$S/images" || printf '%s %s\n' "$1" "$(id_of "$1")" >> "$S/images"; }
@@ -150,7 +152,18 @@ case "$1" in
             *ancestor=*)
                 id="${args##*ancestor=}"; id="${id%% *}"
                 awk -v i="$id" '$1 == i { print $2 }' "$S/ancestors" ;;
+            *label=domovoy-stand.probe=*)
+                # Метка сравнивается целиком, как в настоящем движке.
+                v="${args##*label=domovoy-stand.probe=}"; v="${v%% *}"
+                awk -v v="$v" '$1 == v { print $2 }' "$S/probes" ;;
         esac
+        ;;
+    rm)
+        shift
+        while [ $# -gt 0 ] && [ "${1#-}" != "$1" ]; do shift; done
+        for c in "$@"; do
+            awk -v c="$c" '$2 != c' "$S/probes" > "$S/probes.tmp"; mv "$S/probes.tmp" "$S/probes"
+        done
         ;;
     image)
         case "$2" in
@@ -222,6 +235,14 @@ EOF
 cat > "$BIN/netstat" <<'EOF'
 #!/usr/bin/env bash
 [ -f "$FAKE_STATE/netstat" ] && cat "$FAKE_STATE/netstat"
+exit 0
+EOF
+
+# Перекрывает netsh.exe из System32: исключённые диапазоны портов Windows —
+# из файла состояния, по умолчанию их нет.
+cat > "$BIN/netsh.exe" <<'EOF'
+#!/usr/bin/env bash
+[ -f "$FAKE_STATE/excluded" ] && cat "$FAKE_STATE/excluded"
 exit 0
 EOF
 
@@ -713,6 +734,70 @@ grep -qx 'domovoy-stand-16-build' "$STATE/builders" || fail_case 'удалён �
 grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'
 grep -q '^domovoy-stand-7-api ' "$STATE/images" || fail_case 'удалён образ domovoy-stand-7-api'
 expect_no_bare_docker
+end_case
+
+# --- Пробы -------------------------------------------------------------------
+
+probe_port() { printf '%s\n' "$OUT" | sed -n 's/^STAND_PROBE_PORT=//p'; }
+
+begin_case 'probe: имя, порт и метка выводятся из N'
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+want="$(printf 'STAND_PROBE_NAME=domovoy-probe-7-registry\nSTAND_PROBE_PORT=20070\nSTAND_PROBE_LABEL=domovoy-stand.probe=7')"
+[ "$OUT" = "$want" ] || fail_case "stdout probe — «$OUT», ожидались ровно три строки «$want»"
+printf 'LISTEN 0 4096 127.0.0.1:20070 0.0.0.0:*\n' > "$STATE/ss"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20071 ] || fail_case "20070 занят: порт пробы «$(probe_port)», ожидался 20071"
+for p in $(seq 20070 20079); do printf 'LISTEN 0 4096 127.0.0.1:%s 0.0.0.0:*\n' "$p"; done > "$STATE/ss"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 1
+expect_err_first 'порты проб 20070…20079 заняты'
+rm -f "$STATE/ss"
+run_stand "$WORKTREE" probe --name 16 registry
+[ "$(probe_port)" = 20160 ] || fail_case "--name 16: порт «$(probe_port)», ожидался 20160"
+run_stand "$WORKTREE" probe --name 160 registry
+[ "$(probe_port)" = 21600 ] || fail_case "--name 160: порт «$(probe_port)», ожидался 21600"
+for bad in Reg_1 1reg -reg registry-name-is-long; do
+    run_stand "$WORKTREE" probe --name 7 "$bad"
+    [ "$STATUS" -eq 2 ] || fail_case "ресурс «$bad»: код $STATUS, ожидался 2"
+done
+run_stand "$WORKTREE" probe --name 7
+[ "$STATUS" -eq 2 ] || fail_case "probe без ресурса: код $STATUS, ожидался 2"
+run_stand "$WORKTREE" probe --name 7 registry postgres
+[ "$STATUS" -eq 2 ] || fail_case "probe с двумя ресурсами: код $STATUS, ожидался 2"
+expect_no_changes
+log_lacks_re '(^| )docker (run|rm|create)( |$)'
+expect_no_bare_docker
+end_case
+
+begin_case 'down: контейнеры проб стенда удаляются с томами'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+printf '7 c-probe-7a\n7 c-probe-7b\n70 c-probe-70\n' > "$STATE/probes"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_has 'ps -a -q --filter label=domovoy-stand.probe=7'
+log_has 'docker rm -f -v c-probe-7a c-probe-7b'
+if grep -E '(^| )docker rm ' "$LOG" | grep -vqE ' docker rm -f -v '; then
+    fail_case "rm без -f -v: $(grep -E '(^| )docker rm ' "$LOG" | tr '\n' ';')"
+fi
+grep -E '(^| )docker rm ' "$LOG" | grep -qE 'c-probe-70|c-prod' && fail_case 'rm задел пробу стенда 70 или боевой стек'
+grep -q ' c-probe-70$' "$STATE/probes" || fail_case 'удалена проба стенда 70'
+grep -q ' c-probe-7[ab]$' "$STATE/probes" && fail_case 'проба стенда 7 осталась'
+# Пробы — до compose down стенда.
+rm_line="$(grep -nE '(^| )docker rm ' "$LOG" | head -n 1 | cut -d: -f1)"
+down_line="$(grep -nE 'compose .* down( |$)' "$LOG" | head -n 1 | cut -d: -f1)"
+[ -n "$rm_line" ] && [ -n "$down_line" ] && [ "$rm_line" -lt "$down_line" ] \
+    || fail_case "rm проб (строка ${rm_line:-—}) не раньше compose down (строка ${down_line:-—})"
+# Проб нет — rm не вызывается вовсе.
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_lacks_re '(^| )docker rm '
 end_case
 
 # --- Голый docker ------------------------------------------------------------
