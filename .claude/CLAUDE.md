@@ -150,7 +150,10 @@ python хук пропускает вызов, а не отказывает). `s
        сообщением человеку.
     4. **Выход из worktree** — ExitWorktree, `action: keep`. Дальше — из
        основного дерева.
-    5. **Worktree и ветки.** `git worktree remove .claude/worktrees/<N>`,
+    5. **`git fetch --prune`** — до сверки веток: без него `origin/main`
+       ещё без мерджа PR, и `git cherry` ниже печатает «+» на каждом
+       коммите. Ветку на origin GitHub удаляет при мердже сам.
+    6. **Worktree и ветки.** `git worktree remove .claude/worktrees/<N>`,
        затем локальная ветка задачи — `git branch -D`. Worktree и ветки
        срезов ищутся тремя способами: `git worktree list`, каталоги
        `.claude/worktrees/agent-*` на диске (и выпавшие из списка),
@@ -163,8 +166,6 @@ python хук пропускает вызов, а не отказывает). `s
        основном дереве может работать параллельная сессия, и её свежий
        worktree агента ещё без коммитов. Отказ `git worktree remove`
        (Permission denied) — сообщение человеку.
-    6. **`git fetch --prune`** — ветку на origin GitHub удаляет при мердже
-       сам.
     7. **Подтягивание main в основном дереве.** `git branch --show-current`
        печатает `main`, а `git status --porcelain` пуст —
        `git pull --ff-only`; иначе — сообщение человеку с причиной, без
