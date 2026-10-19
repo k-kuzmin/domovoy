@@ -164,6 +164,39 @@
       "note": "Голый docker на хосте. Открой docs/rules/implement.md, раздел «Живая проверка — на стенде»: docker — только в движке domovoy-engine, живая проверка — через bash scripts/stand.sh."
     },
     {
+      "name": "prod-stack-from-clone",
+      "doc": ".claude/CLAUDE.md",
+      "tools": [
+        "Bash",
+        "PowerShell"
+      ],
+      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*(?:(?:ba|z|da)?sh(?:\\.exe)?\\s+)?(?:[^\\s|;&'\\\"]*[/\\\\])?docker-wsl\\.sh\\s+compose\\b[^|;&\\n]*\\s(?:up|down)(?=[\\s|;&)]|$)",
+      "repeat": true,
+      "note": "Команда поднимает или сносит стек compose через docker-wsl.sh. Открой .claude/CLAUDE.md, раздел «Команды человека»: чей это стек и откуда его поднимают."
+    },
+    {
+      "name": "probe-container-cleanup",
+      "doc": "docs/rules/implement.md",
+      "tools": [
+        "Bash",
+        "PowerShell"
+      ],
+      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*(?:(?:(?:ba|z|da)?sh(?:\\.exe)?\\s+)?(?:[^\\s|;&'\\\"]*[/\\\\])?docker-wsl\\.sh|wsl(?:\\.exe)?\\s+[^|;&\\n]*?(?:--exec|-e)\\s+docker)\\s+(?:container\\s+)?run\\b(?![^|;&\\n]*\\s--rm\\b)",
+      "repeat": true,
+      "note": "Временный контейнер в движке без --rm. Открой docs/rules/implement.md, раздел «Живая проверка — на стенде»: как запускать и убирать контейнеры проб."
+    },
+    {
+      "name": "post-merge-cleanup",
+      "doc": ".claude/CLAUDE.md",
+      "tools": [
+        "Bash",
+        "PowerShell"
+      ],
+      "command_regex": "(?i)(?:^|[;|&(\\n{]|\\$\\(|\\b(?:ba|z|da)?sh(?:\\.exe)?\\s+(?:-\\w+\\s+)*-\\w*c\\s+[\\\"'])\\s*(?:(?:\\w+=(?:\\\"[^\\\"]*\\\"|'[^']*'|\\S+)|timeout(?:\\s+-\\S+)*\\s+\\S+|nohup|time|env|command|exec|nice)\\s+)*(?:(?:ba|z|da)?sh(?:\\.exe)?\\s+)?(?:[^\\s|;&'\\\"]*[/\\\\])?board\\.sh\\s+\\d+\\s+(?:'Done'|\\\"Done\\\"|Done)(?=[\\s|;&)]|$)",
+      "repeat": true,
+      "note": "Статус доски Done — PR смерджен, задача закрывается. Открой .claude/CLAUDE.md, «Рекомендованный порядок», п. 11: уборка начинается в worktree задачи — стенды и пробы до выхода из него."
+    },
+    {
       "name": "step-rules-triage",
       "doc": "docs/rules/triage.md",
       "for_subagents": [

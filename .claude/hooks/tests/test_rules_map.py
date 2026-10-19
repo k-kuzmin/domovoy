@@ -126,6 +126,28 @@ PROBES = {
          bash("docker compose logs -f api", "PowerShell")],
         [bash("bash deploy/windows/docker-wsl.sh compose ps"), bash("bash scripts/stand.sh up --name 7"),
          bash("grep docker README.md"), bash("echo 'docker ps'")]),
+    "prod-stack-from-clone": (
+        [bash("bash deploy/windows/docker-wsl.sh compose up -d --build --wait"),
+         bash("bash deploy/windows/docker-wsl.sh compose down"),
+         bash("bash deploy/windows/docker-wsl.sh compose up -d --build --wait", "PowerShell")],
+        [bash("bash deploy/windows/docker-wsl.sh compose ps"),
+         bash("bash deploy/windows/docker-wsl.sh compose -p domovoy logs -f api"),
+         bash("bash scripts/stand.sh down --name 7"),
+         bash("echo 'bash deploy/windows/docker-wsl.sh compose down'")]),
+    "probe-container-cleanup": (
+        [bash("bash deploy/windows/docker-wsl.sh run -d -p 20070:5000 registry:2"),
+         bash("bash deploy/windows/docker-wsl.sh container run -d registry:2"),
+         bash("wsl.exe -d domovoy-engine --exec docker run -d postgres:16-alpine", "PowerShell")],
+        [bash("bash deploy/windows/docker-wsl.sh run --rm -d registry:2"),
+         bash("bash deploy/windows/docker-wsl.sh compose run --rm migrate"),
+         bash("wsl.exe -d domovoy-engine --exec docker run --rm postgres:16-alpine"),
+         bash("bash deploy/windows/docker-wsl.sh ps -a")]),
+    "post-merge-cleanup": (
+        [bash("bash scripts/board.sh 169 Done"), bash("bash scripts/board.sh 169 'Done'", "PowerShell"),
+         bash('bash scripts/board.sh 169 "Done"')],
+        [bash("bash scripts/board.sh 169 Review"), bash("bash scripts/board.sh 169 'In progress'"),
+         bash("bash scripts/board.test.sh"), bash("git worktree remove .claude/worktrees/agent-x"),
+         bash("echo 'board.sh 169 Done'")]),
     "rule-wiring": (
         [edit("docs/rules/new-rule.md", "x", "Write"),
          bash("cat > docs/rules/other-rule.md <<'E'\nx\nE")],
