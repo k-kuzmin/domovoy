@@ -121,6 +121,19 @@ if [ "$cmd" = docker ]; then
     case " $* " in *' exec '*) ;; *) cat > /dev/null ;; esac
     exec "$FAKE_BIN/engine-docker" "$@"
 fi
+# Гонка двух up: флаг race называет каталог стенда, который «другая сессия»
+# создаёт с меткой прямо перед скриптом захвата (его узнаём по слову claimed).
+if [ "$cmd" = sh ] && [ -f "$FAKE_STATE/race" ]; then
+    case "$*" in
+        *claimed*)
+            d="$(cat "$FAKE_STATE/race")"
+            rm -f "$FAKE_STATE/race"
+            mkdir -p "$d"
+            printf 'other-session\n' > "$d/.domovoy-stand"
+            printf 'other-session\n' > "$d/marker"
+            ;;
+    esac
+fi
 HOME="$FAKE_HOME" exec "$cmd" "$@"
 EOF
 
@@ -496,6 +509,66 @@ for sub in up down status logs; do
     log_lacks_re 'image rm|mkdir|cat >|rm -rf'
     [ "$(cat "$foreign/.env" 2>/dev/null)" = owner ] || fail_case "$sub: чужой .env в каталоге стенда изменён или удалён"
 done
+end_case
+
+# --- Номер стенда занят ------------------------------------------------------
+
+BUSY_REASON='стенд domovoy-stand-7 уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name 7 или другой --name'
+
+begin_case 'up: занятый номер — отказ, чужой стенд цел'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+d7="$FAKE_HOME/domovoy-stand/7"
+mkdir -p "$SANDBOX/before"
+for f in .env .domovoy-stand pulled-images; do cp "$d7/$f" "$SANDBOX/before/$f"; done
+# Живой стенд слушает свои порты: отказ обязан назвать номер, а не порт.
+printf 'LISTEN 0 4096 0.0.0.0:19007 0.0.0.0:*\nLISTEN 0 4096 0.0.0.0:9007 0.0.0.0:*\n' > "$STATE/ss"
+: > "$LOG"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first "$BUSY_REASON"
+for f in .env .domovoy-stand pulled-images; do
+    cmp -s "$d7/$f" "$SANDBOX/before/$f" || fail_case "$f первого стенда изменён"
+done
+log_lacks_re 'compose .* (create|up|down)( |$)'
+log_lacks_re 'buildx (create|rm)'
+log_lacks_re 'image rm|rm -rf'
+end_case
+
+begin_case 'up: каталог появился между проверкой и захватом — отказ без сноса'
+d7="$FAKE_HOME/domovoy-stand/7"
+printf '%s\n' "$d7" > "$STATE/race"
+run_stand "$WORKTREE" up --name 7
+[ ! -e "$STATE/race" ] || fail_case 'подделка гонки не сработала: нет скрипта захвата со словом claimed'
+expect_status 1
+expect_err_first "$BUSY_REASON"
+[ "$(cat "$d7/marker" 2>/dev/null)" = other-session ] || fail_case 'маркерный файл другой сессии удалён или изменён'
+[ "$(cat "$d7/.domovoy-stand" 2>/dev/null)" = other-session ] || fail_case 'метка другой сессии удалена или перезаписана'
+[ ! -e "$d7/.env" ] || fail_case '.env записан в чужой каталог'
+log_lacks_re 'compose .* (create|up|down)( |$)'
+log_lacks_re 'buildx (create|rm)'
+log_lacks_re 'image rm|rm -rf'
+end_case
+
+begin_case 'up: родителя ~/domovoy-stand нет — захват проходит'
+[ ! -e "$FAKE_HOME/domovoy-stand" ] || fail_case 'родитель ~/domovoy-stand есть до up — сценарий проверяет не то'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+case "$ERR" in *'уже поднят'*) fail_case 'отказ занятого номера на первом up' ;; esac
+[ -f "$FAKE_HOME/domovoy-stand/7/.domovoy-stand" ] || fail_case 'нет метки .domovoy-stand в каталоге стенда'
+log_has 'compose -p domovoy-stand-7'
+log_has 'up -d --wait --no-build'
+end_case
+
+begin_case 'up: родитель каталога стенда — не каталог — отказ с другой причиной'
+printf 'not-a-dir\n' > "$FAKE_HOME/domovoy-stand"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first "каталог стенда $FAKE_HOME/domovoy-stand/7 не создан"
+case "$ERR" in *'уже поднят'*) fail_case 'ошибка mkdir выдана за занятый номер' ;; esac
+[ "$(cat "$FAKE_HOME/domovoy-stand" 2>/dev/null)" = not-a-dir ] || fail_case 'файл ~/domovoy-stand изменён или удалён'
+log_lacks_re 'compose -p|buildx'
+log_lacks_re 'rm -rf'
 end_case
 
 # --- Имя, порты, проект ------------------------------------------------------

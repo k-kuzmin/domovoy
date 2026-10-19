@@ -23,7 +23,10 @@
 # config/ владельца стенду недостижимы при любом каталоге запуска. .env
 # стенда собирается только из .env.example, config/ — из config/*.example.*.
 #
-# up: проверки отказа до первого изменения → postgres и HA → затравка
+# up: проверки отказа до первого изменения, среди них — стенд с этим N уже
+# поднят или поднимается (свой каталог с меткой) и порты → захват каталога
+# стенда одним mkdir с меткой (каталог появился в другой сессии — тот же
+# отказ, без сноса) → postgres и HA → затравка
 # configuration.yaml HA до его первого старта → онбординг и переименование
 # сущностей demo в id реестра-примера (deploy/stand/ha-onboard.py внутри
 # контейнера HA) → долгоживущий токен HA в .env стенда, без вывода → сборка
@@ -250,6 +253,11 @@ owner="$(in_distro 'if [ ! -e "$1" ]; then echo absent; elif [ -f "$1/$2" ]; the
     "$standdir" "$STAND_MARK")" || refuse "$engine_down_reason"
 [ "$owner" = foreign ] \
     && refuse "каталог $standdir существует, но не принадлежит стенду: нет метки $STAND_MARK"
+# Свой каталог с меткой при up — стенд с этим N уже поднят или поднимается в
+# другой сессии. Проверка до портов: иначе живой стенд отказывал бы текстом
+# «порт занят», а не называл бы номер.
+busy_reason="стенд $project уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name $N или другой --name"
+[ "$cmd" = up ] && [ "$owner" = own ] && refuse "$busy_reason"
 if [ "$owner" = absent ]; then
     case "$cmd" in
         status) say "стенд $project не поднят"; exit 0 ;;
@@ -367,10 +375,30 @@ build_env() {
 }
 
 cmd_up() {
-    local port ref refs token code api_image
+    local port ref refs token code api_image claim
     for port in "$api_port" "$ha_port"; do
         port_busy "$port" && refuse "порт $port занят"
     done
+
+    # --- Первое изменение: захват каталога стенда. ---
+    # mkdir без -p — атомарный захват номера: из двух одновременных up каталог
+    # создаёт один, второй получает taken. Родитель общий для всех стендов и
+    # до первого up в дистрибутиве его нет — ему -p. Метка — тем же вызовом:
+    # каталога без метки, созданного up, не бывает; не записалась — каталог
+    # снимается, иначе down отказывал бы на нём как на чужом. umask 022:
+    # config/ внутри читает непривилегированный пользователь контейнера api.
+    say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
+    claim="$(in_distro 'umask 022; mkdir -p "${1%/*}" 2>/dev/null; if mkdir "$1" 2>/dev/null; then if printf "%s\n" "$3" > "$1/$2"; then echo claimed; else rmdir "$1"; echo error; fi; elif [ -e "$1" ]; then echo taken; else echo error; fi' \
+        "$standdir" "$STAND_MARK" "$project")"
+    case "$claim" in
+        claimed) ;;
+        taken) refuse "$busy_reason" ;;
+        *) refuse "каталог стенда $standdir не создан: родитель ~/domovoy-stand недоступен или нет прав" ;;
+    esac
+    # Дальше refuse нет: каждый выход — через fail_up, который сносит каталог
+    # вместе с меткой. Обрыв процесса оставляет каталог с меткой — его снимает
+    # down, названный в отказе занятого номера.
+
     # Список — заранее, а не циклом read: wsl.exe читает stdin и съел бы
     # остаток списка после первого образа.
     mapfile -t refs < <(base_images)
@@ -379,13 +407,11 @@ cmd_up() {
         engine image inspect -f '{{.Id}}' "$ref" >/dev/null 2>&1 < /dev/null || absent_images+=("$ref")
     done
 
-    # --- Первое изменение. Дальше неудача сносит стенд. ---
-    say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
     # config/ — копии примеров, секретов в них нет; читать их должен
     # непривилегированный пользователь контейнера api, поэтому umask 022.
-    # .env — 077: его читает только compose.
-    in_distro 'umask 022; mkdir -p "$1/config" && printf "%s\n" "$3" > "$1/$4" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
-        "$standdir" "$source_lx" "$project" "$STAND_MARK" || fail_up 'каталог стенда не создан'
+    # .env — 077: его читает только compose. Метка уже записана захватом.
+    in_distro 'umask 022; mkdir -p "$1/config" && for f in "$2"/config/*.example.*; do b="${f##*/}"; cp "$f" "$1/config/${b%%.example.*}.${b#*.example.}" || exit 1; done' \
+        "$standdir" "$source_lx" || fail_up 'config/ стенда не скопирован'
     build_env | in_distro 'umask 077; cat > "$1"' "$standdir/.env" || fail_up '.env стенда не записан'
 
     stand_compose create homeassistant || fail_up 'контейнер HA не создан'
