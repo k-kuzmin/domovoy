@@ -1,0 +1,438 @@
+{
+  "issue": 169,
+  "current_state": [
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 65,
+      "observation": "«Основное дерево не переключается — `git switch` и `git checkout` в нём не делаются: там может идти параллельная сессия, и чистый `git status` этого не доказывает». Про `git pull` правило молчит, и его читают как запрет: после мерджа #162 основное дерево отстало от main на 106 коммитов (тело задачи)."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 130,
+      "observation": "П. 11 (начало — строка 117): уборка после MERGED — `git worktree remove .claude/worktrees/<N>` «(и worktree срезов с их ветками, если остались)», `git branch -D`, `git fetch --prune`. Способа найти worktree и ветки срезов нет, стенды, остатки проб в движке и подтягивание main в основном дереве не названы."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 357,
+      "observation": "Блок «# Стек» раздела «Команды»: «Боевой стек (проект domovoy) поднимает и сносит владелец — «Команды человека» ниже»; команды чтения `bash deploy/windows/docker-wsl.sh compose logs -f api` и `compose ps` (строки 359–360) без `-p`: из клона разработки со своим COMPOSE_PROJECT_NAME они читают проект клона, а не боевой."
+    },
+    {
+      "path": ".claude/CLAUDE.md",
+      "line": 401,
+      "observation": "«Команды человека», строки 399–402: «Подъём и снос боевого стека (проект domovoy) — из каталога боевого стека» — `bash deploy/windows/docker-wsl.sh compose up -d --build --wait` и `compose down`. После #162 это не путь боевого стека: стек живёт в /srv/domovoy и обновляется deploy/windows/update.ps1."
+    },
+    {
+      "path": "deploy/windows/update.ps1",
+      "line": 56,
+      "observation": "`[string]$DeployDir = '/srv/domovoy'` — каталог развёртывания по умолчанию; форма вызова в .EXAMPLE (строки 40–41): `powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 [-DryRun]`. Ручной путь — шапка deploy/update.sh (строки 1–120)."
+    },
+    {
+      "path": "README.md",
+      "line": 519,
+      "observation": "«Если на этом ПК идёт разработка, в `.env` клона Windows — другое `COMPOSE_PROJECT_NAME`, иначе стек клона пересоздаст боевые контейнеры» — правило клона разработки записано в README, в .claude/CLAUDE.md его нет."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 23,
+      "observation": "`name: ${COMPOSE_PROJECT_NAME:-domovoy}`; в .env.example:24 `COMPOSE_PROJECT_NAME=domovoy`. Worktree без .env и клон с .env из примера работают с именем боевого проекта."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 190,
+      "observation": "Каталог боевого стека узнаётся по метке `com.docker.compose.project.working_dir` контейнеров проекта domovoy (`ps -a`), без константы пути; сравнение — строки 194–201 (каталог стенда равен или внутри wd; источник равен wd). Для /srv/domovoy это уже работает, сценария на /srv/domovoy нет."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 204,
+      "observation": "Источник, равный основному дереву, отказывает текстом «каталог проекта — каталог боевого стека: $main_lx». После #162 основное дерево — клон разработки, а не каталог боевого стека: отказ верен (стенд — только из worktree задачи), причина в тексте ложна."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 254,
+      "observation": "record_pulled (254–262) пишет в pulled-images своего каталога ID каждого базового образа, которого не было при проверке up (333–336). do_down (264–288) удаляет записанный ID, если `ps -a --filter ancestor=<ID>` пуст. Стенд, который ещё собирается (контейнеров нет), теряет образ при сносе соседа; стенд, который застал образ, его не записал — после сноса автора образ не удалит никто."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 343,
+      "observation": "Первая запись up — `mkdir -p \"$1/config\"` и метка .domovoy-stand. Проверка владельца (213–222) отказывает только на чужом каталоге; свой каталог с меткой (стенд с тем же N уже поднят другой сессией) up проходит и перезаписывает .env и config/. Две одновременные up обе видят absent, mkdir -p их не разводит."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 137,
+      "observation": "Комментарий о ловушке префикса: «узел стенда 16 (domovoy-stand-160) совпал бы с именем стенда 160». Фильтр по name= — подстрока; для проб с номером N та же ловушка (7/70/700)."
+    },
+    {
+      "path": "scripts/stand.test.sh",
+      "line": 299,
+      "observation": "reset_engine: метка working_dir боевого стека в подделке — `/srv/domovoy-prod`, не `/srv/domovoy`. Подделка wslpath (211–214) возвращает путь как есть — источник не может оказаться /srv/domovoy без отображения путей."
+    },
+    {
+      "path": "scripts/stand.test.sh",
+      "line": 417,
+      "observation": "Сценарий «отказ: каталог боевого стека — источник равен основному дереву» ждёт в stderr «каталог проекта — каталог боевого стека: $CLONE». Подделка движка (126–204) не знает ни `ps --filter label=domovoy-stand.probe=…`, ни `rm -f -v`."
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "line": 175,
+      "observation": "Предел проверки (175–179): без контейнеров боевого проекта метки working_dir нет, «Тогда не проверяется, что worktree … — не каталог развёртывания боевого стека вне основного дерева (#162)». Про пробы с временными контейнерами (--rm, rm -v, порт и имя) в разделе «Живая проверка — на стенде» (125–250) ничего нет."
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "line": 228,
+      "observation": "«`stand.sh` в сессии не правится и не запускается в изменённом виде до ревью диффа» — живой прогон изменённого stand.sh возможен только после ревью диффа; до него доказательство — stand.test.sh на подделках."
+    },
+    {
+      "path": "docs/rules/triage.md",
+      "line": 34,
+      "observation": "Четыре пункта «Задача готова к работе, если…» (13–32); «Вердикт «готова» ставится только при выполнении всех четырёх пунктов» и в строке 53 «ready — true только если выполнены все четыре пункта». Пункта о зависимости от поведения, которого нет в main, нет."
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "line": 162,
+      "observation": "docker-engine-only ловит только голый docker в начале команды; `bash deploy/windows/docker-wsl.sh compose up|down` и `docker-wsl.sh run` без --rm не ловит ни одна строка; на `git worktree remove` (момент уборки п. 11) строки нет. merge-wait (135–144) срабатывает на ожидании мерджа, не на уборке."
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "line": 274,
+      "observation": "Предфильтр ветки Bash/PowerShell: `*docker*` пропускает в python любую команду с docker (покрывает docker-wsl.sh); формы `git worktree remove` в предфильтре нет (строка 267 — только push, checkout -b, switch -c) — новая строка таблицы на неё молча не сработала бы."
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "line": 57,
+      "observation": "PROBES: на каждую строку таблицы — вызовы срабатывания и молчания; test_names_unique_and_every_rule_has_probe роняет тест на строке без пробы; test_rows (224) гоняет пробы через rule-injector.sh целиком, вместе с предфильтром. Образец проверки текста note — test_merge_wait_note_names_handoff_and_behind (176)."
+    }
+  ],
+  "approach": {
+    "summary": "Одна ветка, три слоя. (1) Документы. .claude/CLAUDE.md: блок «# Стек» — чтение боевого стека явно по проекту (`bash deploy/windows/docker-wsl.sh compose -p domovoy ps` и `… logs -f api`) и строка, что клон разработки работает со своим COMPOSE_PROJECT_NAME (не domovoy), иначе его compose пересоздаёт боевые контейнеры; «Команды человека» — вместо `compose up/down` из клона `powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1 [-DryRun]` (стек в /srv/domovoy), ручной путь — шапка deploy/update.sh, и правило: команды владельцу с путём дистрибутива (/srv/…) — в форме PowerShell или с префиксом MSYS_NO_PATHCONV=1 (находка #162). «Первые ходы», строка 65: запрет переключения остаётся, рядом — что `git pull --ff-only` не переключение и разрешён только в п. 11 при двух условиях. П. 11 дописывается упорядоченным списком уборки. До выхода из worktree: стенды задачи — `bash scripts/stand.sh status --name <N>` (и номера срезов из журнала), поднятый — `down`: из основного дерева stand.sh отказывает; пробы задачи — `bash deploy/windows/docker-wsl.sh ps -a --filter label=domovoy-stand.probe=<N>` (их удаляет и `stand.sh down`), затем контрольные `… ps -a`, `… volume ls --filter dangling=true`, `… image ls`, сверка с базовым снимком журнала; удаляется только появившееся за задачу, остальное — сообщением человеку. После выхода, из основного дерева: worktree и ветки срезов — `git worktree list`, каталоги `.claude/worktrees/agent-*` на диске (и выпавшие из списка), `git branch --list 'slice/<N>-*' 'worktree-agent-*'`; удаляются worktree на ветке `slice/<N>-*` и ветки `slice/<N>-*` и `worktree-agent-*`, которые не выбраны ни в одном worktree и у которых `git cherry origin/main <ветка>` не печатает ни одной строки с «+» (все коммиты уже в main); остальное — списком человеку, а не удалением (в основном дереве может работать параллельная сессия, и её свежий worktree агента ещё без коммитов); `git worktree remove` с отказом (Permission denied) — сообщение человеку. Затем `git fetch --prune` и подтягивание main: `git branch --show-current` = main и пустой `git status --porcelain` — `git pull --ff-only`; иначе — сообщение человеку с причиной, без switch, stash и reset. docs/rules/implement.md, «Живая проверка — на стенде»: пробы с временными контейнерами — только `--rm`, иначе `docker rm -f -v`; имя, порт и метка пробы — из `bash scripts/stand.sh probe`; базовый снимок `ps -a`/`volume ls --filter dangling=true`/`image ls` — до первой пробы (в #162 он снимался после проб и не увидел два тома); абзац 175–179 переписывается под /srv/domovoy и основное дерево как клон разработки. docs/rules/triage.md: пункт 5 — критерий готовности и способ его проверки не опираются на поведение, которого ещё нет в main; опираются — назвать задачу, которая его вводит, вердикт «не готова до #N»; «четырёх» → «пяти» в строках 34 и 53. (2) scripts/stand.sh. Номер: up захватывает каталог стенда атомарным `mkdir` (без -p) сразу после проверок портов; каталог уже есть (своя метка — стенд поднят или поднимается) или mkdir не прошёл — отказ кодом 1 «стенд domovoy-stand-<N> уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name <N> или другой --name», без fail_up и без сноса. Проверка отсутствующих базовых образов переносится после захвата. Образы — инвариант «базовый образ, вытянутый стендом, удаляет последний снесённый стенд»: do_down для каждого ID из своего pulled-images, если есть другой каталог ~/domovoy-stand/<M> с меткой .domovoy-stand, дописывает ID в pulled-images каждого такого стенда (без повторов) и оставляет образ со строкой «образ <ID> передан стенду domovoy-stand-<M>»; живых соседей нет — прежнее поведение (ancestor-проверка, image rm без -f). Пробы: подкоманда `bash scripts/stand.sh probe [--name <N>] <ресурс>` (ресурс — [a-z][a-z0-9-]{0,15}, иначе код 2) печатает три строки `STAND_PROBE_NAME=domovoy-probe-<N>-<ресурс>`, `STAND_PROBE_PORT=<p>`, `STAND_PROBE_LABEL=domovoy-stand.probe=<N>`, где p — первый свободный (port_busy) из 20000+10·N … 20000+10·N+9 (20010–29999: не пересекается с 19001–19999, 9001–9999, 18080, 8123); все десять заняты — отказ кодом 1. probe ничего не создаёт и не требует поднятого стенда. down до compose down удаляет контейнеры `ps -a -q --filter label=domovoy-stand.probe=<N>` (метка — точное равенство значения, не подстрока имени) через `rm -f -v`. Источник, равный основному дереву, — тот же отказ с правдивой причиной «каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: <путь>». Проверка /srv/domovoy остаётся по метке working_dir — константы пути нет; сценарии stand.test.sh ставят метку /srv/domovoy и отображают источник в /srv/domovoy подделкой wslpath. (3) Впрыск правил — по строке таблицы синхронизации «Новое правило с тихим отказом»: три новые строки rules-map.json с предфильтром и пробами — prod-stack-from-clone (`docker-wsl.sh compose … up|down`, doc .claude/CLAUDE.md, «Команды человека»), probe-container-cleanup (`docker-wsl.sh run` или `wsl.exe … --exec docker run` без --rm, doc docs/rules/implement.md, «Живая проверка — на стенде»), post-merge-cleanup (`git worktree remove`, doc .claude/CLAUDE.md, п. 11). Пункт 5 триажа строки не получает: docs/rules/triage.md уже вписывается в промпт step-triage строкой step-rules-triage, тихого отказа нет. Подтягивание main и уборка срезов, стендов и проб — одна строка post-merge-cleanup: момент у них общий.",
+    "rejected": [
+      {
+        "option": "Константа /srv/domovoy в stand.sh рядом с меткой working_dir",
+        "reason": "Каталог развёртывания переопределяется (-DeployDir update.ps1), константа разошлась бы с ним молча; метка называет каталог, из которого стек реально запущен. Предел «контейнеров боевого проекта нет — метки нет» остаётся записанным в implement.md, правило «стенд только из .claude/worktrees/<N>» его закрывает (вердикт триажа в журнале: нужен сценарий, а не правка правила)."
+      },
+      {
+        "option": "flock на ~/domovoy-stand/.lock вокруг проверки образов и сноса",
+        "reason": "Проверка и снос — десятки отдельных вызовов wsl.exe; держать блокировку через них нечем без переноса логики внутрь дистрибутива. Атомарный mkdir закрывает занятый номер, передача записи закрывает потерю образа; остаток — утечка образа в узком окне (risks), а не потеря."
+      },
+      {
+        "option": "do_down оставляет базовые образы, пока жив любой другой стенд, без передачи записи",
+        "reason": "Стенд, заставший образ при up, его не записал: после сноса автора образ не удалит никто — утечка навсегда."
+      },
+      {
+        "option": "Фильтр проб в down по name=domovoy-probe-<N>-",
+        "reason": "name= — подстрока: down стенда 7 снёс бы пробы 70 и 700 (та же ловушка, что stand.sh:137). Метка domovoy-stand.probe=<N> сравнивается целиком; ключ без «domovoy.» — иначе правило domovoy-real-hostname gitleaks (.gitleaks.toml:141) отбивает коммит."
+      },
+      {
+        "option": "Уборка веток worktree-agent-* по префиксу целиком",
+        "reason": "Префикс не несёт номера задачи: свежий worktree агента параллельной сессии без своих коммитов попал бы под удаление. Удаляются только ветки вне всех worktree и без коммитов вне main (git cherry), остальное — списком человеку."
+      },
+      {
+        "option": "Отдельная строка впрыска для пункта 5 триажа",
+        "reason": "triage.md целиком уже вписывается в промпт step-triage (step-rules-triage); вторая строка на тот же момент дублировала бы напоминание."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да, по пунктам 1–5 «Что делается» и критерию готовности; пункт 4 (стенды) — по ответу владельца в журнале: три подпроблемы, на каждую — пункт контракта приёмки и сценарии stand.test.sh, всё одним PR. Пункт «проверка каталога боевого стека учитывает /srv/domovoy» закрывается сценарием на метке working_dir, без константы пути — так записал триаж.",
+    "alternative": "Занятый номер — блокировка flock -n на каталог стенда вместо атомарного mkdir: вторая сессия получила бы тот же отказ, но каталог упавшей сессии не держал бы номер (блокировка умирает с процессом), зато держать flock через десятки вызовов wsl.exe нечем без переноса up внутрь дистрибутива — переписывание stand.sh. Выбран mkdir: каталог упавшей up и так сносит fail_up, а каталог, оставшийся после обрыва процесса, снимает названная в отказе команда down --name <N>. Наблюдаемый результат — отказ с причиной — у обоих одинаков.",
+    "ripple": "Греп: `grep -rn 'stand.sh' --include=*.md --include=*.json --include=*.yml --include=*.sh .` — stand.sh вызывают только .claude/CLAUDE.md (Команды), docs/rules/implement.md, .claude/settings.json (allow `bash scripts/stand.sh*` — новая подкоманда probe под него попадает), ci-fast.yml:208 (stand.test.sh); формат вывода up/down/status не меняется, кроме новых строк «образ … передан стенду …» и отказа занятого номера. pulled-images читают только do_down и fail_up. Метку domovoy-stand.probe не ставит и не читает больше никто. `grep -rn 'четыр' docs/rules .claude/agents` — только triage.md:34 и :53. `grep -rln 'worktree remove' . (кроме docs/tasks)` — CLAUDE.md:130 и scripts/status-progress.sh:171 (свой временный worktree сценария, правилом не затрагивается). Предфильтр rule-injector.sh — общий для всех строк Bash: новая форма `*worktree*remove*` только добавляет пропуск в python, ни одной строки не отнимает.",
+    "workaround": "Нет. Отказ занятого номера и передача записи об образе — системные инварианты владения, а не подавление; // HACK: не требуется. Остаток — утечка (не потеря) базового образа в окне между перечислением соседей в down и проверкой образов в up соседа — записан в risks с мерой.",
+    "council_signs": [
+      "правка обвязки — .claude/CLAUDE.md, docs/rules/implement.md, docs/rules/triage.md, scripts/stand.sh, scripts/stand.test.sh, .claude/hooks/rules-map.json, .claude/hooks/rule-injector.sh, .claude/hooks/tests/test_rules_map.py",
+      "общий механизм — do_down удаляет базовые образы, общие для всех стендов движка; предфильтр rule-injector.sh общий для всех Bash-строк таблицы (греп в ripple)",
+      "новая функциональность — подкоманда stand.sh probe и удаление проб в down"
+    ],
+    "executor": "Субагенты по срезам: 8 файлов и заметно больше ~40 строк, порог делегирования превышен. Три среза: docs и stand параллельно, hooks — после docs (тест таблицы читает якоря в тексте документов).",
+    "fork": false,
+    "slices": [
+      {
+        "name": "docs",
+        "files": [
+          ".claude/CLAUDE.md",
+          "docs/rules/implement.md",
+          "docs/rules/triage.md"
+        ],
+        "contract": "Тексты, которые дословно читает срез hooks (test_rules_map.py) — каждая строка ниже обязана найтись подстрокой. .claude/CLAUDE.md, раздел «Команды человека»: `powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1`, `deploy/update.sh`, `MSYS_NO_PATHCONV=1`; в файле нет подстрок `compose up -d --build --wait` и `docker-wsl.sh compose down`. Блок «# Стек»: `compose -p domovoy ps`, `COMPOSE_PROJECT_NAME`. П. 11 «Рекомендованного порядка» (от строки «11. **Мердж делает человек.**» до заголовка «**Фикс — это фикс первопричины.**»): `git pull --ff-only`, `git status --porcelain`, `.claude/worktrees/agent-*`, `slice/<N>-*`, `worktree-agent-*`, `git cherry origin/main`, `bash scripts/stand.sh status --name <N>`, `label=domovoy-stand.probe=<N>`, `volume ls --filter dangling=true`, `image ls`. docs/rules/implement.md: заголовок раздела «## Живая проверка — на стенде» не меняется; в разделе — `--rm`, `rm -f -v`, `bash scripts/stand.sh probe`, `STAND_PROBE_PORT`. docs/rules/triage.md: под заголовком «## Задача готова к работе, если выполнено всё» — нумерованные пункты 1–5; фразы «всех пяти пунктов» и «все пять пунктов»; в пункте 5 — «не готова до #». Тексты stand.sh (формула портов, имена переменных вывода, текст отказа) — из контракта среза stand, не придумываются.",
+        "after": []
+      },
+      {
+        "name": "stand",
+        "files": [
+          "scripts/stand.sh",
+          "scripts/stand.test.sh"
+        ],
+        "contract": "CLI: bash scripts/stand.sh up|down|status|logs|probe [--name <N>] [--] [аргументы logs]; probe принимает один позиционный аргумент <ресурс> по [a-z][a-z0-9-]{0,15} (иначе код 2). probe печатает в stdout ровно три строки: STAND_PROBE_NAME=domovoy-probe-<N>-<ресурс>, STAND_PROBE_PORT=<p>, STAND_PROBE_LABEL=domovoy-stand.probe=<N>; p — первый порт из 20000+10·N … 20000+10·N+9, не занятый по port_busy; все заняты — код 1, «stand: отказ: порты проб 20000+10·N…+9 заняты» с числами. probe ничего не меняет в движке и каталоге стенда и не требует поднятого стенда. Отказы, первая строка stderr: «stand: отказ: стенд domovoy-stand-<N> уже поднят или поднимается в другой сессии: bash scripts/stand.sh down --name <N> или другой --name» (up при существующем своём каталоге или неудаче атомарного mkdir; каталог и его содержимое не трогаются); «stand: отказ: каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: <путь>» (вместо прежней причины в строке 204); остальные отказы — без изменений. down: сначала `rm -f -v` контейнеров `ps -a -q --filter label=domovoy-stand.probe=<N>`, затем прежние шаги; для ID из pulled-images при живом соседнем стенде (каталог ~/domovoy-stand/<M>, M≠N, с меткой .domovoy-stand) — дописать ID в его pulled-images без повтора и напечатать «stand: образ <ID> передан стенду domovoy-stand-<M>», образ не удалять. Порядок up: проверки → порты → атомарный захват каталога (mkdir без -p) и метка → список отсутствующих базовых образов → прежние шаги. Ключ метки — domovoy-stand.probe, а не «domovoy», точка и «probe»: вторая форма совпадает с правилом domovoy-real-hostname в .gitleaks.toml:139–141 (domovoy.<2–10 букв>), и коммит с ней отбивает pre-commit — проверено на этом плане. Голого docker нет, всё через engine(). stand.test.sh идёт без движка на подделках; подделка wslpath получает отображение путей (файл состояния), подделка движка — фильтр label=domovoy-stand.probe=<N> и журнал rm -f -v.",
+        "after": []
+      },
+      {
+        "name": "hooks",
+        "files": [
+          ".claude/hooks/rules-map.json",
+          ".claude/hooks/rule-injector.sh",
+          ".claude/hooks/tests/test_rules_map.py"
+        ],
+        "contract": "rules-map.json — три строки, ключи только из KNOWN_KEYS: prod-stack-from-clone (doc .claude/CLAUDE.md, tools Bash и PowerShell, repeat true; command_regex — начало команды как у docker-engine-only, затем путь к docker-wsl.sh, `compose`, и в той же команде подкоманда up или down; note — открыть .claude/CLAUDE.md, «Команды человека»); probe-container-cleanup (doc docs/rules/implement.md, Bash и PowerShell, repeat true; command_regex — `docker-wsl.sh [container] run` или `wsl(.exe) … --exec docker [container] run` без `--rm` в той же команде, по образцу отрицательного просмотра pr-create; note — docs/rules/implement.md, «Живая проверка — на стенде»); post-merge-cleanup (doc .claude/CLAUDE.md, Bash и PowerShell; command_regex — `git … worktree remove` с тем же началом команды, что one-task-one-branch; note — .claude/CLAUDE.md, «Рекомендованный порядок», п. 11). rule-injector.sh: в ветке Bash/PowerShell строка `case \"$ti\" in *worktree*remove*) pass=1 ;; esac`; docker-формы уже пропускает `*docker*`. test_rules_map.py: PROBES на три строки — срабатывание: `bash deploy/windows/docker-wsl.sh compose up -d --build --wait`, `bash deploy/windows/docker-wsl.sh compose down`; `bash deploy/windows/docker-wsl.sh run -d -p 20070:5000 registry:2`, `wsl.exe -d domovoy-engine --exec docker run -d postgres:16-alpine`; `git worktree remove .claude/worktrees/169`, то же в PowerShell; молчание: `bash deploy/windows/docker-wsl.sh compose ps`, `bash deploy/windows/docker-wsl.sh compose -p domovoy logs -f api`, `bash scripts/stand.sh down --name 7`; `bash deploy/windows/docker-wsl.sh run --rm -d registry:2`, `bash deploy/windows/docker-wsl.sh compose run --rm migrate`; `git worktree list`, `git worktree add .claude/worktrees/169 feat/169-x`, `echo 'git worktree remove'`. Новые тесты читают якоря из контракта среза docs.",
+        "after": [
+          "docs"
+        ]
+      }
+    ],
+    "single_slice_reason": ""
+  },
+  "files": [
+    {
+      "path": ".claude/CLAUDE.md",
+      "action": "modify",
+      "why": "Пункт 1 и 2 задачи: путь боевого стека — update.ps1 из /srv/domovoy, ручной — шапка deploy/update.sh, клон разработки со своим COMPOSE_PROJECT_NAME, чтение боевого стека по -p domovoy, форма команд владельцу с путями /srv; «Первые ходы» — pull --ff-only не переключение; п. 11 — уборка с командами поиска. Группа harness_quality (.claude/**) — заявлено."
+    },
+    {
+      "path": "docs/rules/implement.md",
+      "action": "modify",
+      "why": "Пункт 3 задачи: --rm или rm -f -v у временных контейнеров проб, имя, порт и метка из stand.sh probe, базовый снимок до первой пробы; абзац о пределе проверки каталога — под /srv/domovoy и основное дерево как клон разработки. Группа harness_quality (docs/rules/**) — заявлено."
+    },
+    {
+      "path": "docs/rules/triage.md",
+      "action": "modify",
+      "why": "Пункт 5 задачи: пятый пункт о зависимости от незакрытой задачи и «пяти» вместо «четырёх» в строках 34 и 53. Группа harness_quality (docs/rules/**) — заявлено."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "action": "modify",
+      "why": "Пункт 4 задачи: атомарный захват номера, передача записи о базовых образах живому соседу, подкоманда probe и удаление проб в down; правдивая причина отказа по основному дереву (пункт 1). Группа harness_quality (scripts/**) — заявлено."
+    },
+    {
+      "path": "scripts/stand.test.sh",
+      "action": "modify",
+      "why": "Сценарии на /srv/domovoy и на каждую из трёх подпроблем стенда; подделки wslpath (отображение путей) и движка (метка проб, rm -f -v); правка ожидаемой причины существующего сценария по основному дереву. Группа harness_quality (scripts/**) — заявлено."
+    },
+    {
+      "path": ".claude/hooks/rules-map.json",
+      "action": "modify",
+      "why": "Критерий «строки впрыска для новых пунктов»: prod-stack-from-clone, probe-container-cleanup, post-merge-cleanup. Группа harness_control (.claude/hooks/**) — high, триггер «позвать человека» при любом исходе; заявлено."
+    },
+    {
+      "path": ".claude/hooks/rule-injector.sh",
+      "action": "modify",
+      "why": "Предфильтр формы `git worktree remove`: без него строка post-merge-cleanup молча не срабатывает. Группа harness_control — заявлено."
+    },
+    {
+      "path": ".claude/hooks/tests/test_rules_map.py",
+      "action": "modify",
+      "why": "Пробы трёх новых строк и тесты-якоря: тексты note совпадают с разделами документов, триаж считает все свои пункты. Группа harness_control — заявлено."
+    }
+  ],
+  "boundaries": [
+    ".claude/CLAUDE.md",
+    "docs/rules/implement.md",
+    "docs/rules/triage.md",
+    "scripts/stand.sh",
+    "scripts/stand.test.sh",
+    ".claude/hooks/rules-map.json",
+    ".claude/hooks/rule-injector.sh",
+    ".claude/hooks/tests/test_rules_map.py",
+    "docs/tasks/169.md",
+    "docs/tasks/169.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "отказ: источник — каталог развёртывания /srv/domovoy",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-srv"],
+      "behavior": "Метка working_dir боевого проекта — /srv/domovoy (и вариант /srv/domovoy/ со слэшем), подделка wslpath отображает worktree в /srv/domovoy: up и down — код 1, первая строка stderr «stand: отказ: каталог проекта — каталог боевого стека: /srv/domovoy», ни одной меняющей команды (expect_no_changes)."
+    },
+    {
+      "name": "контроль: боевой стек в /srv/domovoy, источник рядом проходит",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-srv"],
+      "behavior": "Метка working_dir — /srv/domovoy, источник отображён в /srv/domovoy-dev (ловушка префикса) и, отдельно, в обычный worktree: up — код 0, compose -p domovoy-stand-7 вызван. Падает, если сравнение станет префиксным без границы каталога."
+    },
+    {
+      "name": "отказ: каталог боевого стека — источник равен основному дереву",
+      "file": "scripts/stand.test.sh",
+      "new": false,
+      "covers": ["A-srv"],
+      "behavior": "Существующий сценарий; ожидаемая причина меняется на «каталог проекта — основное дерево (клон разработки); стенд запускается из worktree задачи: $CLONE»; код 1 и отсутствие изменений — как прежде."
+    },
+    {
+      "name": "up: занятый номер — отказ, чужой стенд цел",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-number"],
+      "behavior": "После успешного up --name 7 второй up --name 7 — код 1, первая строка stderr называет «стенд domovoy-stand-7 уже поднят или поднимается» и «down --name 7»; .env, метка и pulled-images первого стенда побайтно те же; в журнале движка второго прогона нет compose create/up/down, buildx create/rm и image rm. Падает на нынешнем stand.sh: второй up проходит и перезаписывает .env."
+    },
+    {
+      "name": "up: каталог появился между проверкой и захватом — отказ без сноса",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-number"],
+      "behavior": "Подделка wsl.exe по флагу состояния создаёт каталог стенда с меткой и маркерным файлом непосредственно перед командой захвата: up — код 1 с причиной занятого номера; маркерный файл и каталог на месте; compose down -v, buildx rm и rm -rf не вызывались (отказ не идёт через fail_up). Падает на mkdir -p."
+    },
+    {
+      "name": "down: базовый образ передаётся живому соседнему стенду",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-images"],
+      "behavior": "up 7 вытягивает buildkit (ID записан у 7), up 8 застаёт его и не записывает; down 7 — image rm buildkit не вызван, образ в состоянии движка есть, ID дописан в pulled-images стенда 8 ровно один раз, stdout содержит «образ <ID> передан стенду domovoy-stand-8». Затем down 8 — image rm <ID> вызван, образа нет. Падает на нынешнем do_down: down 7 удаляет образ, пока стенд 8 жив."
+    },
+    {
+      "name": "down: последний стенд удаляет переданный образ",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-images"],
+      "behavior": "Обратный порядок и общая запись: ID buildkit записан у стендов 7 и 8 (оба не застали образ); down 8 — образ остаётся, запись у 7 не удвоена; down 7 — образ удалён, image rm один раз за весь сценарий; образы боевого стека (postgres, HA, domovoy-api) на месте."
+    },
+    {
+      "name": "probe: имя, порт и метка выводятся из N",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-probe"],
+      "behavior": "probe --name 7 registry — код 0, stdout ровно STAND_PROBE_NAME=domovoy-probe-7-registry, STAND_PROBE_PORT=20070, STAND_PROBE_LABEL=domovoy-stand.probe=7; при занятом 20070 (подделка ss) — 20071; при занятых 20070–20079 — код 1 с причиной; --name 16 и --name 160 дают непересекающиеся диапазоны (20160… и 21600…); ресурс «Reg_1» — код 2; журнал движка без меняющих команд, каталог стенда не создан."
+    },
+    {
+      "name": "down: контейнеры проб стенда удаляются с томами",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-stand-probe", "A-rm"],
+      "behavior": "Подделка движка держит контейнеры с метками domovoy-stand.probe=7 и domovoy-stand.probe=70; down --name 7 вызывает rm -f -v только для контейнеров метки 7 (запрос ps -a -q --filter label=domovoy-stand.probe=7), контейнеры метки 70 и боевого стека не тронуты; rm без -v не вызывается."
+    },
+    {
+      "name": "test_rows",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": false,
+      "covers": ["A-hooks", "A-rm", "A-prod", "A-cleanup"],
+      "behavior": "Существующий прогон проб через rule-injector.sh с предфильтром; дополняется пробами трёх новых строк (контракт среза hooks): каждая срабатывает на своих вызовах и молчит на соседних; без строки предфильтра проба post-merge-cleanup падает."
+    },
+    {
+      "name": "test_prod_stack_rule_matches_claude_md",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": ["A-prod", "A-hooks"],
+      "behavior": "note строки prod-stack-from-clone называет .claude/CLAUDE.md и «Команды человека»; в .claude/CLAUDE.md есть «powershell -ExecutionPolicy Bypass -File deploy/windows/update.ps1», «deploy/update.sh», «COMPOSE_PROJECT_NAME», «compose -p domovoy ps», «MSYS_NO_PATHCONV=1» и нет «compose up -d --build --wait» и «docker-wsl.sh compose down». Падает на нынешнем CLAUDE.md."
+    },
+    {
+      "name": "test_post_merge_cleanup_note_names_section",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": ["A-cleanup", "A-hooks"],
+      "behavior": "note строки post-merge-cleanup называет .claude/CLAUDE.md и п. 11; текст п. 11 (от «11. **Мердж делает человек.**» до «**Фикс — это фикс первопричины.**») содержит каждую строку из контракта среза docs: git pull --ff-only, git status --porcelain, .claude/worktrees/agent-*, slice/<N>-*, worktree-agent-*, git cherry origin/main, bash scripts/stand.sh status --name <N>, label=domovoy-stand.probe=<N>, volume ls --filter dangling=true, image ls. Падает на нынешнем п. 11."
+    },
+    {
+      "name": "test_probe_rule_matches_implement_md",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": ["A-rm", "A-hooks"],
+      "behavior": "note строки probe-container-cleanup называет docs/rules/implement.md и «Живая проверка — на стенде»; раздел с этим заголовком в implement.md содержит --rm, rm -f -v, bash scripts/stand.sh probe и STAND_PROBE_PORT. Падает на нынешнем implement.md."
+    },
+    {
+      "name": "test_triage_verdict_counts_every_point",
+      "file": ".claude/hooks/tests/test_rules_map.py",
+      "new": true,
+      "covers": ["A-triage"],
+      "behavior": "Число нумерованных пунктов верхнего уровня под «## Задача готова к работе, если выполнено всё» в docs/rules/triage.md равно числу, названному в фразах вердикта («всех … пунктов», «все … пункта/пунктов», словарь числительных 4–6), и равно 5; пункт 5 содержит «не готова до #». Падает на нынешнем triage.md (4 пункта) и при будущем шестом пункте без правки фраз."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-prod",
+      "criterion": "В .claude/CLAUDE.md нет пути подъёма боевого стека из клона. Есть update.ps1 и указание на клон разработки со своим именем проекта.",
+      "method": "grep -nE 'compose up -d --build --wait|docker-wsl.sh compose down' .claude/CLAUDE.md — пусто, код 1; grep -nE 'update\\.ps1|COMPOSE_PROJECT_NAME' .claude/CLAUDE.md — строки в «Команды человека» и в блоке «# Стек»; python3 -m unittest discover -s .claude/hooks/tests -v — test_prod_stack_rule_matches_claude_md OK.",
+      "evidence": "Пустой вывод первого grep и строки второго с номерами — в журнале, раздел «Проверено»; строка OK теста."
+    },
+    {
+      "id": "A-cleanup",
+      "criterion": "П. 11 перечисляет: подтягивание main в основном дереве и условия, при которых оно не делается; уборку worktree и веток срезов; стенды задачи; остатки проб в движке с контрольными командами.",
+      "method": "Read .claude/CLAUDE.md, п. 11, — цитата четырёх подпунктов с номерами строк; test_post_merge_cleanup_note_names_section и test_rows — OK. Живое следование новому п. 11 возможно только после мерджа этого PR (правило читается из main): уборка #169 после MERGED — первый прогон, его исход оркестратор сообщает человеку в сессии (журнал к тому моменту в main).",
+      "evidence": "Цитата `файл:строка` четырёх подпунктов в журнале; строки OK тестов. Живая часть до мерджа непроверяема — записывается вслух."
+    },
+    {
+      "id": "A-rm",
+      "criterion": "docs/rules/implement.md требует --rm или rm -v у временных контейнеров проб.",
+      "method": "grep -nE -- '--rm|rm -f -v' docs/rules/implement.md — строки в разделе «Живая проверка — на стенде»; test_probe_rule_matches_implement_md, test_rows (пробы probe-container-cleanup) и сценарий stand.test.sh «down: контейнеры проб стенда удаляются с томами» — зелёные.",
+      "evidence": "Строки grep с номерами; вывод unittest OK; итог stand.test.sh «упало: 0»."
+    },
+    {
+      "id": "A-srv",
+      "criterion": "Проверка каталога боевого стека в stand.sh учитывает /srv/domovoy. Есть проверочный сценарий в scripts/stand.test.sh.",
+      "method": "bash scripts/stand.test.sh — код 0; сценарии «отказ: источник — каталог развёртывания /srv/domovoy», «контроль: боевой стек в /srv/domovoy, источник рядом проходит» и «отказ: каталог боевого стека — источник равен основному дереву» — [ ok  ]. Живьём после ревью диффа (implement.md:228): из worktree задачи bash deploy/windows/docker-wsl.sh ps -a --filter label=com.docker.compose.project=domovoy --format '{{.Label \"com.docker.compose.project.working_dir\"}}' — /srv/domovoy; bash scripts/stand.sh status --name 169 — без отказа.",
+      "evidence": "Итоговая строка stand.test.sh и три строки [ ok  ]; вывод живой метки и status в журнале."
+    },
+    {
+      "id": "A-triage",
+      "criterion": "В docs/rules/triage.md есть пункт о зависимости от незакрытой задачи; вердикт ready ставится только при выполнении всех пяти. Проверка — триаж #16 и #17 в нынешнем main возвращает «не готова» с названной задачей (#14 и #15 для #16, #18 для #17).",
+      "method": "test_triage_verdict_counts_every_point — OK. Перед прогоном: gh issue view 14 --json state, то же для 15 и 18 — OPEN (закрытая к тому моменту задача делает ожидание неверным — тогда пункт пересматривается с человеком, а не подгоняется). Затем step-triage на #16 и на #17 из worktree задачи (triage.md читается из рабочего дерева, «нынешний main» — дерево ветки с новым пунктом поверх main): ready=false, summary или questions называют #14 и #15 для #16 и #18 для #17 со ссылкой на пункт 5.",
+      "evidence": "Вывод gh по трём задачам; дословные summary двух вердиктов step-triage в журнале, раздел «Проверено»; строка OK теста."
+    },
+    {
+      "id": "A-hooks",
+      "criterion": "Строки впрыска правил (.claude/hooks/rules-map.json) для новых пунктов — по таблице синхронизации.",
+      "method": "jq -r '.rules[].name' .claude/hooks/rules-map.json — есть prod-stack-from-clone, probe-container-cleanup, post-merge-cleanup; grep -n 'worktree\\*remove' .claude/hooks/rule-injector.sh — строка предфильтра; python3 -m unittest discover -s .claude/hooks/tests -v — код 0 (test_names_unique_and_every_rule_has_probe, test_rows и новые тесты-якоря). Пункт 5 триажа строки не получает — обоснование в approach (step-rules-triage).",
+      "evidence": "Вывод jq и grep; итог unittest «OK» с числом тестов."
+    },
+    {
+      "id": "A-stand-images",
+      "criterion": "Стенды при параллельной разработке: базовый образ, вытянутый одним стендом, не теряется стендом, который ещё собирается, при сносе соседа, и удаляется последним снесённым стендом (ответ владельца: пункт 4 входит в задачу, сценарий на подпроблему).",
+      "method": "bash scripts/stand.test.sh — сценарии «down: базовый образ передаётся живому соседнему стенду» и «down: последний стенд удаляет переданный образ» — [ ok  ]. Живьём после ревью диффа: stand.sh up --name 169 и up --name 170 из двух worktree, down --name 169 — строка «образ … передан стенду domovoy-stand-170» (если buildkit не было до up), … image ls --filter reference=moby/buildkit — образ есть; down --name 170 — образа нет.",
+      "evidence": "Итог stand.test.sh; вывод двух down и image ls в журнале. Если buildkit уже был в движке до up, живая часть неприменима (стенды ничего не вытягивают) — так и записывается."
+    },
+    {
+      "id": "A-stand-number",
+      "criterion": "Стенды при параллельной разработке: две сессии с одним N не работают в одном проекте и каталоге — up отказывает, если стенд с этим номером уже поднят или поднимается (ответ владельца).",
+      "method": "bash scripts/stand.test.sh — «up: занятый номер — отказ, чужой стенд цел» и «up: каталог появился между проверкой и захватом — отказ без сноса» — [ ok  ]. Живьём после ревью диффа: при поднятом стенде 169 повторный bash scripts/stand.sh up --name 169 — код 1 с причиной, status --name 169 после него — стенд жив.",
+      "evidence": "Итог stand.test.sh; stderr отказа и вывод status в журнале."
+    },
+    {
+      "id": "A-stand-probe",
+      "criterion": "Стенды при параллельной разработке: ресурсы проб вне стенда (временный реестр, postgres) не садятся на фиксированный порт — порт и имя выводятся из N (ответ владельца).",
+      "method": "bash scripts/stand.test.sh — «probe: имя, порт и метка выводятся из N» и «down: контейнеры проб стенда удаляются с томами» — [ ok  ]. Живьём после ревью диффа: bash scripts/stand.sh probe --name 169 registry — три строки, порт 21690; bash deploy/windows/docker-wsl.sh run --rm -d --name <имя> --label <метка> -p 127.0.0.1:<порт>:5000 registry:2 (тег registry уже есть в движке после #162, иначе проба записывает вытянутый образ для уборки), затем stand.sh down --name 169 — … ps -a --filter label=domovoy-stand.probe=169 -q пусто.",
+      "evidence": "Итог stand.test.sh; вывод probe и пустой ps в журнале."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Изменённый stand.sh нельзя запускать живьём до ревью диффа (docs/rules/implement.md:228), а сценарии на подделках не ловят поведение настоящего движка: фильтр label=, atomic mkdir внутри дистрибутива, вывод ss для портов проб.",
+      "mitigation": "Живые части A-srv, A-stand-* — после ревью диффа, отдельной строкой журнала, из worktree задачи; расхождение с подделкой — починка с новым кругом ревью по маршруту. Порядок записан в контракте приёмки, а не оставлен на память."
+    },
+    {
+      "risk": "Утечка базового образа в окне: down стенда A перечислил соседей (никого) до захвата каталога стендом B, B проверил образы (образ есть, не записал), A удалил образ, B вытянул его снова без записи.",
+      "mitigation": "Порядок up — захват каталога до проверки образов — сужает окно до интервала между перечислением соседей и image rm в одном down; исход — лишний образ, а не потеря (compose create и buildx create вытягивают недостающее). Остаток виден контрольной командой … image ls из п. 11 и записан в шапке stand.sh как предел."
+    },
+    {
+      "risk": "Каталог стенда, оставшийся после обрыва процесса up (kill, закрытое окно), держит номер: новый отказ не даст поднять стенд с тем же N.",
+      "mitigation": "Текст отказа называет снятие: bash scripts/stand.sh down --name <N>; down с меткой .domovoy-stand работает и на частичном каталоге (как сейчас). Сценарий «up: занятый номер…» проверяет текст причины."
+    },
+    {
+      "risk": "git pull --ff-only в основном дереве при параллельной сессии в нём меняет файлы у неё под ногами; чистый git status её отсутствия не доказывает (.claude/CLAUDE.md:67–68).",
+      "mitigation": "Только fast-forward на main при пустом git status --porcelain: незакоммиченного нет, ветка не переключается, история не переписывается; иначе сообщение человеку. Работа в основном дереве и так не ведётся (ветка задачи — в worktree), поэтому сессия там — читающая. Формулировка в «Первых ходах» говорит это явно, а не стоит рядом с запретом молча."
+    },
+    {
+      "risk": "Уборка веток worktree-agent-* удалит ветку параллельной сессии или ветку с неперенесённой работой.",
+      "mitigation": "Удаляется только ветка, не выбранная ни в одном worktree и без строк «+» в git cherry origin/main <ветка>; остальное — списком человеку. Каталоги .claude/worktrees/agent-*, выпавшие из git worktree list, не удаляются агентом молча — списком человеку."
+    },
+    {
+      "risk": "Регулярка prod-stack-from-clone сработает на compose up стенда или на чтении, и напоминание станет шумом; probe-container-cleanup — на compose run --rm.",
+      "mitigation": "Пробы молчания в test_rows: compose ps, compose -p domovoy logs, stand.sh down, docker-wsl.sh run --rm, compose run --rm migrate; stand.sh вызывает docker через engine(), а не docker-wsl.sh, и под строки не попадает."
+    },
+    {
+      "risk": "Правка .claude/hooks/** — группа harness_control (high): уровень по плану high, триггер «позвать человека» при любом исходе, маршрут — совет из четырёх ролей и 2 круга ревью диффа.",
+      "mitigation": "Заявлено в files и council_signs; план до реализации идёт совету и человеку по минимуму маршрута high (.claude/CLAUDE.md, «Минимум маршрута»)."
+    },
+    {
+      "risk": "Живой триаж #16/#17 через step-triage: определения агентов заморожены на старте сессии, а критерий опирается на состояние #14, #15, #18, которое может смениться до прогона.",
+      "mitigation": "triage.md агент читает из рабочего дерева в момент запуска — новый пункт виден без перезапуска сессии; состояние трёх задач сверяется gh issue view непосредственно перед прогоном (A-triage)."
+    }
+  ],
+  "out_of_scope": [
+    "README.md: строки 145 и 887 (`docker compose up -d --build --wait` в разделе разработки) — критерий говорит только о .claude/CLAUDE.md; README уже требует своего COMPOSE_PROJECT_NAME у клона разработки (README.md:519).",
+    "PROD_PROJECT='domovoy' в stand.sh при другом COMPOSE_PROJECT_NAME каталога развёртывания — отдельный случай, задача его не называет.",
+    "Защита от down того же N из второй сессии — задача просит отказ up; down по-прежнему снимает стенд с меткой.",
+    "Полная сериализация стендов блокировкой внутри дистрибутива (flock) — отвергнута в approach.",
+    "Автоматическая уборка: п. 11 остаётся правилом с командами, сценария уборки нет.",
+    "Правка памяти агента и закрытие #169 — действия оркестратора, не файлы ветки.",
+    "Журнал docs/tasks/169.md ведёт оркестратор."
+  ]
+}
