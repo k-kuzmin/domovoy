@@ -413,7 +413,7 @@ cmd_up() {
     # снимается, иначе down отказывал бы на нём как на чужом. umask 022:
     # config/ внутри читает непривилегированный пользователь контейнера api.
     say "проект $project, api :$api_port, HA :$ha_port, каталог $standdir"
-    claim="$(in_distro 'umask 022; mkdir -p "${1%/*}" 2>/dev/null; if mkdir "$1" 2>/dev/null; then if printf "%s\n" "$3" > "$1/$2"; then echo claimed; else rmdir "$1"; echo error; fi; elif [ -e "$1" ]; then echo taken; else echo error; fi' \
+    claim="$(in_distro 'umask 022; mkdir -p "${1%/*}" 2>/dev/null; if mkdir "$1" 2>/dev/null; then if { printf "%s\n" "$3" > "$1/$2"; } 2>/dev/null; then echo claimed; else rmdir "$1"; echo error; fi; elif [ -e "$1" ]; then echo taken; else echo error; fi' \
         "$standdir" "$STAND_MARK" "$project")"
     case "$claim" in
         claimed) ;;
