@@ -371,6 +371,8 @@ expect_no_bare_docker() {
 
 pulled_file() { printf '%s/domovoy-stand/%s/pulled-images' "$FAKE_HOME" "$1"; }
 
+probe_port() { printf '%s\n' "$OUT" | sed -n 's/^STAND_PROBE_PORT=//p'; }
+
 # --- Отказы ------------------------------------------------------------------
 
 begin_case 'отказ: имя domovoy'
@@ -399,6 +401,24 @@ run_stand "$WORKTREE" up --name 7
 expect_status 1
 expect_err_first 'порт 9007 занят'
 expect_no_changes
+end_case
+
+begin_case 'порты: исключённый диапазон Windows считается занятым'
+# Шапка на русском, подвал со звёздочкой, CRLF — как у настоящего netsh.
+printf '\r\nДиапазоны исключенных портов для протокола tcp\r\n\r\nНачальный порт    Конечный порт\r\n----------    --------\r\n     20060       20069\r\n     20070       20070\r\n     19007       19007 *\r\n\r\n* - Административно исключенные диапазоны портов.\r\n' \
+    > "$STATE/excluded"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20071 ] || fail_case "порт пробы «$(probe_port)», ожидался 20071 (20070 исключён)"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+expect_err_first 'порт 19007 занят'
+expect_no_changes
+rm -f "$STATE/excluded"
+: > "$LOG"
+run_stand "$WORKTREE" probe --name 7 registry
+expect_status 0
+[ "$(probe_port)" = 20070 ] || fail_case "без исключений порт пробы «$(probe_port)», ожидался 20070"
 end_case
 
 begin_case 'отказ: движок недоступен'
@@ -737,8 +757,6 @@ expect_no_bare_docker
 end_case
 
 # --- Пробы -------------------------------------------------------------------
-
-probe_port() { printf '%s\n' "$OUT" | sed -n 's/^STAND_PROBE_PORT=//p'; }
 
 begin_case 'probe: имя, порт и метка выводятся из N'
 run_stand "$WORKTREE" probe --name 7 registry
