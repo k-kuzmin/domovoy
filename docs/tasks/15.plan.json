@@ -9,7 +9,27 @@
     {
       "path": "src/Domovoy.Ha/HaRestClient.cs",
       "line": 66,
-      "observation": "GetStatesAsync (66–79) отдаёт только сущности allow-list: кэш при HaConnectionStatus.Connected, иначе REST; при ненастроенном HA, не-2xx, сетевой ошибке и неразобранном ответе бросает HaUnavailableException (176–219). Устаревший кэш как актуальный не отдаётся."
+      "observation": "GetStatesAsync (66–79) отдаёт только сущности allow-list: кэш при HaConnectionStatus.Connected, иначе REST; при ненастроенном HA, не-2xx, сетевой ошибке и неразобранном ответе бросает HaUnavailableException (176–219). Кэш при обрыве как актуальный не отдаётся; при Connected отставание кэша ограничено только проверкой живости соединения (см. HaWebSocketWorker)."
+    },
+    {
+      "path": "src/Domovoy.Ha/WebSocket/HaWebSocketWorker.cs",
+      "line": 24,
+      "observation": "Живость (24–28, цикл 215–236): после тишины IdleBeforePing — прикладной ping; если за PongTimeout не пришло ни одного кадра, соединение считается оборванным и статус уходит из Connected (143), чтение — в REST. Значения по умолчанию — HaWebSocketTimings.cs:24 (20 с) и :27 (10 с): мёртвый сокет отдаёт кэш как актуальный не дольше ~30 с. Потерю события на живом сокете проверка живости не ловит — это контракт слоя Ha, а не эндпоинта."
+    },
+    {
+      "path": "src/Domovoy.Ha/State/HaStateCache.cs",
+      "line": 40,
+      "observation": "Фильтр allow-list на входе кэша: ReplaceAll (40–46) и Apply (62) отбрасывают сущности вне списка — кэш-путь GetStatesAsync отдаёт тот же состав, что REST-путь после фильтра Matches."
+    },
+    {
+      "path": "src/Domovoy.Ha/Registry/HaDomainCatalog.cs",
+      "line": 61,
+      "observation": "NumberFormat (61–65) — без AllowExponent; Integer (TryConvert, 133–141) принимает дробное, только если оно равно целому. Отсюда исход для сырого текста value: 50, 50.0 и \"50\" → brightness_pct 50; 1e2 → отказ invalid_value; значение у действия без поля значения (107–113) → invalid_value."
+    },
+    {
+      "path": "src/Domovoy.Ha/HaRestClient.cs",
+      "line": 121,
+      "observation": "Подтверждение требуется, если его требует спецификация действия из каталога (HaDomainCatalog — internal в Ha) ИЛИ дескриптор сущности: признак действия, а не сущности, и из Core целиком не виден."
     },
     {
       "path": "src/Domovoy.Ha/HaRestClient.cs",
@@ -98,7 +118,7 @@
     }
   ],
   "approach": {
-    "summary": "Обработчики двух маршрутов выносятся в новый файл src/Domovoy.Api/Endpoints/HomeEndpoints.cs; ApiV1Endpoints только маппит их вместо заглушек (имена маршрутов state и action сохраняются). LLM, ILlmProvider и оркестратор обработчики не трогают вовсе: зависимости — IHaClient, IEntityAllowList, TimeProvider.\n\nGET /api/v1/state → 200 {\"as_of\", \"areas\": [{\"id\", \"name\", \"entities\": [{\"entity_id\", \"name\", \"domain\", \"state\", \"last_updated\", \"actions\"}]}]}. Состояния — IHaClient.GetStatesAsync(null, null) (фильтр allow-list уже там). Комнаты — IEntityAllowList.Areas в порядке реестра, включая комнату без сущностей (пустой массив); сущности внутри комнаты — в порядке IEntityAllowList.All. name — FriendlyName реестра, а не атрибут HA (NFR-SEC-6); actions — AllowedActions без read; attributes в ответ не идут. Сущность allow-list, состояния которой HA не вернул, в срез не попадает: состояние не выдумывается. Отметка актуальности — as_of = TimeProvider.GetUtcNow() в момент чтения (GetStatesAsync отдаёт кэш только при живом соединении, иначе читает REST, — данные актуальны на момент ответа) плюс last_updated каждой сущности из HaEntityState.LastUpdated. HaUnavailableException → 503 ha_unavailable в едином формате; отмена запроса пробрасывается.\n\nPOST /api/v1/action, тело {\"entity_id\": строка, \"action\": строка, \"value\"?: строка | число | логическое}. Тело читается вручную, как в ReadPairingRequestAsync: не JSON, не тот Content-Type, пустые entity_id/action, value-объект или массив → 400 invalid_request. Число передаётся сырым текстом JSON, логическое — true/false, строка — как есть. Домен — префикс entity_id (как FastPathRunner.DomainOf); allow-list, белый список действий и подтверждение проверяет только HaRestClient.CallServiceAsync — в эндпоинте второй проверки нет (правило 5 «Безопасность»). Успех → 200 {\"entity_id\", \"action\"}. Отказ → единый формат, error.code = ToolResult.ErrorCode как есть, message = ToolResult.Error (уже обезличен слоем Ha), статус по таблице: entity_not_allowed → 403, action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, иной или пустой код → 500 internal_error (новая константа ApiErrorResults.InternalError). Обработчики не читают claims устройства.\n\nТесты аутентификации, доказывавшие «аутентификация пройдена» ответом 501 от /state, переводятся на маршрут, который остаётся заглушкой, — константа AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" (этап 3); проверки «без токена — 401» на /state остаются как есть. Поведенческие тесты новых эндпоинтов — tests/Domovoy.Tests/HomeEndpointsTests.cs на DomovoyApiFactory.WithWebHostBuilder с FakeHomeAssistant (Ha:BaseUrl, Ha:Token), WebSocket фейка в режиме Down — чтение детерминированно идёт в REST, без гонки с подключением; Llm:BaseUrl = http://127.0.0.1:9/v1 и Llm:ApiKey задан во всех тестах класса. README получает подраздел про экран «Дом» с curl для обоих эндпоинтов и таблицей кодов; тест берёт метод, путь и тело из этих примеров и исполняет их на тестовом хосте.",
+    "summary": "Обработчики двух маршрутов выносятся в новый файл src/Domovoy.Api/Endpoints/HomeEndpoints.cs; ApiV1Endpoints только маппит их вместо заглушек (имена маршрутов state и action сохраняются). LLM, ILlmProvider и оркестратор обработчики не трогают вовсе: зависимости — IHaClient, IEntityAllowList, TimeProvider.\n\nGET /api/v1/state → 200 {\"as_of\", \"areas\": [{\"id\", \"name\", \"entities\": [{\"entity_id\", \"name\", \"domain\", \"state\", \"last_updated\", \"actions\"}]}]}. Состояния — IHaClient.GetStatesAsync(null, null) (фильтр allow-list уже там). Комнаты — IEntityAllowList.Areas в порядке реестра, включая комнату без сущностей (пустой массив); сущности внутри комнаты — в порядке IEntityAllowList.All. name — FriendlyName реестра, а не атрибут HA (NFR-SEC-6); actions — AllowedActions без read; attributes в ответ не идут. Сущность allow-list, состояния которой HA не вернул, в срез не попадает: состояние не выдумывается. Отметка актуальности — две, с разным смыслом, и README называет оба. as_of = TimeProvider.GetUtcNow() — момент, когда сервер снял срез с источника, который слой Ha в этот момент считает актуальным: REST читается в этом же запросе; кэш отдаётся только при Connected, а Connected держится не дольше окна живости после последнего кадра HA (HaWebSocketWorker.cs:24–28, HaWebSocketTimings.cs:24,27 — по умолчанию ~30 с), то есть при Connected соединение подтвердило живость не раньше чем за это окно до as_of, а данные отражают все события, доставленные этим соединением (событие, потерянное на живом сокете, кэш не отразит — контракт слоя Ha, риск ниже). Это не «время ответа сервера» без связи с данными: при недоступном источнике среза нет вовсе — 503. Свежесть каждой сущности несёт last_updated из HaEntityState.LastUpdated — метка HA, а не сервера, поэтому ложной свежести по сущности ответ не создаёт. HaUnavailableException → 503 ha_unavailable в едином формате; отмена запроса пробрасывается.\n\nPOST /api/v1/action, тело {\"entity_id\": строка, \"action\": строка, \"value\"?: строка | число | логическое}. Тело читается вручную, как в ReadPairingRequestAsync: не JSON, не тот Content-Type, пустые entity_id/action, value-объект или массив → 400 invalid_request. Число передаётся сырым текстом JSON, логическое — true/false, строка — как есть: разбор значения один — HaDomainCatalog.TryBuildPayload, общий с быстрым путём. Исход по нему фиксируется тестом и README: для set_brightness 50, 50.0 и \"50\" → brightness_pct 50; 1e2 → 400 invalid_value (NumberFormat без экспоненты); value у действия без значения (turn_on) → 400 invalid_value. Домен — префикс entity_id (как FastPathRunner.DomainOf); allow-list, белый список действий и подтверждение проверяет только HaRestClient.CallServiceAsync — в эндпоинте второй проверки нет (правило 5 «Безопасность»). Успех → 200 {\"entity_id\", \"action\"}. Отказ → единый формат, error.code = ToolResult.ErrorCode как есть, message = ToolResult.Error (уже обезличен слоем Ha), статус по таблице: entity_not_allowed → 403, action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, иной или пустой код → 500 internal_error (новая константа ApiErrorResults.InternalError). Обработчики не читают claims устройства.\n\nТесты аутентификации, доказывавшие «аутентификация пройдена» ответом 501 от /state, переводятся на маршрут, который остаётся заглушкой, — константа AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" (этап 3); проверки «без токена — 401» на /state остаются как есть. Поведенческие тесты новых эндпоинтов — tests/Domovoy.Tests/HomeEndpointsTests.cs на DomovoyApiFactory.WithWebHostBuilder с FakeHomeAssistant (Ha:BaseUrl, Ha:Token). По умолчанию WebSocket фейка в режиме Down — чтение детерминированно идёт в REST, без гонки с подключением; кэш-путь через эндпоинт проверяет отдельный тест StateServesAllowListedCacheWhenWebSocketConnected: он ждёт Connected явно и доказывает чтение из кэша расхождением кэша и REST. Llm:BaseUrl = http://127.0.0.1:9/v1 и Llm:ApiKey задан во всех тестах класса. README получает подраздел про экран «Дом»: curl для обоих эндпоинтов (каждая команда — одной строкой, без продолжения «\\»), таблица кодов отказа, смысл as_of и last_updated, исход для форм value и строка о том, что действия с подтверждением (замки и т. п.) до #47 отвечают 409 confirmation_required. Тест берёт метод, путь и тело из текста README (не из копии в тесте) фиксированным разбором однострочной команды curl — общего парсера curl нет.",
     "rejected": [
       {
         "option": "Отдавать при недоступном HA последний кэш с as_of = время последнего подключения",
@@ -107,6 +127,14 @@
       {
         "option": "as_of = максимум last_updated среди сущностей",
         "reason": "В тихом доме, где давно ничего не менялось, срез выглядел бы устаревшим при живом соединении; свежесть каждой сущности и так несёт last_updated."
+      },
+      {
+        "option": "as_of = время последнего кадра WebSocket-соединения (или последнего применённого события)",
+        "reason": "Отметка измеряет ту же живость сокета, а не свежесть данных: событие, потерянное на живом сокете, она так же не отражает, и клиенту ничего не добавляет к as_of и last_updated по сущности — поэтому и не развилка. Вторая причина: требует новой отметки в HaConnectionState/HaStateCache — правки src/Domovoy.Ha/**, вне границ задачи."
+      },
+      {
+        "option": "Поле requires_confirmation у сущности в /state (замечание инженера, круг 1)",
+        "reason": "Подтверждение — признак действия, а не сущности: HaRestClient.cs:121 объединяет флаг спецификации из internal HaDomainCatalog и флаг дескриптора; поле из одного HaEntityDescriptor.RequiresConfirmation могло бы соврать. Взамен — строка README о 409 confirmation_required до #47; признак по действию можно добавить необязательным полем вместе с #47."
       },
       {
         "option": "Проверять allow-list и белый список действий в эндпоинте /action до вызова IHaClient",
@@ -158,7 +186,7 @@
           "README.md",
           "tests/test-count.baseline"
         ],
-        "contract": "internal static class HomeEndpoints с обработчиками GetStateAsync (GET) и PostActionAsync (POST); ApiV1Endpoints маппит их как api.MapGet(\"/state\", HomeEndpoints.GetStateAsync).WithName(\"state\") и api.MapPost(\"/action\", HomeEndpoints.PostActionAsync).WithName(\"action\"), группа и RequireAuthorization не меняются. ApiErrorResults.InternalError = \"internal_error\". Формы JSON (snake_case через JsonPropertyName): /state — {as_of, areas:[{id, name, entities:[{entity_id, name, domain, state, last_updated, actions}]}]}; /action запрос {entity_id, action, value?}, успех 200 {entity_id, action}; отказы — { error: { code, message } } со статусами из approach. HA недоступен на /state — 503 ha_unavailable. Порядок внутри среза: сначала HomeEndpointsTests — красный прогон на заглушках 501 с фактическим текстом падения, затем реализация. README — подраздел экрана «Дом» с curl для обоих эндпоинтов (вымышленные хост и сущность из config/entities.example.yaml, токен — плейсхолдер <device-token>) и таблицей кодов отказа. test-count.baseline — число, напечатанное scripts/test-count-invariant.sh (перенацеливание Auth число случаев не меняет). Тесты Auth — файлы среза auth-tests-retarget, здесь не правятся.",
+        "contract": "internal static class HomeEndpoints с обработчиками GetStateAsync (GET) и PostActionAsync (POST); ApiV1Endpoints маппит их как api.MapGet(\"/state\", HomeEndpoints.GetStateAsync).WithName(\"state\") и api.MapPost(\"/action\", HomeEndpoints.PostActionAsync).WithName(\"action\"), группа и RequireAuthorization не меняются. ApiErrorResults.InternalError = \"internal_error\". Формы JSON (snake_case через JsonPropertyName): /state — {as_of, areas:[{id, name, entities:[{entity_id, name, domain, state, last_updated, actions}]}]}; /action запрос {entity_id, action, value?}, успех 200 {entity_id, action}; отказы — { error: { code, message } } со статусами из approach. HA недоступен на /state — 503 ha_unavailable. По умолчанию тесты класса держат WebSocket фейка в Down; единственное исключение — StateServesAllowListedCacheWhenWebSocketConnected (режим Accept, ожидание HaConnectionState.Status == Connected из DI хоста с ограничением по времени). Порядок внутри среза: сначала HomeEndpointsTests — красный прогон на заглушках 501 с фактическим текстом падения, затем реализация. README — подраздел экрана «Дом»: ровно два блока ```bash с curl, по одной однострочной команде в каждом (без «\\»), тело /action — в одинарных кавычках после -d; вымышленные хост и сущность из config/entities.example.yaml, токен — плейсхолдер <device-token>; таблица кодов отказа; смысл as_of (момент снятия среза; при Connected соединение подтвердило живость не раньше чем за окно до него, данные отражают доставленные им события — это не обещание возраста данных) и last_updated (метка HA по сущности); исход для форм value (50, 50.0, \"50\" — приняты, 1e2 — invalid_value); строка «действия с подтверждением до #47 отвечают 409 confirmation_required». Тест README опирается именно на эту форму блоков. test-count.baseline — число, напечатанное scripts/test-count-invariant.sh (перенацеливание Auth число случаев не меняет). Тесты Auth — файлы среза auth-tests-retarget, здесь не правятся.",
         "after": [
           "auth-tests-retarget"
         ]
@@ -250,6 +278,16 @@
       "behavior": "TimeProvider подменён ManualTimeProvider с заданным моментом; as_of в ответе равен ему точно, а не «какому-то времени»; после Advance следующий ответ несёт новый момент."
     },
     {
+      "name": "StateServesAllowListedCacheWhenWebSocketConnected",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-state",
+        "A-tests"
+      ],
+      "behavior": "WebSocket фейка в режиме Accept; в фейке те же две сущности реестра и одна вне allow-list, что в StateGroupsAllowListedEntitiesByArea. Тест ждёт HaConnectionState.Status == Connected из DI хоста (с пределом по времени). Затем фейк меняет состояние сущности реестра через SetState — без события, кэш о нём не знает. GET /api/v1/state → 200: сущность несёт прежние state и last_updated (положительный контроль чтения из кэша: REST отдал бы новое), за этот вызов в RestRequests фейка не появилось GET /api/states; состав и порядок комнат и сущностей — те же, что в REST-тесте (общая проверка), сущности вне списка нет. Затем PushStateChangedAsync той же сущности → следующий GET /state (с ожиданием применения события) несёт новое состояние: кэш-путь отражает события."
+    },
+    {
       "name": "StateReportsHaUnavailableInUnifiedFormat",
       "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
       "new": true,
@@ -267,7 +305,7 @@
         "A-action",
         "A-tests"
       ],
-      "behavior": "POST /api/v1/action {entity_id светильника кухни, action turn_on} → 200 {entity_id, action}; фейк получил ровно один POST /api/services/light/turn_on с этой сущностью в теле и ожидаемым токеном. Второй случай: set_brightness с числом 50 в JSON → в payload brightness_pct 50."
+      "behavior": "POST /api/v1/action {entity_id светильника кухни, action turn_on} → 200 {entity_id, action}; фейк получил ровно один POST /api/services/light/turn_on с этой сущностью в теле и ожидаемым токеном. Theory по формам value для set_brightness: число 50, число 50.0 и строка \"50\" → 200, в payload фейка brightness_pct ровно 50 (целое)."
     },
     {
       "name": "ActionRejectsOutsideWhitelistBeforeHomeAssistant",
@@ -277,7 +315,7 @@
         "A-action",
         "A-tests"
       ],
-      "behavior": "Theory: сущность вне allow-list → 403 entity_not_allowed; действие вне реестра сущности (unlock у светильника) и read у сенсора → 403 action_not_allowed; unlock у замка → 409 confirmation_required; значение вне границ (set_brightness 400) → 400 invalid_value. Во всех случаях тело — единый формат, и фейк не получил ни одного POST: отказ до HTTP."
+      "behavior": "Theory: сущность вне allow-list → 403 entity_not_allowed; действие вне реестра сущности (unlock у светильника) и read у сенсора → 403 action_not_allowed; unlock у замка → 409 confirmation_required; значение вне границ (set_brightness 400), число в экспоненциальной записи (set_brightness 1e2) и value у действия без значения (turn_on со значением) → 400 invalid_value. Во всех случаях тело — единый формат, и фейк не получил ни одного POST: отказ до HTTP."
     },
     {
       "name": "ActionRejectsMalformedBody",
@@ -327,14 +365,14 @@
         "A-readme",
         "A-tests"
       ],
-      "behavior": "Из README.md берутся блоки ```bash, содержащие путь /api/v1/state или /api/v1/action (якорь — путь в блоке, а не формулировка текста); строки, продолженные «\\», склеиваются до разбора; из команды извлекаются метод (-X, по умолчанию GET), путь и тело -d '…'. Положительный контроль — найдены оба блока и тело /action разобрано как JSON. Команды исполняются на тестовом хосте с токеном устройства вместо плейсхолдера <device-token> и фейком HA → оба 200: пример в README вызывает реализованный эндпоинт, а не 404, 400 или 501."
+      "behavior": "Из текста README.md (не из копии в тесте) берутся блоки ```bash, содержащие путь /api/v1/state или /api/v1/action (якорь — путь в блоке, а не формулировка текста). Разбор фиксированный, под форму, заданную контрактом среза: одна однострочная команда curl на блок, метод — -X (по умолчанию GET), путь — после хоста, тело — -d '…'; общего парсера curl и склейки «\\» нет. Положительный контроль — найдено ровно два блока, по одному на путь, и тело /action разобрано как JSON. Команды исполняются на тестовом хосте с токеном устройства вместо плейсхолдера <device-token> и фейком HA → оба 200: пример в README вызывает реализованный эндпоинт, а не 404, 400 или 501."
     }
   ],
   "acceptance": [
     {
       "id": "A-state",
       "criterion": "GET /api/v1/state отдаёт срез состояния дома, сгруппированный по комнатам, включающий только сущности из allow-list и отметку времени актуальности данных",
-      "method": "dotnet test --filter \"FullyQualifiedName~HomeEndpointsTests\" — зелёные StateGroupsAllowListedEntitiesByArea, StateCarriesSnapshotTimestamp, StateReportsHaUnavailableInUnifiedFormat. Живое наблюдение: bash scripts/stand.sh up, привязка устройства через админ-эндпоинт стенда, curl GET /api/v1/state на порт стенда.",
+      "method": "dotnet test --filter \"FullyQualifiedName~HomeEndpointsTests\" — зелёные StateGroupsAllowListedEntitiesByArea, StateServesAllowListedCacheWhenWebSocketConnected, StateCarriesSnapshotTimestamp, StateReportsHaUnavailableInUnifiedFormat. Живое наблюдение: bash scripts/stand.sh up, привязка устройства через админ-эндпоинт стенда, curl GET /api/v1/state на порт стенда.",
       "evidence": "Вывод dotnet test с числом пройденных тестов класса; фактический ответ стенда — HTTP 200 и JSON с areas по комнатам реестра-примера, as_of и last_updated (вымышленные сущности demo), записанный в журнал."
     },
     {
@@ -381,7 +419,11 @@
     },
     {
       "risk": "Гонка WebSocket-подключения в тестах: чтение то из кэша, то из REST, нестабильный результат.",
-      "mitigation": "WebSocket фейка в режиме Down во всех тестах HomeEndpointsTests: путь чтения — REST, детерминированно; кэш-путь GetStatesAsync уже покрыт HaRestClientTests."
+      "mitigation": "WebSocket фейка в режиме Down во всех тестах HomeEndpointsTests, кроме одного: путь чтения — REST, детерминированно. Кэш-путь через эндпоинт проверяет StateServesAllowListedCacheWhenWebSocketConnected — он не полагается на тайминг, а явно ждёт Connected из DI хоста и доказывает чтение из кэша расхождением кэша и REST (SetState без события) и отсутствием GET /api/states за вызов."
+    },
+    {
+      "risk": "Ложная свежесть среза: при Connected кэш отдаётся с as_of = «сейчас», хотя отстаёт — на мёртвом сокете до окна живости, на живом сокете с потерянным событием — без предела.",
+      "mitigation": "Мёртвый сокет: Connected снимается не позже IdleBeforePing + PongTimeout (HaWebSocketWorker.cs:24–28, HaWebSocketTimings.cs:24,27), и README называет as_of моментом снятия среза с этим окном, а не временем изменения данных. Потеря события на живом сокете — контракт слоя Ha (HaStateCache, статус соединения), общий с быстрым путём и LLM, читающими тот же кэш; эндпоинт его не ослабляет и не исправляет: свежесть по сущности несёт last_updated — метка HA, не сервера. Правка слоя Ha (отметка последнего события, сверка с REST) — вне границ, уходит разделом «Попутно» в тело PR."
     },
     {
       "risk": "Уровень по плану high из-за правки tests/**/Auth/** (product_security) — дольше маршрут.",
