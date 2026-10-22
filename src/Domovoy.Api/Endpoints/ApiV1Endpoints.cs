@@ -41,10 +41,10 @@ public static class ApiV1Endpoints
         api.MapPost("/confirm", () => NotImplemented("Этап 6: подтверждение чувствительного действия."))
             .WithName("confirm");
 
-        api.MapGet("/state", () => NotImplemented("Этап 1: срез состояния дома для экрана «Дом»."))
+        api.MapGet("/state", HomeEndpoints.GetStateAsync)
             .WithName("state");
 
-        api.MapPost("/action", () => NotImplemented("Этап 1: быстрое действие из интерфейса, минуя LLM."))
+        api.MapPost("/action", HomeEndpoints.PostActionAsync)
             .WithName("action");
 
         api.MapGet("/notifications", () => NotImplemented("Этап 3: лента уведомлений."))
