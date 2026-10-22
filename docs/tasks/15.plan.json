@@ -1,0 +1,403 @@
+{
+  "issue": 15,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "line": 44,
+      "observation": "GET /state (44–45) и POST /action (47–48) — заглушки NotImplemented(...) с ответом 501 в едином формате; маршруты уже в группе /api/v1 с RequireAuthorization (24) и с именами state и action. Образец ручного чтения тела в единый формат ошибок — ReadPairingRequestAsync (127–142): привязка параметра ответила бы своим форматом."
+    },
+    {
+      "path": "src/Domovoy.Ha/HaRestClient.cs",
+      "line": 66,
+      "observation": "GetStatesAsync (66–79) отдаёт только сущности allow-list: кэш при HaConnectionStatus.Connected, иначе REST; при ненастроенном HA, не-2xx, сетевой ошибке и неразобранном ответе бросает HaUnavailableException (176–219). Устаревший кэш как актуальный не отдаётся."
+    },
+    {
+      "path": "src/Domovoy.Ha/HaRestClient.cs",
+      "line": 88,
+      "observation": "CallServiceAsync (81–165) — единственная точка проверки allow-list для действий: entity_not_allowed, action_not_allowed (чужой домен, действие вне реестра, read, действие вне каталога), invalid_value, confirmation_required — всё до HTTP; затем ha_unavailable / ha_rejected. Отказы — ToolResult с ErrorCode и обезличенным Error, без исключений."
+    },
+    {
+      "path": "src/Domovoy.Core/Routing/FastPathRunner.cs",
+      "line": 85,
+      "observation": "DomainOf (85–89) берёт домен из префикса entity_id; сам раннер allow-list не проверяет (doc 16–19): чужой домен или сущность вне списка отклоняет слой Ha. Тот же приём годится для /action."
+    },
+    {
+      "path": "src/Domovoy.Core/Abstractions/IEntityAllowList.cs",
+      "line": 19,
+      "observation": "All (19) и Areas (22) — порядок реестра; Find (28) даёт HaEntityDescriptor с FriendlyName, Area, Domain, AllowedActions. Комнаты и имена для группировки берутся отсюда, а не из атрибутов HA."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/HaEntityState.cs",
+      "line": 23,
+      "observation": "У состояния есть LastUpdated (23) и LastChanged (17) — отметка свежести по сущности. Attributes (15) — данные HA, в ответ /state по этому плану не идут."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/HaErrorCodes.cs",
+      "line": 7,
+      "observation": "Шесть кодов отказа слоя Ha (10–28); doc (3–6): ToolResult.ErrorCode и ApiError.Code используют одни и те же строки — значит, в error.code ответа /action они идут как есть."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+      "line": 30,
+      "observation": "Единственный писатель формата { error: { code, message } } — Result(status, code, message) (30–33); константы кодов API (16–23), кода для непредвиденного отказа нет."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/AdminEndpoints.cs",
+      "line": 97,
+      "observation": "Ответы — private sealed record с [property: JsonPropertyName(\"snake_case\")] (97–108): expires_at, last_seen_at. Глобальной политики имён JSON нет."
+    },
+    {
+      "path": "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
+      "line": 46,
+      "observation": "TimeProvider.System зарегистрирован TryAddSingleton (46); в тестах есть ManualTimeProvider (tests/Domovoy.Tests/Auth/ManualTimeProvider.cs) — отметку времени среза можно проверять точным равенством."
+    },
+    {
+      "path": "src/Domovoy.Core/Configuration/LlmOptions.cs",
+      "line": 24,
+      "observation": "BaseUrl помечен [Required][Url] (24–26), секция проходит ValidateOnStart: «заведомо неверный base_url» в тесте обязан быть синтаксически валидным, но недостижимым, иначе хост не стартует. IsConfigured — по ApiKey (65)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/DomovoyApiFactory.cs",
+      "line": 62,
+      "observation": "Фабрика приложения: Ha:BaseUrl — закрытый порт 127.0.0.1:9 (62), реестр — config/entities.example.yaml (68), хранилище устройств — InMemoryDeviceStore. С такой фабрикой реализованный /state отвечает 503 ha_unavailable."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Ha/FakeHomeAssistant.cs",
+      "line": 43,
+      "observation": "Фейковый HA на Kestrel (43–52): REST GET /api/states и POST /api/services/{domain}/{service}, WebSocket включается и выключается раздельно (FakeWebSocketMode.Down), запросы REST видны тесту. FastPathEndToEndTests (tests/Domovoy.Tests/Routing) уже гоняет через него allow-list и REST."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "line": 49,
+      "observation": "Ответ 501 на GET /api/v1/state служит доказательством «аутентификация пройдена»: здесь (48–49, 123–125, 135, 212–214), в AdminEndpointTests.cs (38–40, 67–69) и DeviceTokenLoggingTests.cs (55–57, 67, 76). После реализации /state на фабрике отвечает 503 ha_unavailable — эти проверки ломаются или теряют смысл (503 спутывается с auth_unavailable). AuthTestApi (258–) — общий хелпер тестов аутентификации."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/AuthenticationWeakeningProbeTests.cs",
+      "line": 21,
+      "observation": "Проба ослабления пропускает к обработчику GET /api/v1/state и узнаёт пропуск по статусу «не 401 и не 403», а не по телу (21–24): реализация маршрута пробу не ломает, если обработчик не читает claims устройства."
+    },
+    {
+      "path": ".github/workflows/ci-heavy.yml",
+      "line": 155,
+      "observation": "CI-проверка стека ждёт 401 от /api/v1/state без токена (151–156) — после реализации верно по-прежнему, правки не требует."
+    },
+    {
+      "path": "README.md",
+      "line": 905,
+      "observation": "Раздел API (898–): «Эндпоинты, чей этап не наступил, при действующем токене отвечают 501» (905) — формулировка остаётся верной; примеров curl для /state и /action нет, есть только для админки и привязки (953, 960, 983). Файлов шаблонов запросов (.http) в репозитории нет."
+    },
+    {
+      "path": "config/entities.example.yaml",
+      "line": 111,
+      "observation": "Вымышленная квартира: комнаты kitchen, living_room, bedroom; lock.example_front_door с actions [lock, unlock] и requires_confirmation (111–); light.example_kitchen_ceiling с set_brightness; сенсоры только с read — готовые случаи для каждого отказа /action."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 395,
+      "observation": "Стенд агента поднимает api, postgres и HA demo с сущностями реестра-примера; AUTH_ADMIN_TOKEN генерируется в .env стенда (395) — через него привязывается устройство для живого curl."
+    }
+  ],
+  "approach": {
+    "summary": "Обработчики двух маршрутов выносятся в новый файл src/Domovoy.Api/Endpoints/HomeEndpoints.cs; ApiV1Endpoints только маппит их вместо заглушек (имена маршрутов state и action сохраняются). LLM, ILlmProvider и оркестратор обработчики не трогают вовсе: зависимости — IHaClient, IEntityAllowList, TimeProvider.\n\nGET /api/v1/state → 200 {\"as_of\", \"areas\": [{\"id\", \"name\", \"entities\": [{\"entity_id\", \"name\", \"domain\", \"state\", \"last_updated\", \"actions\"}]}]}. Состояния — IHaClient.GetStatesAsync(null, null) (фильтр allow-list уже там). Комнаты — IEntityAllowList.Areas в порядке реестра, включая комнату без сущностей (пустой массив); сущности внутри комнаты — в порядке IEntityAllowList.All. name — FriendlyName реестра, а не атрибут HA (NFR-SEC-6); actions — AllowedActions без read; attributes в ответ не идут. Сущность allow-list, состояния которой HA не вернул, в срез не попадает: состояние не выдумывается. Отметка актуальности — as_of = TimeProvider.GetUtcNow() в момент чтения (GetStatesAsync отдаёт кэш только при живом соединении, иначе читает REST, — данные актуальны на момент ответа) плюс last_updated каждой сущности из HaEntityState.LastUpdated. HaUnavailableException → 503 ha_unavailable в едином формате; отмена запроса пробрасывается.\n\nPOST /api/v1/action, тело {\"entity_id\": строка, \"action\": строка, \"value\"?: строка | число | логическое}. Тело читается вручную, как в ReadPairingRequestAsync: не JSON, не тот Content-Type, пустые entity_id/action, value-объект или массив → 400 invalid_request. Число передаётся сырым текстом JSON, логическое — true/false, строка — как есть. Домен — префикс entity_id (как FastPathRunner.DomainOf); allow-list, белый список действий и подтверждение проверяет только HaRestClient.CallServiceAsync — в эндпоинте второй проверки нет (правило 5 «Безопасность»). Успех → 200 {\"entity_id\", \"action\"}. Отказ → единый формат, error.code = ToolResult.ErrorCode как есть, message = ToolResult.Error (уже обезличен слоем Ha), статус по таблице: entity_not_allowed → 403, action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, иной или пустой код → 500 internal_error (новая константа ApiErrorResults.InternalError). Обработчики не читают claims устройства.\n\nТесты аутентификации, доказывавшие «аутентификация пройдена» ответом 501 от /state, переводятся на маршрут, который остаётся заглушкой, — константа AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" (этап 3); проверки «без токена — 401» на /state остаются как есть. Поведенческие тесты новых эндпоинтов — tests/Domovoy.Tests/HomeEndpointsTests.cs на DomovoyApiFactory.WithWebHostBuilder с FakeHomeAssistant (Ha:BaseUrl, Ha:Token), WebSocket фейка в режиме Down — чтение детерминированно идёт в REST, без гонки с подключением; Llm:BaseUrl = http://127.0.0.1:9/v1 и Llm:ApiKey задан во всех тестах класса. README получает подраздел про экран «Дом» с curl для обоих эндпоинтов и таблицей кодов; тест берёт метод, путь и тело из этих примеров и исполняет их на тестовом хосте.",
+    "rejected": [
+      {
+        "option": "Отдавать при недоступном HA последний кэш с as_of = время последнего подключения",
+        "reason": "Противоречит устройству слоя Ha: HaStateCache и HaRestClient.GetStatesAsync (71–76) намеренно не отдают кэш при обрыве как актуальный; потребовало бы правки src/Domovoy.Ha/** (product_security). Показ последнего известного состояния офлайн — задача клиента по FR-APP-6."
+      },
+      {
+        "option": "as_of = максимум last_updated среди сущностей",
+        "reason": "В тихом доме, где давно ничего не менялось, срез выглядел бы устаревшим при живом соединении; свежесть каждой сущности и так несёт last_updated."
+      },
+      {
+        "option": "Проверять allow-list и белый список действий в эндпоинте /action до вызова IHaClient",
+        "reason": "Вторая точка проверки нарушает правило 5 «Безопасность» («в одном месте, на входе в слой Ha») и разъезжается с первой; CallServiceAsync уже отказывает до HTTP."
+      },
+      {
+        "option": "Принимать в /action поле domain от клиента",
+        "reason": "Домен однозначно задан entity_id; поле от клиента — лишняя степень свободы, которую слой Ha всё равно сверяет с реестром."
+      },
+      {
+        "option": "Включать в /state атрибуты HA и сущности без состояния (state: null)",
+        "reason": "Атрибуты — данные HA неизвестного состава, расширяют публичную поверхность; добавить необязательное поле в /api/v1 можно позже без поломки клиента. Сущность без состояния — выдуманные данные, не наблюдение."
+      },
+      {
+        "option": "Подменить ILlmProvider в тестах и тем ограничиться для критерия про LLM",
+        "reason": "Критерий требует буквально «заведомо неверный base_url»: подмена проверяет, что провайдер не вызван, но не то, что конфигурация с неверным адресом не мешает. Делаются оба теста."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да: GET /state — срез по комнатам из allow-list с отметкой времени; POST /action — действие без LLM, сущность и действие вне белого списка отклоняются единым форматом; оба без зависимости от LLM, оба с тестами и curl в README. Один PR — по ответу владельца (docs/tasks/15.md, «Решения»).",
+    "alternative": "Отдавать при недоступном HA устаревший кэш с отметкой времени последнего подключения: клиент видел бы старые плитки вместо 503. Цена — правка слоя Ha (high, product_security) и отход от решения «устаревший кэш как актуальный не отдаётся», уже воплощённого в HaStateCache/HaRestClient; офлайн-показ по FR-APP-6 — на клиенте. Выбор следует из существующего устройства, поэтому не развилка; форма полей ответа — решение внутри задачи, ТЗ (раздел 5) её не задаёт, а расширять её можно без поломки.",
+    "ripple": "Греп строкового литерала \"/api/v1/state\" (ast-index строки не ищет): tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs:48,123,135,149,165,212; Auth/AdminEndpointTests.cs:38,67,101; Auth/DeviceTokenLoggingTests.cs:55,67,76; Auth/AuthenticationWeakeningProbeTests.cs:21,29,36,94; HealthEndpointTests.cs:92,111; .github/workflows/ci-heavy.yml:155; docs/rules/triage.md:16. Ломаются только ожидания 501 (DeviceAuthEndpointTests 49,125,214; AdminEndpointTests 40,69; DeviceTokenLoggingTests 57) — переводятся на AuthTestApi.AuthenticatedProbePath; ожидания 401 без токена, проба ослабления (статус не 401/403), CI и triage.md остаются. \"/api/v1/action\" в коде и тестах не встречается. ApiErrorResults получает только новую константу — поведение остальных вызывающих не меняется. tests/test-count.baseline — точное число выполненных тестов, обновляется. Признак совета «общий механизм» проверен грепом ApiErrorResults: вызывающие — обработчики аутентификации, лимитер, эндпоинты; класс только дополняется константой, их поведение не меняется — признак не сработал.",
+    "workaround": "Нет. HACK не нужен: эндпоинты опираются на существующие порты, проверка allow-list остаётся в одной точке.",
+    "council_signs": [
+      "контракт API: новые формы ответа и тела запроса GET /api/v1/state и POST /api/v1/action, таблица HTTP-статусов отказов",
+      "новая функциональность"
+    ],
+    "executor": "Субагенты по срезам: 9 файлов и несколько сотен строк — порог делегирования превышен.",
+    "fork": false,
+    "slices": [
+      {
+        "name": "auth-tests-retarget",
+        "files": [
+          "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+          "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
+          "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs"
+        ],
+        "contract": "AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" — маршрут-заглушка, отвечающий 501 при действующем токене; все проверки «501 значит аутентификация пройдена» и пути проверки логов токена идут на него. Проверки «без токена или с неизвестным — 401» на /api/v1/state не меняются. Число тестовых случаев не меняется. Срез идёт первым: /notifications — 501 и до, и после реализации, поэтому срез зелёный на текущем main, а срез endpoints уже не видит красных тестов Auth.",
+        "after": []
+      },
+      {
+        "name": "endpoints",
+        "files": [
+          "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
+          "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+          "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+          "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+          "README.md",
+          "tests/test-count.baseline"
+        ],
+        "contract": "internal static class HomeEndpoints с обработчиками GetStateAsync (GET) и PostActionAsync (POST); ApiV1Endpoints маппит их как api.MapGet(\"/state\", HomeEndpoints.GetStateAsync).WithName(\"state\") и api.MapPost(\"/action\", HomeEndpoints.PostActionAsync).WithName(\"action\"), группа и RequireAuthorization не меняются. ApiErrorResults.InternalError = \"internal_error\". Формы JSON (snake_case через JsonPropertyName): /state — {as_of, areas:[{id, name, entities:[{entity_id, name, domain, state, last_updated, actions}]}]}; /action запрос {entity_id, action, value?}, успех 200 {entity_id, action}; отказы — { error: { code, message } } со статусами из approach. HA недоступен на /state — 503 ha_unavailable. Порядок внутри среза: сначала HomeEndpointsTests — красный прогон на заглушках 501 с фактическим текстом падения, затем реализация. README — подраздел экрана «Дом» с curl для обоих эндпоинтов (вымышленные хост и сущность из config/entities.example.yaml, токен — плейсхолдер <device-token>) и таблицей кодов отказа. test-count.baseline — число, напечатанное scripts/test-count-invariant.sh (перенацеливание Auth число случаев не меняет). Тесты Auth — файлы среза auth-tests-retarget, здесь не правятся.",
+        "after": [
+          "auth-tests-retarget"
+        ]
+      }
+    ],
+    "single_slice_reason": ""
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
+      "action": "create",
+      "why": "Обработчики GET /state и POST /action: группировка среза по комнатам, отметка времени, ручное чтение тела, перевод ToolResult.ErrorCode в HTTP-статус единого формата."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "action": "modify",
+      "why": "Заглушки /state и /action заменяются маппингом обработчиков HomeEndpoints; имена маршрутов и группа с RequireAuthorization не меняются."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+      "action": "modify",
+      "why": "Константа InternalError для отказа слоя Ha с непредусмотренным кодом — единый формат и тогда, а не 200 и не исключение."
+    },
+    {
+      "path": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "action": "create",
+      "why": "Поведенческие тесты обоих эндпоинтов на фейковом HA с недостижимым LLM; исполнение примеров curl из README."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "action": "modify",
+      "why": "Группа product_security (**/Auth/**), заявляется явно. Константа AuthTestApi.AuthenticatedProbePath; ожидания 501 от /state (49, 125, 214 и парный запрос 135) переводятся на неё — иначе 503 ha_unavailable реализованного /state ломает тесты привязки, отзыва и last_seen."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
+      "action": "modify",
+      "why": "Группа product_security, заявляется явно. Проверки «токен устройства работает до и после отзыва соседнего» (38–40, 67–69) ждут 501 от /state — переводятся на AuthTestApi.AuthenticatedProbePath; проверка 101 (админ-секрет на маршруте устройства — 401) остаётся."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs",
+      "action": "modify",
+      "why": "Группа product_security, заявляется явно. Запросы с токеном для проверки логов (55–57, 67, 76) ждут 501 от /state — переводятся на AuthTestApi.AuthenticatedProbePath."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Таблица синхронизации: изменение контракта API — README. Подраздел экрана «Дом»: формы ответа и тела, коды отказа, примеры curl для обоих эндпоинтов."
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "action": "modify",
+      "why": "Точное число выполненных тестовых случаев растёт на новые тесты; инвариант сравнивает точно."
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Api/Endpoints/**",
+    "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+    "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+    "tests/Domovoy.Tests/Auth/AdminEndpointTests.cs",
+    "tests/Domovoy.Tests/Auth/DeviceTokenLoggingTests.cs",
+    "tests/test-count.baseline",
+    "README.md",
+    "docs/tasks/15.md",
+    "docs/tasks/15.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "StateGroupsAllowListedEntitiesByArea",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-state",
+        "A-tests"
+      ],
+      "behavior": "Фейковый HA держит состояния двух сущностей реестра из разных комнат и одной сущности вне allow-list. GET /api/v1/state с токеном устройства → 200; areas — все комнаты реестра в его порядке; сущность лежит в своей комнате с name из реестра, state и last_updated из HA, actions без read; сущности вне списка нет нигде в теле. Положительный контроль: фейк получил GET /api/states, т. е. чужая сущность была в ответе HA и отброшена."
+    },
+    {
+      "name": "StateCarriesSnapshotTimestamp",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-state",
+        "A-tests"
+      ],
+      "behavior": "TimeProvider подменён ManualTimeProvider с заданным моментом; as_of в ответе равен ему точно, а не «какому-то времени»; после Advance следующий ответ несёт новый момент."
+    },
+    {
+      "name": "StateReportsHaUnavailableInUnifiedFormat",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-state",
+        "A-tests"
+      ],
+      "behavior": "REST фейка выключен → GET /api/v1/state отвечает 503, тело ровно { error: { code: \"ha_unavailable\", message } }, в message нет адреса HA."
+    },
+    {
+      "name": "ActionCallsServiceForAllowedEntity",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-action",
+        "A-tests"
+      ],
+      "behavior": "POST /api/v1/action {entity_id светильника кухни, action turn_on} → 200 {entity_id, action}; фейк получил ровно один POST /api/services/light/turn_on с этой сущностью в теле и ожидаемым токеном. Второй случай: set_brightness с числом 50 в JSON → в payload brightness_pct 50."
+    },
+    {
+      "name": "ActionRejectsOutsideWhitelistBeforeHomeAssistant",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-action",
+        "A-tests"
+      ],
+      "behavior": "Theory: сущность вне allow-list → 403 entity_not_allowed; действие вне реестра сущности (unlock у светильника) и read у сенсора → 403 action_not_allowed; unlock у замка → 409 confirmation_required; значение вне границ (set_brightness 400) → 400 invalid_value. Во всех случаях тело — единый формат, и фейк не получил ни одного POST: отказ до HTTP."
+    },
+    {
+      "name": "ActionRejectsMalformedBody",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-action",
+        "A-tests"
+      ],
+      "behavior": "Theory: тело не JSON, без entity_id, с пустым action, value-объект → 400 invalid_request в едином формате, фейк не получил запросов."
+    },
+    {
+      "name": "ActionMapsHaRefusalCodesToStatuses",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-action",
+        "A-tests"
+      ],
+      "behavior": "Theory на подменённом IHaClient (NSubstitute), возвращающем отказ с каждым кодом HaErrorCodes и с неизвестным кодом: статус и error.code ответа совпадают с таблицей approach (ha_rejected → 422, ha_unavailable → 503, неизвестный → 500 internal_error), message — ToolResult.Error."
+    },
+    {
+      "name": "EndpointsWorkWithUnreachableLlmBaseUrl",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-llm",
+        "A-tests"
+      ],
+      "behavior": "Хост с Llm:BaseUrl = http://127.0.0.1:9/v1 и заданным Llm:ApiKey (провайдер сконфигурирован, адрес заведомо недостижим) и живым фейком HA: GET /state → 200 со срезом, POST /action → 200. Контроль конфигурации: IOptions<LlmOptions> собранного хоста несёт именно этот BaseUrl и IsConfigured = true."
+    },
+    {
+      "name": "EndpointsNeverCallLlmProvider",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-llm",
+        "A-tests"
+      ],
+      "behavior": "ILlmProvider подменён NSubstitute; после успешных GET /state и POST /action у подмены нет ни одного вызова (ReceivedCalls пуст)."
+    },
+    {
+      "name": "ReadmeCurlExamplesReachImplementedEndpoints",
+      "file": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "new": true,
+      "covers": [
+        "A-readme",
+        "A-tests"
+      ],
+      "behavior": "Из README.md берутся блоки ```bash, содержащие путь /api/v1/state или /api/v1/action (якорь — путь в блоке, а не формулировка текста); строки, продолженные «\\», склеиваются до разбора; из команды извлекаются метод (-X, по умолчанию GET), путь и тело -d '…'. Положительный контроль — найдены оба блока и тело /action разобрано как JSON. Команды исполняются на тестовом хосте с токеном устройства вместо плейсхолдера <device-token> и фейком HA → оба 200: пример в README вызывает реализованный эндпоинт, а не 404, 400 или 501."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-state",
+      "criterion": "GET /api/v1/state отдаёт срез состояния дома, сгруппированный по комнатам, включающий только сущности из allow-list и отметку времени актуальности данных",
+      "method": "dotnet test --filter \"FullyQualifiedName~HomeEndpointsTests\" — зелёные StateGroupsAllowListedEntitiesByArea, StateCarriesSnapshotTimestamp, StateReportsHaUnavailableInUnifiedFormat. Живое наблюдение: bash scripts/stand.sh up, привязка устройства через админ-эндпоинт стенда, curl GET /api/v1/state на порт стенда.",
+      "evidence": "Вывод dotnet test с числом пройденных тестов класса; фактический ответ стенда — HTTP 200 и JSON с areas по комнатам реестра-примера, as_of и last_updated (вымышленные сущности demo), записанный в журнал."
+    },
+    {
+      "id": "A-action",
+      "criterion": "POST /api/v1/action выполняет действие над разрешённой сущностью без обращения к LLM, а сущность или сервис вне белого списка отклоняет ошибкой единого формата",
+      "method": "dotnet test --filter \"FullyQualifiedName~HomeEndpointsTests\" — зелёные ActionCallsServiceForAllowedEntity, ActionRejectsOutsideWhitelistBeforeHomeAssistant, ActionRejectsMalformedBody, ActionMapsHaRefusalCodesToStatuses. Живое: на стенде curl POST /api/v1/action turn_on светильника кухни и тот же запрос с сущностью вне реестра.",
+      "evidence": "Вывод dotnet test; ответы стенда — 200 на разрешённое действие и смена состояния в следующем GET /state, 403 { error: { code: \"entity_not_allowed\" } } на сущность вне списка."
+    },
+    {
+      "id": "A-llm",
+      "criterion": "Оба эндпоинта работают при недоступном LLM-провайдере (проверено с заведомо неверным base_url)",
+      "method": "dotnet test --filter \"FullyQualifiedName~HomeEndpointsTests\" — зелёные EndpointsWorkWithUnreachableLlmBaseUrl (Llm:BaseUrl = http://127.0.0.1:9/v1, ApiKey задан) и EndpointsNeverCallLlmProvider.",
+      "evidence": "Вывод dotnet test с двумя пройденными тестами; цитата файл:строка конфигурации теста с Llm:BaseUrl."
+    },
+    {
+      "id": "A-tests",
+      "criterion": "Оба эндпоинта покрыты тестами",
+      "method": "dotnet test — весь набор зелёный, включая переведённые тесты Auth; bash scripts/test-count-invariant.sh — совпадение с обновлённым tests/test-count.baseline.",
+      "evidence": "Итоговая строка dotnet test (Failed: 0) и число выполненных случаев, равное tests/test-count.baseline."
+    },
+    {
+      "id": "A-readme",
+      "criterion": "Оба эндпоинта вызываются примерами curl из README",
+      "method": "Зелёный ReadmeCurlExamplesReachImplementedEndpoints; цитата README.md:строка обоих блоков curl; живое — те же команды на стенде с его портом и токеном привязанного устройства.",
+      "evidence": "Вывод теста; строки README с curl -H \"Authorization: Bearer <device-token>\" .../api/v1/state и curl -X POST .../api/v1/action; ответы стенда на эти команды в журнале."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Тесты аутентификации теряют смысл: реализованный /state на фабрике отвечает 503 ha_unavailable, а они ждали 501 как «аутентификация пройдена»; 503 легко спутать с auth_unavailable.",
+      "mitigation": "Перевод на AuthTestApi.AuthenticatedProbePath (/api/v1/notifications, заглушка этапа 3) отдельным срезом; срез прогоняется зелёным до переноса endpoints и после — в обоих состояниях. Проверки «без токена — 401» на /state сохраняются, так что аутентификация самого /state по-прежнему проверена."
+    },
+    {
+      "risk": "Форма ответа и статусы /api/v1 закрепляются для мобильного клиента: позднее переименование поля или смена статуса — ломающее изменение.",
+      "mitigation": "Форма зафиксирована в плане и README; тесты сверяют имена полей и статусы буквально; расширение — только новыми необязательными полями по таблице «Совместимость» .claude/CLAUDE.md."
+    },
+    {
+      "risk": "/action становится путём к устройствам в обход проверок: вторая, неполная проверка в эндпоинте или вызов HA до проверки.",
+      "mitigation": "Эндпоинт не проверяет allow-list сам и вызывает только IHaClient.CallServiceAsync; тест ActionRejectsOutsideWhitelistBeforeHomeAssistant на каждом отказе требует ноль POST в фейк HA; замок без подтверждения — 409 confirmation_required, двухфазное подтверждение остаётся #47."
+    },
+    {
+      "risk": "Утечка в ответ данных HA: адрес, текст исключения, атрибуты с внедрённым текстом.",
+      "mitigation": "message отказа — ToolResult.Error, уже обезличенный слоем Ha, или фиксированная строка; атрибуты HA в /state не идут, имена — из реестра; тест StateReportsHaUnavailableInUnifiedFormat проверяет отсутствие адреса HA в message."
+    },
+    {
+      "risk": "Гонка WebSocket-подключения в тестах: чтение то из кэша, то из REST, нестабильный результат.",
+      "mitigation": "WebSocket фейка в режиме Down во всех тестах HomeEndpointsTests: путь чтения — REST, детерминированно; кэш-путь GetStatesAsync уже покрыт HaRestClientTests."
+    },
+    {
+      "risk": "Уровень по плану high из-за правки tests/**/Auth/** (product_security) — дольше маршрут.",
+      "mitigation": "Правка заявлена в files и ripple; правка в этих файлах — только путь проверочного запроса, без изменения проверяемого поведения аутентификации."
+    },
+    {
+      "risk": "Живая проверка недостижима: токен админки стенда агенту недоступен или HA demo стенда не поднялся.",
+      "mitigation": "Тогда пункт живого наблюдения записывается в журнал как непройденный с фактическим выводом stand.sh, и это называется человеку в резюме; критерии остаются доказаны тестами на фейке HA."
+    }
+  ],
+  "out_of_scope": [
+    "Аудит изменяющих действий (FR-CORE-6) — #16; /action в аудит не пишет, как и быстрый путь сейчас.",
+    "Двухфазное подтверждение и action_id для /confirm — #47; /action на такие действия отвечает 409 confirmation_required.",
+    "Отдача устаревшего кэша при недоступном HA и любые правки src/Domovoy.Ha/** и allow-list.",
+    "Атрибуты HA (яркость, температура и т. п.) в ответе /state — можно добавить позже необязательным полем.",
+    "Ограничение частоты /action и шаблоны запросов (.http) — их в репозитории нет.",
+    "/notifications, /chat, /voice остаются заглушками."
+  ]
+}
