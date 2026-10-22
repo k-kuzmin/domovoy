@@ -52,7 +52,7 @@ public sealed class DeviceTokenLoggingTests : IClassFixture<DomovoyApiFactory>
             token = body.RootElement.GetProperty("token").GetString()!;
         }
 
-        using (HttpResponseMessage state = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token))
+        using (HttpResponseMessage state = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token))
         {
             state.StatusCode.Should().Be(HttpStatusCode.NotImplemented);
         }
@@ -64,7 +64,7 @@ public sealed class DeviceTokenLoggingTests : IClassFixture<DomovoyApiFactory>
             revoked.StatusCode.Should().Be(HttpStatusCode.NoContent);
         }
 
-        using (HttpResponseMessage rejected = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token))
+        using (HttpResponseMessage rejected = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token))
         {
             rejected.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         }
@@ -73,7 +73,7 @@ public sealed class DeviceTokenLoggingTests : IClassFixture<DomovoyApiFactory>
 
         // Положительный контроль: без событий своих запросов отсутствие
         // секретов ничего не доказывает — уровень или sink не применились.
-        string[] paths = [AuthTestApi.PairingCodesPath, AuthTestApi.PairingPath, "/api/v1/state", AuthTestApi.DevicePath(id)];
+        string[] paths = [AuthTestApi.PairingCodesPath, AuthTestApi.PairingPath, AuthTestApi.AuthenticatedProbePath, AuthTestApi.DevicePath(id)];
         foreach (string path in paths)
         {
             events.Should().Contain(

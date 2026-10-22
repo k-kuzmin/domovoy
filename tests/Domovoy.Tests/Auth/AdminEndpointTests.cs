@@ -35,7 +35,7 @@ public sealed class AdminEndpointTests : IClassFixture<DomovoyApiFactory>
         string kitchenToken = await AuthTestApi.PairAsync(client, "kitchen-tablet");
         string phoneToken = await AuthTestApi.PairAsync(client, "phone");
 
-        using (HttpResponseMessage seen = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", phoneToken))
+        using (HttpResponseMessage seen = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, phoneToken))
         {
             seen.StatusCode.Should().Be(HttpStatusCode.NotImplemented);
         }
@@ -64,7 +64,7 @@ public sealed class AdminEndpointTests : IClassFixture<DomovoyApiFactory>
             revoked.StatusCode.Should().Be(HttpStatusCode.NoContent);
         }
 
-        using (HttpResponseMessage other = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", kitchenToken))
+        using (HttpResponseMessage other = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, kitchenToken))
         {
             other.StatusCode.Should().Be(HttpStatusCode.NotImplemented, "отзыв касается только одного устройства");
         }

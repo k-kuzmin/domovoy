@@ -22,6 +22,12 @@ internal static class ApiErrorResults
     public const string AuthUnavailable = "auth_unavailable";
     public const string NotImplemented = "not_implemented";
 
+    /// <summary>
+    /// Отказ, которому нет строки в таблице статусов: например, код слоя
+    /// Home Assistant, о котором эндпоинт ещё не знает.
+    /// </summary>
+    public const string InternalError = "internal_error";
+
     /// <summary>Сообщение ответа 503 при сбое хранилища устройств.</summary>
     public const string AuthUnavailableMessage =
         "Проверка устройства временно недоступна. Повторите запрос позже.";

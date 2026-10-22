@@ -14,10 +14,13 @@
 #   4. systemctl enable docker.service и containerd.service — автозапуск
 #      движка вместе с systemd дистрибутива;
 #   5. юнит domovoy-mss-clamp.service: правило iptables (mangle FORWARD)
-#      TCPMSS --clamp-mss-to-pmtu. Без него HTTPS из контейнеров в сети моста
-#      (MTU 1500) через интерфейс хоста с MTU меньше (VPN) висит: крупные
-#      пакеты TLS теряются, nuget при сборке api не отвечает. Сеть хоста
-#      (--network host) этим не страдает;
+#      TCPMSS --set-mss 1340 (вывод числа — у ensure_mss_clamp). Без него
+#      HTTPS из контейнеров в сети моста (MTU 1500) через интерфейс хоста с
+#      MTU меньше (VPN) висит: крупные пакеты TLS теряются, nuget при сборке
+#      api не отвечает. --clamp-mss-to-pmtu этого не лечит: он берёт MTU
+#      исходящего интерфейса движка (1500), а узкое место за NAT WSL ему не
+#      видно (запись 0028, дополнение #15). Сменился текст юнита — юнит
+#      перезапускается. Сеть хоста (--network host) этим не страдает;
 #   6. git safe.directory (--system) для клона: клон лежит на диске Windows
 #      (/mnt/<диск>/…) и принадлежит не root, а ops/backup/*.sh вызывают git;
 #   7. журнал systemd на диске со сбросом раз в 10 с — drop-in
@@ -98,12 +101,28 @@ install_docker() {
 # ensure_mss_clamp — юнит systemd, ставящий правило при каждом старте
 # дистрибутива (правила iptables не переживают перезапуск). -C перед -A —
 # повторный старт правило не дублирует. Путь юнита — аргументом, для теста.
+#
+# MSS фиксированный, а не --clamp-mss-to-pmtu: тот берёт MTU исходящего
+# интерфейса движка (1500 → MSS 1460), а туннель хоста за NAT WSL ему не
+# виден (запись 0028, дополнение «2026-10-22, #15»). Вывод числа: MTU туннеля
+# хоста 1420 − 40 (заголовки IPv4 и TCP) = 1380 — арифметический максимум,
+# пробой не проверенный. Взято 1340 = MTU 1380 − 40: проба подтвердила, что
+# контейнер с MTU 1380 получает ответ nuget, и 40 байт остаются запасом.
+# TCPMSS --set-mss меньший MSS не поднимает, поэтому на путях с меньшим MTU
+# правило безвредно. Сменился туннель — число пересчитывается так же.
+#
+# Сменился текст юнита — daemon-reload, enable и restart: start активного
+# oneshot с RemainAfterExit ничего не делает, и на поставленном движке новое
+# правило не встало бы. Текст тот же — enable и start. Прежнее правило
+# --clamp-mss-to-pmtu функция не снимает: меньший MSS побеждает, а без
+# снятия неудачный restart оставляет прежний кламп, а не движок без клампа.
 ensure_mss_clamp() {
   local unit="${1:-/etc/systemd/system/domovoy-mss-clamp.service}"
-  local rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
-  local content
+  local mss=1340 # MTU 1380 (подтверждён пробой) − 40; потолок 1420 − 40 = 1380 — вывод выше
+  local rule="-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss $mss"
+  local content changed=0
   content="[Unit]
-Description=domovoy: TCP MSS clamp to PMTU for container traffic
+Description=domovoy: fixed TCP MSS for container traffic
 Before=docker.service
 
 [Service]
@@ -116,9 +135,14 @@ WantedBy=multi-user.target"
   if [ "$(cat "$unit" 2>/dev/null || true)" != "$content" ]; then
     printf '%s\n' "$content" >"$unit"
     systemctl daemon-reload
+    changed=1
   fi
   systemctl enable domovoy-mss-clamp.service
-  systemctl start domovoy-mss-clamp.service
+  if [ "$changed" -eq 1 ]; then
+    systemctl restart domovoy-mss-clamp.service
+  else
+    systemctl start domovoy-mss-clamp.service
+  fi
 }
 
 # ensure_journald [<каталог drop-in>] — журнал systemd на диске

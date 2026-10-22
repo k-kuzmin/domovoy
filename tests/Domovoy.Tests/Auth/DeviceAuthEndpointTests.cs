@@ -45,7 +45,7 @@ public sealed class DeviceAuthEndpointTests : IClassFixture<DomovoyApiFactory>
             .Should().Equal(["token"], "запись 0025: эндпоинт отдаёт токен устройства и ничего больше");
         string token = redeemedBody.RootElement.GetProperty("token").GetString()!;
 
-        using HttpResponseMessage state = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token);
+        using HttpResponseMessage state = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token);
         state.StatusCode.Should().Be(HttpStatusCode.NotImplemented, "501 значит: аутентификация пройдена");
 
         using HttpResponseMessage again = await AuthTestApi.RedeemAsync(client, code);
@@ -120,7 +120,7 @@ public sealed class DeviceAuthEndpointTests : IClassFixture<DomovoyApiFactory>
         using HttpClient client = host.CreateClient();
         string token = await AuthTestApi.PairAsync(client, "revoked-device");
 
-        using (HttpResponseMessage before = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token))
+        using (HttpResponseMessage before = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token))
         {
             before.StatusCode.Should().Be(HttpStatusCode.NotImplemented);
         }
@@ -132,7 +132,7 @@ public sealed class DeviceAuthEndpointTests : IClassFixture<DomovoyApiFactory>
             revoked.StatusCode.Should().Be(HttpStatusCode.NoContent);
         }
 
-        using HttpResponseMessage after = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token);
+        using HttpResponseMessage after = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token);
 
         after.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "кэша поиска токена нет");
         (await AuthTestApi.ReadErrorCodeAsync(after)).Should().Be("unauthorized");
@@ -209,7 +209,7 @@ public sealed class DeviceAuthEndpointTests : IClassFixture<DomovoyApiFactory>
         string token = await AuthTestApi.PairAsync(client);
         store.FailTouch = true;
 
-        using HttpResponseMessage response = await AuthTestApi.SendAsync(client, HttpMethod.Get, "/api/v1/state", token);
+        using HttpResponseMessage response = await AuthTestApi.SendAsync(client, HttpMethod.Get, AuthTestApi.AuthenticatedProbePath, token);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotImplemented, "отметка last_seen не критична для запроса");
     }
@@ -266,6 +266,13 @@ internal static class AuthTestApi
     public const string PairingPath = "/api/v1/auth/device";
     public const string PairingCodesPath = "/api/v1/admin/pairing-codes";
     public const string DevicesPath = "/api/v1/admin/devices";
+
+    /// <summary>
+    /// Маршрут под токеном устройства, который при пройденной
+    /// аутентификации отвечает 501: заглушка этапа, обработчик не зависит
+    /// от Home Assistant. Ответ 501 на нём значит «аутентификация пройдена».
+    /// </summary>
+    public const string AuthenticatedProbePath = "/api/v1/notifications";
 
     public static string DevicePath(Guid id) => DevicesPath + "/" + id.ToString();
 
