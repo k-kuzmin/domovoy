@@ -70,7 +70,8 @@
         "name": "climate-read",
         "files": [
           "src/Domovoy.Core/Routing/FastPathRunner.cs",
-          "tests/Domovoy.Tests/Routing/FastRouterTests.cs"
+          "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+          "tests/test-count.baseline"
         ],
         "contract": "Чтение `climate`: `Payload` — `<current_temperature> °C`; без атрибута — `Success = false`, `Error` — «Устройство не сообщает текущую температуру.», `ErrorCode = null`, `ToolCallId = direct`. Остальные домены — `Payload = State`.",
         "after": []
@@ -90,6 +91,11 @@
       "why": "Тесты чтения `climate` с атрибутом и без; помощник `State` принимает атрибуты."
     },
     {
+      "path": "tests/test-count.baseline",
+      "action": "modify",
+      "why": "Снимок числа тестов: 328 → 331, три новых теста. Добавлен после красного CI — в исходном плане пропущен."
+    },
+    {
       "path": "docs/tasks/158.md",
       "action": "create",
       "why": "Журнал задачи."
@@ -103,6 +109,7 @@
   "boundaries": [
     "src/Domovoy.Core/Routing/FastPathRunner.cs",
     "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+    "tests/test-count.baseline",
     "docs/tasks/158.md",
     "docs/tasks/158.plan.json"
   ],
