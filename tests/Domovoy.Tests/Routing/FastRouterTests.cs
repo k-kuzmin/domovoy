@@ -195,6 +195,74 @@ public sealed class FastRouterTests
         await haClient.DidNotReceiveWithAnyArgs().CallServiceAsync(default!, default!, default!, default, default);
     }
 
+    [Fact(DisplayName = "Чтение climate отдаёт current_temperature с единицей, а не режим")]
+    public async Task RunnerReadsClimateCurrentTemperature()
+    {
+        IFastRouter router = Substitute.For<IFastRouter>();
+        router.TryMatch("фраза").Returns(new FastRouteMatch { TemplateName = "read_value", EntityId = BedroomAc, Action = "read" });
+        IHaClient haClient = Substitute.For<IHaClient>();
+        haClient.GetStatesAsync(null, "climate", Arg.Any<CancellationToken>())
+            .Returns([State(BedroomAc, "off", new Dictionary<string, string> { ["current_temperature"] = "21.5" })]);
+
+        FastPathOutcome outcome = await new FastPathRunner(router, haClient).TryHandleAsync("фраза", CancellationToken.None);
+
+        outcome.Result!.Payload.Should().Be("21.5 °C");
+        outcome.Result.Success.Should().BeTrue();
+        outcome.Result.ToolCallId.Should().Be(ToolResult.DirectCallId);
+    }
+
+    [Fact(DisplayName = "«Сколько градусов в спальне» к climate с действием read — current_temperature, а не режим")]
+    public async Task TemperatureQuestionToClimateReturnsCurrentTemperature()
+    {
+        // Датчик температуры, заведённый как climate с действием read, — тот
+        // случай, что найден на живом стеке (#158). В примере квартиры такой
+        // сущности нет: у кондиционера нет read, имя котла не про температуру.
+        IEntityAllowList allowList = Substitute.For<IEntityAllowList>();
+        allowList.Areas.Returns(new ExampleApartment().Areas);
+        allowList.All.Returns(
+        [
+            new HaEntityDescriptor
+            {
+                EntityId = BedroomAc,
+                FriendlyName = "Температура в спальне",
+                Area = "bedroom",
+                Domain = "climate",
+                AllowedActions = ["read"],
+            },
+        ]);
+        allowList.FindArea("bedroom").Returns(new ExampleApartment().FindArea("bedroom"));
+        IHaClient haClient = Substitute.For<IHaClient>();
+        haClient.GetStatesAsync(null, "climate", Arg.Any<CancellationToken>())
+            .Returns([State(BedroomAc, "off", new Dictionary<string, string> { ["current_temperature"] = "21.5" })]);
+        IFastPath fastPath = BuildServices(haClient, services => services.AddSingleton(allowList))
+            .GetRequiredService<IFastPath>();
+
+        FastPathOutcome outcome = await fastPath.TryHandleAsync("Сколько градусов в спальне", CancellationToken.None);
+
+        outcome.Match!.EntityId.Should().Be(BedroomAc);
+        outcome.Result!.Payload.Should().Be("21.5 °C");
+    }
+
+    [Fact(DisplayName = "Чтение climate без current_temperature — отказ, режим не подставляется")]
+    public async Task RunnerRefusesClimateReadWithoutCurrentTemperature()
+    {
+        IFastRouter router = Substitute.For<IFastRouter>();
+        router.TryMatch("фраза").Returns(new FastRouteMatch { TemplateName = "read_value", EntityId = BedroomAc, Action = "read" });
+        IHaClient haClient = Substitute.For<IHaClient>();
+        haClient.GetStatesAsync(null, "climate", Arg.Any<CancellationToken>())
+            .Returns([State(BedroomAc, "cool")]);
+
+        FastPathOutcome outcome = await new FastPathRunner(router, haClient).TryHandleAsync("фраза", CancellationToken.None);
+
+        outcome.Matched.Should().BeTrue();
+        outcome.Result.Should().BeEquivalentTo(new ToolResult
+        {
+            ToolCallId = ToolResult.DirectCallId,
+            Success = false,
+            Error = "Устройство не сообщает текущую температуру.",
+        });
+    }
+
     [Fact(DisplayName = "Недоступный HA при чтении — отказ ha_unavailable, без исключения наружу")]
     public async Task RunnerReportsHaUnavailableOnRead()
     {
@@ -252,14 +320,17 @@ public sealed class FastRouterTests
         return services.BuildServiceProvider();
     }
 
-    private static HaEntityState State(string entityId, string state) => new()
-    {
-        EntityId = entityId,
-        State = state,
-        Attributes = new Dictionary<string, string>(),
-        LastChanged = DateTimeOffset.UnixEpoch,
-        LastUpdated = DateTimeOffset.UnixEpoch,
-    };
+    private static HaEntityState State(
+        string entityId,
+        string state,
+        IReadOnlyDictionary<string, string>? attributes = null) => new()
+        {
+            EntityId = entityId,
+            State = state,
+            Attributes = attributes ?? new Dictionary<string, string>(),
+            LastChanged = DateTimeOffset.UnixEpoch,
+            LastUpdated = DateTimeOffset.UnixEpoch,
+        };
 
     /// <summary>Шаблон, о котором роутер ничего не знает: только регистрация в DI.</summary>
     private sealed class ProbeTemplate : IFastRouteTemplate
