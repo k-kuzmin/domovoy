@@ -75,16 +75,18 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         using HttpClient client = host.CreateClient();
         string token = await AuthTestApi.PairAsync(client);
 
+        int statesReadsBefore = CountStatesReads();
+
         using HttpResponseMessage response = await AuthTestApi.SendAsync(client, HttpMethod.Get, StatePath, token);
 
+        // Контроль — до сверки состава: она сама читает REST фейка.
+        CountStatesReads().Should().Be(
+            statesReadsBefore + 1,
+            "срез прочитан из REST, где чужая сущность была и отброшена, а не просто отсутствовала");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument document = JsonDocument.Parse(body);
         await AssertStateCompositionAsync(document.RootElement, body, kitchenLightState: "off");
-
-        _fake.RestRequests.Should().Contain(
-            request => request.Method == "GET" && request.Path == "/api/states",
-            "чужая сущность была в ответе HA и отброшена, а не просто отсутствовала");
     }
 
     [Fact(DisplayName = "GET /state: as_of — момент снятия среза по часам сервера")]
@@ -126,6 +128,10 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         HaConnectionState connection = host.Services.GetRequiredService<HaConnectionState>();
         await WaitUntilAsync(() => connection.Status == HaConnectionStatus.Connected, "WebSocket-соединение с фейком установлено");
 
+        // Метка до изменения — чтением REST фейка напрямую, до подсчёта
+        // чтений: этот запрос сам попадает в RestRequests.
+        DateTimeOffset cachedStamp = await ReadFakeLastUpdatedAsync(KitchenLight);
+
         // Без события: кэш об изменении не знает, REST отдал бы новое.
         _fake.SetState(KitchenLight, "on", new Dictionary<string, object?> { ["friendly_name"] = InjectedFriendlyName });
         int statesReadsBefore = CountStatesReads();
@@ -135,7 +141,7 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
             cached.StatusCode.Should().Be(HttpStatusCode.OK);
             string body = await cached.Content.ReadAsStringAsync();
             using JsonDocument document = JsonDocument.Parse(body);
-            await AssertStateCompositionAsync(document.RootElement, body, kitchenLightState: "off", checkLastUpdatedAgainstFake: false);
+            await AssertStateCompositionAsync(document.RootElement, body, kitchenLightState: "off", expectedLastUpdated: cachedStamp);
         }
 
         CountStatesReads().Should().Be(statesReadsBefore, "при Connected срез берётся из кэша, а не из REST");
@@ -143,17 +149,21 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         await _fake.PushStateChangedAsync(KitchenLight, "on", new Dictionary<string, object?> { ["friendly_name"] = InjectedFriendlyName });
 
         string? observed = null;
+        DateTimeOffset observedStamp = default;
         await WaitUntilAsync(
             async () =>
             {
                 using HttpResponseMessage response = await AuthTestApi.SendAsync(client, HttpMethod.Get, StatePath, token);
                 using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-                observed = FindEntity(document.RootElement, "kitchen", KitchenLight).GetProperty("state").GetString();
+                JsonElement light = FindEntity(document.RootElement, "kitchen", KitchenLight);
+                observed = light.GetProperty("state").GetString();
+                observedStamp = light.GetProperty("last_updated").GetDateTimeOffset();
                 return observed == "on";
             },
             "событие state_changed применено к кэшу");
 
         observed.Should().Be("on");
+        observedStamp.Should().BeAfter(cachedStamp, "событие принесло новую метку HA");
     }
 
     [Fact(DisplayName = "GET /state при недоступном HA — 503 ha_unavailable в едином формате без адреса HA")]
@@ -265,7 +275,7 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         AssertUnifiedError(await response.Content.ReadAsStringAsync(), "invalid_request");
-        ServiceCalls().Should().BeEmpty();
+        _fake.RestRequests.Should().BeEmpty("неразборчивое тело не доходит до Home Assistant");
     }
 
     [Theory(DisplayName = "POST /action: код отказа слоя Ha переводится в HTTP-статус по таблице")]
@@ -408,7 +418,7 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         JsonElement root,
         string body,
         string kitchenLightState,
-        bool checkLastUpdatedAgainstFake = true)
+        DateTimeOffset? expectedLastUpdated = null)
     {
         PropertyNames(root).Should().Equal(["as_of", "areas"]);
         root.GetProperty("as_of").GetDateTimeOffset();
@@ -440,15 +450,10 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         sensor.GetProperty("state").GetString().Should().Be("21.5");
         sensor.GetProperty("actions").GetArrayLength().Should().Be(0, "read — не действие");
 
-        if (checkLastUpdatedAgainstFake)
-        {
-            light.GetProperty("last_updated").GetDateTimeOffset()
-                .Should().Be(await ReadFakeLastUpdatedAsync(KitchenLight), "last_updated — метка HA, а не сервера");
-        }
-        else
-        {
-            light.GetProperty("last_updated").GetDateTimeOffset();
-        }
+        // Без явного ожидания — текущая метка фейка: срез прочитан из REST.
+        DateTimeOffset expectedStamp = expectedLastUpdated ?? await ReadFakeLastUpdatedAsync(KitchenLight);
+        light.GetProperty("last_updated").GetDateTimeOffset()
+            .Should().Be(expectedStamp, "last_updated — метка HA, а не сервера");
 
         body.Should().NotContain(OffListEntity, "сущность вне allow-list невидима");
         body.Should().NotContain(InjectedFriendlyName, "атрибуты HA в ответ не идут");
@@ -512,6 +517,9 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         using JsonDocument document = JsonDocument.Parse(body);
         PropertyNames(document.RootElement).Should().Equal(["error"]);
         JsonElement error = document.RootElement.GetProperty("error");
+        // Единый формат пишет ApiErrorResults: details у отказов экрана «Дом» пуст.
+        PropertyNames(error).Should().Equal(["code", "message", "details"]);
+        error.GetProperty("details").ValueKind.Should().Be(JsonValueKind.Null);
         error.GetProperty("code").GetString().Should().Be(expectedCode);
         string? message = error.GetProperty("message").GetString();
         message.Should().NotBeNullOrEmpty();
