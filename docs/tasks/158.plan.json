@@ -1,0 +1,191 @@
+{
+  "issue": 158,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Core/Routing/FastPathRunner.cs",
+      "line": 74,
+      "observation": "Ветка `read` раннера кладёт в `Payload` только `state.State` для сущности любого домена. У `climate` состояние — режим работы (`off`, `heat`, `cool`), а текущая температура лежит в атрибуте `current_temperature`."
+    },
+    {
+      "path": "src/Domovoy.Core/Routing/Templates/ReadValueTemplate.cs",
+      "line": 78,
+      "observation": "«сколько градусов …» шаблон превращает в слова «температура …», «какая температура …» отдаёт как есть; сущность выбирается по словам её имени (`EntityResolver.DeviceMatches`), поэтому вопрос о температуре доходит до `climate`, если в имени есть «температура», а вопрос о режиме — нет: слова «режим» в именах нет."
+    },
+    {
+      "path": "src/Domovoy.Ha/WebSocket/HaWebSocketProtocol.cs",
+      "line": 57,
+      "observation": "`ParseState` приводит числовой атрибут к сырому JSON-тексту (`GetRawText`), значение `null` пропускает: `current_temperature` приходит строкой вида `21.5`, а у устройства, которое его не отдаёт, ключа нет вовсе."
+    },
+    {
+      "path": "src/Domovoy.Ha/Registry/HaDomainCatalog.cs",
+      "line": 224,
+      "observation": "Границы `set_temperature` 7..35 — DEFAULT_MIN_TEMP и DEFAULT_MAX_TEMP Home Assistant в градусах Цельсия: проект уже исходит из того, что температура `climate` в °C."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/ToolResult.cs",
+      "line": 30,
+      "observation": "`ErrorCode` допускает `null` — «успех или отказ без кода»; в `src/Domovoy.Api` ни `FastPathOutcome`, ни `ErrorCode` пока не читаются, на провод отказ раннера не выходит."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "line": 176,
+      "observation": "`RunnerReadsStateOfMatchedEntity` проверяет чтение `sensor`: полезная нагрузка — `State` как есть (`21.5`), без единицы. Помощник `State(...)` строит состояние с пустыми атрибутами."
+    }
+  ],
+  "bug_analysis": {
+    "symptom": "Воспроизведение — тест раннера на `climate.example_bedroom_ac` с состоянием `off` и атрибутом `current_temperature` = `21.5`: `Expected outcome.Result!.Payload to be \"21.5 °C\" with a length of 7, but \"off\" has a length of 3, differs near \"off\" (index 0).`",
+    "precondition": "Проявляется при чтении сущности домена `climate`; у `sensor`, `binary_sensor`, `media_player` состояние и есть ответ на вопрос, там дефекта нет.",
+    "root_cause": "src/Domovoy.Core/Routing/FastPathRunner.cs:74",
+    "rejected_hypotheses": [
+      "Шаблон выбирает не ту сущность — отвергнуто: на живом стеке датчик заведён как `climate` с действием `read`, и шаблон верно находит именно его; ошибка в том, что раннер читает из найденной сущности."
+    ]
+  },
+  "approach": {
+    "summary": "В раннере чтение сущности `climate` отдаёт атрибут `current_temperature` с единицей `°C` (`21.5 °C`); единица — по допущению проекта о Цельсии (`HaDomainCatalog.cs:224`). Атрибута нет — отказ `Success = false` с текстом «Устройство не сообщает текущую температуру.» и `ErrorCode = null`: режим вместо температуры не подставляется. Чтение остальных доменов — `State` как есть, без изменений.",
+    "rejected": [
+      {
+        "option": "Режим с пометкой при отсутствии атрибута («off, текущую температуру устройство не сообщает»)",
+        "reason": "На вопрос «сколько градусов» режим — не ответ; успешный результат с режимом читался бы как ответ и маскировал отсутствие данных."
+      },
+      {
+        "option": "Новый код отказа в `HaErrorCodes` для отсутствующего значения",
+        "reason": "Строки `HaErrorCodes` — те же, что в `ApiError.Code`, это расширение контракта; на провод отказ раннера сейчас не выходит, а `ToolResult` допускает отказ без кода."
+      },
+      {
+        "option": "Единица из конфигурации Home Assistant (`/api/config`, `unit_system.temperature`)",
+        "reason": "Новый вызов HA на каждом чтении или кэш ради системы единиц, которой в проекте нет: границы `set_temperature` уже заданы в °C."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да: вопрос о температуре к `climate` возвращает `current_temperature` с единицей; без атрибута — понятный отказ (вариант, названный в критерии); чтение других доменов не меняется.",
+    "alternative": "Шаблон `read_value` выбирает атрибут по вопросу (новое поле в `FastRouteMatch`), раннер читает указанный атрибут. Для нынешних формулировок пользователь увидел бы то же самое: вопрос о режиме до `climate` не доходит, слова «режим» в именах сущностей нет. Цена — поле в модели ядра и правка двух шаблонов ради различения, которого сейчас нет.",
+    "ripple": "Греп `IFastPath|FastPathRunner` по `src`: единственный потребитель — регистрация DI `CoreServiceCollectionExtensions.cs:57`; в `src/Domovoy.Api` быстрый путь пока не вызывается. Поведение меняется только для домена `climate`.",
+    "workaround": "Нет: правится место, где строится результат чтения.",
+    "council_signs": [],
+    "executor": "Субагент `step-implement`: три теста и правка раннера — по счёту задачи целиком больше ~40 строк.",
+    "fork": false,
+    "slices": [
+      {
+        "name": "climate-read",
+        "files": [
+          "src/Domovoy.Core/Routing/FastPathRunner.cs",
+          "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+          "tests/test-count.baseline"
+        ],
+        "contract": "Чтение `climate`: `Payload` — `<current_temperature> °C`; без атрибута — `Success = false`, `Error` — «Устройство не сообщает текущую температуру.», `ErrorCode = null`, `ToolCallId = direct`. Остальные домены — `Payload = State`.",
+        "after": []
+      }
+    ],
+    "single_slice_reason": "Одна правка метода чтения и её тесты: делить нечего."
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Core/Routing/FastPathRunner.cs",
+      "action": "modify",
+      "why": "Результат чтения `climate` строится из `current_temperature` с единицей, без атрибута — отказ."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "action": "modify",
+      "why": "Тесты чтения `climate` с атрибутом и без; помощник `State` принимает атрибуты."
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "action": "modify",
+      "why": "Снимок числа тестов: 328 → 331, три новых теста. Добавлен после красного CI — в исходном плане пропущен."
+    },
+    {
+      "path": "docs/tasks/158.md",
+      "action": "create",
+      "why": "Журнал задачи."
+    },
+    {
+      "path": "docs/tasks/158.plan.json",
+      "action": "create",
+      "why": "План задачи."
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Core/Routing/FastPathRunner.cs",
+    "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+    "tests/test-count.baseline",
+    "docs/tasks/158.md",
+    "docs/tasks/158.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "RunnerReadsClimateCurrentTemperature",
+      "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "new": true,
+      "covers": ["A-temp", "A-test"],
+      "behavior": "`climate.example_bedroom_ac` в состоянии `off` с `current_temperature` = `21.5`: результат успешный, `Payload` — `21.5 °C`, а не `off`. Это и есть воспроизведение."
+    },
+    {
+      "name": "TemperatureQuestionToClimateReturnsCurrentTemperature",
+      "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "new": true,
+      "covers": ["A-temp"],
+      "behavior": "Настоящий роутер из DI, allow-list с `climate.example_bedroom_ac` под именем «Температура в спальне» и действием `read`: фраза «Сколько градусов в спальне» выбирает эту сущность, ответ — `21.5 °C`, а не режим `off`. Добавлен по замечанию ревью диффа, круг 1."
+    },
+    {
+      "name": "RunnerRefusesClimateReadWithoutCurrentTemperature",
+      "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "new": true,
+      "covers": ["A-missing"],
+      "behavior": "`climate.example_bedroom_ac` в состоянии `cool` без атрибута `current_temperature`: результат — отказ (`Success = false`, текст «Устройство не сообщает текущую температуру.»), `Payload` пуст — режим не подставлен."
+    },
+    {
+      "name": "RunnerReadsStateOfMatchedEntity",
+      "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "new": false,
+      "covers": ["A-other"],
+      "behavior": "Чтение `sensor` по-прежнему отдаёт `State` как есть (`21.5`), без единицы."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-temp",
+      "criterion": "Вопрос о температуре («какая температура …», «сколько градусов …») к сущности `climate` возвращает значение `current_temperature` с единицей, а не режим.",
+      "method": "`dotnet test --filter \"FullyQualifiedName~RunnerReadsClimateCurrentTemperature|FullyQualifiedName~TemperatureQuestionToClimateReturnsCurrentTemperature\"` — оба пройдены; второй идёт от фразы через настоящий роутер. До фикса оба красные с `but \"off\"`.",
+      "evidence": "Вывод прогона: 2 пройдены; текст падения до фикса — `bug_analysis.symptom`."
+    },
+    {
+      "id": "A-test",
+      "criterion": "Поведение покрыто тестом на вымышленной сущности `climate.example_bedroom_ac`: атрибут `current_temperature` есть в состоянии — в результате число.",
+      "method": "Чтение теста `RunnerReadsClimateCurrentTemperature`: сущность — `BedroomAc` (`climate.example_bedroom_ac`), ожидание — `21.5 °C`.",
+      "evidence": "Цитата `tests/Domovoy.Tests/Routing/FastRouterTests.cs:<строка>` с сущностью и ожиданием."
+    },
+    {
+      "id": "A-missing",
+      "criterion": "Нет атрибута `current_temperature` — понятный отказ или режим с пометкой, а не молчаливая подмена; выбранный вариант записан в журнале задачи.",
+      "method": "`dotnet test --filter \"FullyQualifiedName~RunnerRefusesClimateReadWithoutCurrentTemperature\"` — пройден; запись о выбранном варианте в «Решения» `docs/tasks/158.md`.",
+      "evidence": "Вывод прогона: 1 пройден; цитата записи журнала."
+    },
+    {
+      "id": "A-other",
+      "criterion": "Чтение сущностей других доменов (`sensor`, `binary_sensor`, `media_player`) не меняется — существующие тесты зелёные.",
+      "method": "`dotnet test` целиком — все пройдены, число тестов не меньше, чем на `origin/main`, плюс два новых; `RunnerReadsStateOfMatchedEntity` не изменён в диффе.",
+      "evidence": "Итоговая строка `dotnet test` до и после; `git diff origin/main -- tests/` не трогает `RunnerReadsStateOfMatchedEntity`."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Изменится чтение доменов, кроме `climate`.",
+      "mitigation": "Ветка по домену `climate` в одном месте; существующий тест чтения `sensor` остаётся без изменений и должен пройти."
+    },
+    {
+      "risk": "У Home Assistant с имперской системой единиц `current_temperature` в °F, ответ с «°C» будет неверным.",
+      "mitigation": "Допущение о °C уже принято проектом (`HaDomainCatalog.cs:224`) и записывается в журнал решением; другая система единиц — отдельная задача."
+    }
+  ],
+  "out_of_scope": [
+    "Единица у чтения `sensor` (`unit_of_measurement`): критерий требует, чтобы чтение других доменов не менялось.",
+    "Сущность `climate` в состоянии `unavailable` с устаревшим `current_temperature` в атрибутах.",
+    "Различение вопроса о режиме и о температуре в шаблоне: сейчас вопрос о режиме до `climate` не доходит."
+  ]
+}
