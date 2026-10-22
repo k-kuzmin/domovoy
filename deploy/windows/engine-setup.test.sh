@@ -8,7 +8,7 @@
 #   - в deploy/windows нет зашитого порта API — порт берётся из
 #     API_HTTP_PORT или из значения по умолчанию в docker-compose.yml;
 #   - provision-engine.sh дописывает /etc/wsl.conf, а не затирает его
-#     (функция на временном файле); юнит MSS clamp — текст и вызовы
+#     (функция на временном файле); юнит MSS clamp (--set-mss 1340) — текст и вызовы
 #     systemctl (подменён), юнит во временном каталоге; apt-get (подменён)
 #     получает DPkg::Lock::Timeout, в install_docker нет вызовов мимо обёртки;
 #   - -Check и замер стучатся на 127.0.0.1, а не localhost;
@@ -151,10 +151,13 @@ test_wsl_conf_is_merged() {
   ok "$name"
 }
 
-# Юнит MSS clamp: текст с правилом TCPMSS по PMTU в mangle FORWARD, -C перед
-# -A (повторный старт не дублирует), oneshot с RemainAfterExit; systemctl
-# подменён, юнит — во временном каталоге. Повтор с тем же текстом не
-# перезаписывает файл и не делает daemon-reload. main вызывает функцию.
+# Юнит MSS clamp: текст с правилом TCPMSS --set-mss 1340 в mangle FORWARD
+# (не --clamp-mss-to-pmtu), -C перед -A (повторный старт не дублирует),
+# oneshot с RemainAfterExit; systemctl и iptables подменены (iptables
+# возвращает 1 — функция его не зовёт), юнит — во временном каталоге.
+# Смена текста — daemon-reload, enable и restart: start активного oneshot с
+# RemainAfterExit ничего не делает. Повтор с тем же текстом не перезаписывает
+# файл, без daemon-reload, со start. main вызывает функцию.
 test_mss_clamp_unit() {
   local name=mss_clamp_unit unit="$work/mss.service" log="$work/systemctl.log" rule line
   clamp() {
@@ -162,24 +165,27 @@ test_mss_clamp_unit() {
       # shellcheck source=/dev/null
       . "$here/provision-engine.sh"
       systemctl() { printf '%s\n' "$*" >>"$log"; }
+      iptables() { printf 'iptables %s\n' "$*" >>"$log"; return 1; }
       ensure_mss_clamp "$unit"
     )
   }
   rm -f "$unit" "$log"
   clamp || { fail "$name" "код $?"; return; }
-  rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'
+  rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1340'
   grep -qxF "ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptables -t mangle -A FORWARD $rule'" "$unit" \
-    || { fail "$name" "нет правила с -C … || … -A"; sed 's/^/    | /' "$unit"; return; }
+    || { fail "$name" "нет правила --set-mss 1340 с -C … || … -A"; sed 's/^/    | /' "$unit"; return; }
+  if grep -qF -- '--clamp-mss-to-pmtu' "$unit"; then fail "$name" "в юните осталось --clamp-mss-to-pmtu"; sed 's/^/    | /' "$unit"; return; fi
+  if grep -q '^Description=.*PMTU' "$unit"; then fail "$name" "Description говорит о PMTU"; sed 's/^/    | /' "$unit"; return; fi
   for line in 'Type=oneshot' 'RemainAfterExit=yes' 'Before=docker.service' 'WantedBy=multi-user.target'; do
     grep -qxF "$line" "$unit" || { fail "$name" "нет «$line»"; sed 's/^/    | /' "$unit"; return; }
   done
   [ "$(tail -c 1 "$unit" | od -An -tx1 | tr -d ' \n')" = 0a ] || { fail "$name" "юнит не кончается переводом строки"; return; }
-  [ "$(tr '\n' '|' <"$log")" = 'daemon-reload|enable domovoy-mss-clamp.service|start domovoy-mss-clamp.service|' ] \
-    || { fail "$name" "вызовы systemctl не те"; sed 's/^/    | /' "$log"; return; }
+  [ "$(tr '\n' '|' <"$log")" = 'daemon-reload|enable domovoy-mss-clamp.service|restart domovoy-mss-clamp.service|' ] \
+    || { fail "$name" "вызовы systemctl при смене текста не те"; sed 's/^/    | /' "$log"; return; }
   rm -f "$log"
   clamp
-  if grep -qx 'daemon-reload' "$log"; then fail "$name" "повтор с тем же юнитом делает daemon-reload"; return; fi
-  grep -qx 'enable domovoy-mss-clamp.service' "$log" || { fail "$name" "повтор не включает юнит"; return; }
+  [ "$(tr '\n' '|' <"$log")" = 'enable domovoy-mss-clamp.service|start domovoy-mss-clamp.service|' ] \
+    || { fail "$name" "вызовы systemctl при том же тексте не те"; sed 's/^/    | /' "$log"; return; }
   sed -n '/^main() {/,/^}/p' "$here/provision-engine.sh" | grep -qx '  ensure_mss_clamp' || { fail "$name" "main не вызывает ensure_mss_clamp"; return; }
   ok "$name"
 }
