@@ -21,6 +21,8 @@ namespace Domovoy.Core.Routing;
 public sealed class FastPathRunner : IFastPath
 {
     private const string ReadAction = "read";
+    private const string ClimateDomain = "climate";
+    private const string CurrentTemperatureAttribute = "current_temperature";
 
     private readonly IFastRouter _router;
     private readonly IHaClient _haClient;
@@ -69,12 +71,37 @@ public sealed class FastPathRunner : IFastPath
 
         // GetStatesAsync отдаёт только сущности из allow-list: отсутствие
         // в ответе — сущность вне списка или неизвестна Home Assistant.
-        return state is null
-            ? Refusal(HaErrorCodes.EntityNotAllowed, "Состояние сущности недоступно.")
-            : new ToolResult { ToolCallId = ToolResult.DirectCallId, Success = true, Payload = state.State };
+        if (state is null)
+        {
+            return Refusal(HaErrorCodes.EntityNotAllowed, "Состояние сущности недоступно.");
+        }
+
+        return string.Equals(domain, ClimateDomain, StringComparison.Ordinal)
+            ? ReadClimateTemperature(state)
+            : Answer(state.State);
     }
 
-    private static ToolResult Refusal(string errorCode, string error) => new()
+    /// <summary>
+    /// Состояние <c>climate</c> — режим работы (<c>off</c>, <c>heat</c>),
+    /// а не температура: ответ на вопрос о ней — атрибут
+    /// <c>current_temperature</c>. Единица — °C: проект исходит из
+    /// Цельсия, границы <c>set_temperature</c> в каталоге доменов заданы в
+    /// нём же. Атрибута нет — отказ без кода, режим вместо температуры не
+    /// подставляется.
+    /// </summary>
+    private static ToolResult ReadClimateTemperature(HaEntityState state) =>
+        state.Attributes.TryGetValue(CurrentTemperatureAttribute, out string? temperature)
+            ? Answer($"{temperature} °C")
+            : Refusal(errorCode: null, "Устройство не сообщает текущую температуру.");
+
+    private static ToolResult Answer(string payload) => new()
+    {
+        ToolCallId = ToolResult.DirectCallId,
+        Success = true,
+        Payload = payload,
+    };
+
+    private static ToolResult Refusal(string? errorCode, string error) => new()
     {
         ToolCallId = ToolResult.DirectCallId,
         Success = false,
