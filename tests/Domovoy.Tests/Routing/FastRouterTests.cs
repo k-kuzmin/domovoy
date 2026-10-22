@@ -211,6 +211,38 @@ public sealed class FastRouterTests
         outcome.Result.ToolCallId.Should().Be(ToolResult.DirectCallId);
     }
 
+    [Fact(DisplayName = "«Сколько градусов в спальне» к climate с действием read — current_temperature, а не режим")]
+    public async Task TemperatureQuestionToClimateReturnsCurrentTemperature()
+    {
+        // Датчик температуры, заведённый как climate с действием read, — тот
+        // случай, что найден на живом стеке (#158). В примере квартиры такой
+        // сущности нет: у кондиционера нет read, имя котла не про температуру.
+        IEntityAllowList allowList = Substitute.For<IEntityAllowList>();
+        allowList.Areas.Returns(new ExampleApartment().Areas);
+        allowList.All.Returns(
+        [
+            new HaEntityDescriptor
+            {
+                EntityId = BedroomAc,
+                FriendlyName = "Температура в спальне",
+                Area = "bedroom",
+                Domain = "climate",
+                AllowedActions = ["read"],
+            },
+        ]);
+        allowList.FindArea("bedroom").Returns(new ExampleApartment().FindArea("bedroom"));
+        IHaClient haClient = Substitute.For<IHaClient>();
+        haClient.GetStatesAsync(null, "climate", Arg.Any<CancellationToken>())
+            .Returns([State(BedroomAc, "off", new Dictionary<string, string> { ["current_temperature"] = "21.5" })]);
+        IFastPath fastPath = BuildServices(haClient, services => services.AddSingleton(allowList))
+            .GetRequiredService<IFastPath>();
+
+        FastPathOutcome outcome = await fastPath.TryHandleAsync("Сколько градусов в спальне", CancellationToken.None);
+
+        outcome.Match!.EntityId.Should().Be(BedroomAc);
+        outcome.Result!.Payload.Should().Be("21.5 °C");
+    }
+
     [Fact(DisplayName = "Чтение climate без current_temperature — отказ, режим не подставляется")]
     public async Task RunnerRefusesClimateReadWithoutCurrentTemperature()
     {
