@@ -115,10 +115,45 @@
       "path": "scripts/stand.sh",
       "line": 395,
       "observation": "Стенд агента поднимает api, postgres и HA demo с сущностями реестра-примера; AUTH_ADMIN_TOKEN генерируется в .env стенда (395) — через него привязывается устройство для живого curl."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "line": 103,
+      "observation": "ensure_mss_clamp (98–122): правило rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'. PMTU берётся по MTU исходящего интерфейса движка eth0 (1500 → MSS 1460); туннель хоста с MTU 1420 стоит за NAT WSL и правилу не виден — поэтому restore висит при активном юните (docs/tasks/15.md:83, проба: контейнер с MTU 1500 — тайм-аут, с MTU 1380 — 200 от api.nuget.org)."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "line": 112,
+      "observation": "ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptables -t mangle -A FORWARD $rule' — только добавляет своё правило, чужое (прежнее) не снимает. Ниже (116–121): текст юнита отличается — запись и daemon-reload; затем всегда enable и start. Юнит oneshot с RemainAfterExit=yes уже active на движке: start активного юнита ExecStart не повторяет — новая версия правила до перезапуска дистрибутива не встала бы."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "line": 16,
+      "observation": "Шапка, п. 5 (16–20), описывает юнит как TCPMSS --clamp-mss-to-pmtu. main вызывает ensure_mss_clamp (186) после install_docker — iptables к этому моменту есть (приходит с docker-ce). Сценарий защищён проверкой BASH_SOURCE[0] = $0 (195): при подключении через «.» main не исполняется — так его функции вызывает и тест."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "line": 170,
+      "observation": "test_mss_clamp_unit (154–184) сверяет ExecStart с литералом --clamp-mss-to-pmtu и лог подменённого systemctl 'daemon-reload|enable …|start …|' (177); повтор с тем же текстом — без daemon-reload. iptables не подменяется и в лог не пишется. Тест вызывается из списка в конце сценария (2276); ok/fail печатают «ok   <имя>» / «FAIL <имя>: …» (70–71)."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 203,
+      "observation": "Комментарий 203–205: «domovoy-mss-clamp — MSS по PMTU для трафика контейнеров». -Check (1717–1726) проверяет у юнита is-enabled и is-active, само правило iptables не читает."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "line": 1223,
+      "observation": "-Install провижинит с --cd $root, а $root (269) — клон, из которого запущен сам .ps1; из него же берутся пути задач замера и бэкапа (271–272). Шапка (16–18): -Install кратко перезапускает дистрибутив (wsl --terminate), боевой стек на это время лежит. Запуск -Install из worktree задачи перенацелил бы задачи на каталог, который удаляется после мерджа."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "line": 67,
+      "observation": "Решение (67–74) описывает юнит с --clamp-mss-to-pmtu и причину — VPN хоста с MTU 1420. Уточнения к 0028 оформляются датированными подразделами раздела «Дополнения» (172), прецедент — «2026-10-13, #147». Новая запись делается при смене решения целиком (0030:98); здесь меняется способ клампа внутри того же решения."
     }
   ],
   "approach": {
-    "summary": "Обработчики двух маршрутов выносятся в новый файл src/Domovoy.Api/Endpoints/HomeEndpoints.cs; ApiV1Endpoints только маппит их вместо заглушек (имена маршрутов state и action сохраняются). LLM, ILlmProvider и оркестратор обработчики не трогают вовсе: зависимости — IHaClient, IEntityAllowList, TimeProvider.\n\nGET /api/v1/state → 200 {\"as_of\", \"areas\": [{\"id\", \"name\", \"entities\": [{\"entity_id\", \"name\", \"domain\", \"state\", \"last_updated\", \"actions\"}]}]}. Состояния — IHaClient.GetStatesAsync(null, null) (фильтр allow-list уже там). Комнаты — IEntityAllowList.Areas в порядке реестра, включая комнату без сущностей (пустой массив); сущности внутри комнаты — в порядке IEntityAllowList.All. name — FriendlyName реестра, а не атрибут HA (NFR-SEC-6); actions — AllowedActions без read; attributes в ответ не идут. Сущность allow-list, состояния которой HA не вернул, в срез не попадает: состояние не выдумывается. Отметка актуальности — две, с разным смыслом, и README называет оба. as_of = TimeProvider.GetUtcNow() — момент, когда сервер снял срез с источника, который слой Ha в этот момент считает актуальным: REST читается в этом же запросе; кэш отдаётся только при Connected, а Connected держится не дольше окна живости после последнего кадра HA (HaWebSocketWorker.cs:24–28, HaWebSocketTimings.cs:24,27 — по умолчанию ~30 с), то есть при Connected соединение подтвердило живость не раньше чем за это окно до as_of, а данные отражают все события, доставленные этим соединением (событие, потерянное на живом сокете, кэш не отразит — контракт слоя Ha, риск ниже). Это не «время ответа сервера» без связи с данными: при недоступном источнике среза нет вовсе — 503. Свежесть каждой сущности несёт last_updated из HaEntityState.LastUpdated — метка HA, а не сервера, поэтому ложной свежести по сущности ответ не создаёт. HaUnavailableException → 503 ha_unavailable в едином формате; отмена запроса пробрасывается.\n\nPOST /api/v1/action, тело {\"entity_id\": строка, \"action\": строка, \"value\"?: строка | число | логическое}. Тело читается вручную, как в ReadPairingRequestAsync: не JSON, не тот Content-Type, пустые entity_id/action, value-объект или массив → 400 invalid_request. Число передаётся сырым текстом JSON, логическое — true/false, строка — как есть: разбор значения один — HaDomainCatalog.TryBuildPayload, общий с быстрым путём. Исход по нему фиксируется тестом и README: для set_brightness 50, 50.0 и \"50\" → brightness_pct 50; 1e2 → 400 invalid_value (NumberFormat без экспоненты); value у действия без значения (turn_on) → 400 invalid_value. Домен — префикс entity_id (как FastPathRunner.DomainOf); allow-list, белый список действий и подтверждение проверяет только HaRestClient.CallServiceAsync — в эндпоинте второй проверки нет (правило 5 «Безопасность»). Успех → 200 {\"entity_id\", \"action\"}. Отказ → единый формат, error.code = ToolResult.ErrorCode как есть, message = ToolResult.Error (уже обезличен слоем Ha), статус по таблице: entity_not_allowed → 403, action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, иной или пустой код → 500 internal_error (новая константа ApiErrorResults.InternalError). Обработчики не читают claims устройства.\n\nТесты аутентификации, доказывавшие «аутентификация пройдена» ответом 501 от /state, переводятся на маршрут, который остаётся заглушкой, — константа AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" (этап 3); проверки «без токена — 401» на /state остаются как есть. Поведенческие тесты новых эндпоинтов — tests/Domovoy.Tests/HomeEndpointsTests.cs на DomovoyApiFactory.WithWebHostBuilder с FakeHomeAssistant (Ha:BaseUrl, Ha:Token). По умолчанию WebSocket фейка в режиме Down — чтение детерминированно идёт в REST, без гонки с подключением; кэш-путь через эндпоинт проверяет отдельный тест StateServesAllowListedCacheWhenWebSocketConnected: он ждёт Connected явно и доказывает чтение из кэша расхождением кэша и REST. Llm:BaseUrl = http://127.0.0.1:9/v1 и Llm:ApiKey задан во всех тестах класса. README получает подраздел про экран «Дом»: curl для обоих эндпоинтов (каждая команда — одной строкой, без продолжения «\\»), таблица кодов отказа, смысл as_of и last_updated, исход для форм value и строка о том, что действия с подтверждением (замки и т. п.) до #47 отвечают 409 confirmation_required. Тест берёт метод, путь и тело из текста README (не из копии в тесте) фиксированным разбором однострочной команды curl — общего парсера curl нет.",
+    "summary": "Обработчики двух маршрутов выносятся в новый файл src/Domovoy.Api/Endpoints/HomeEndpoints.cs; ApiV1Endpoints только маппит их вместо заглушек (имена маршрутов state и action сохраняются). LLM, ILlmProvider и оркестратор обработчики не трогают вовсе: зависимости — IHaClient, IEntityAllowList, TimeProvider.\n\nGET /api/v1/state → 200 {\"as_of\", \"areas\": [{\"id\", \"name\", \"entities\": [{\"entity_id\", \"name\", \"domain\", \"state\", \"last_updated\", \"actions\"}]}]}. Состояния — IHaClient.GetStatesAsync(null, null) (фильтр allow-list уже там). Комнаты — IEntityAllowList.Areas в порядке реестра, включая комнату без сущностей (пустой массив); сущности внутри комнаты — в порядке IEntityAllowList.All. name — FriendlyName реестра, а не атрибут HA (NFR-SEC-6); actions — AllowedActions без read; attributes в ответ не идут. Сущность allow-list, состояния которой HA не вернул, в срез не попадает: состояние не выдумывается. Отметка актуальности — две, с разным смыслом, и README называет оба. as_of = TimeProvider.GetUtcNow() — момент, когда сервер снял срез с источника, который слой Ha в этот момент считает актуальным: REST читается в этом же запросе; кэш отдаётся только при Connected, а Connected держится не дольше окна живости после последнего кадра HA (HaWebSocketWorker.cs:24–28, HaWebSocketTimings.cs:24,27 — по умолчанию ~30 с), то есть при Connected соединение подтвердило живость не раньше чем за это окно до as_of, а данные отражают все события, доставленные этим соединением (событие, потерянное на живом сокете, кэш не отразит — контракт слоя Ha, риск ниже). Это не «время ответа сервера» без связи с данными: при недоступном источнике среза нет вовсе — 503. Свежесть каждой сущности несёт last_updated из HaEntityState.LastUpdated — метка HA, а не сервера, поэтому ложной свежести по сущности ответ не создаёт. HaUnavailableException → 503 ha_unavailable в едином формате; отмена запроса пробрасывается.\n\nPOST /api/v1/action, тело {\"entity_id\": строка, \"action\": строка, \"value\"?: строка | число | логическое}. Тело читается вручную, как в ReadPairingRequestAsync: не JSON, не тот Content-Type, пустые entity_id/action, value-объект или массив → 400 invalid_request. Число передаётся сырым текстом JSON, логическое — true/false, строка — как есть: разбор значения один — HaDomainCatalog.TryBuildPayload, общий с быстрым путём. Исход по нему фиксируется тестом и README: для set_brightness 50, 50.0 и \"50\" → brightness_pct 50; 1e2 → 400 invalid_value (NumberFormat без экспоненты); value у действия без значения (turn_on) → 400 invalid_value. Домен — префикс entity_id (как FastPathRunner.DomainOf); allow-list, белый список действий и подтверждение проверяет только HaRestClient.CallServiceAsync — в эндпоинте второй проверки нет (правило 5 «Безопасность»). Успех → 200 {\"entity_id\", \"action\"}. Отказ → единый формат, error.code = ToolResult.ErrorCode как есть, message = ToolResult.Error (уже обезличен слоем Ha), статус по таблице: entity_not_allowed → 403, action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, иной или пустой код → 500 internal_error (новая константа ApiErrorResults.InternalError). Обработчики не читают claims устройства.\n\nТесты аутентификации, доказывавшие «аутентификация пройдена» ответом 501 от /state, переводятся на маршрут, который остаётся заглушкой, — константа AuthTestApi.AuthenticatedProbePath = \"/api/v1/notifications\" (этап 3); проверки «без токена — 401» на /state остаются как есть. Поведенческие тесты новых эндпоинтов — tests/Domovoy.Tests/HomeEndpointsTests.cs на DomovoyApiFactory.WithWebHostBuilder с FakeHomeAssistant (Ha:BaseUrl, Ha:Token). По умолчанию WebSocket фейка в режиме Down — чтение детерминированно идёт в REST, без гонки с подключением; кэш-путь через эндпоинт проверяет отдельный тест StateServesAllowListedCacheWhenWebSocketConnected: он ждёт Connected явно и доказывает чтение из кэша расхождением кэша и REST. Llm:BaseUrl = http://127.0.0.1:9/v1 и Llm:ApiKey задан во всех тестах класса. README получает подраздел про экран «Дом»: curl для обоих эндпоинтов (каждая команда — одной строкой, без продолжения «\\»), таблица кодов отказа, смысл as_of и last_updated, исход для форм value и строка о том, что действия с подтверждением (замки и т. п.) до #47 отвечают 409 confirmation_required. Тест берёт метод, путь и тело из текста README (не из копии в тесте) фиксированным разбором однострочной команды curl — общего парсера curl нет.\n\nДополнение — сеть движка (решение владельца 2026-10-22, docs/tasks/15.md, «Сеть движка — в этом PR»). Юнит domovoy-mss-clamp ставит фиксированный MSS вместо --clamp-mss-to-pmtu: правило '-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1340' в mangle FORWARD, форма ExecStart с -C … || -A … прежняя. Значение — константа в ensure_mss_clamp с выводом в комментарии: MTU туннеля хоста 1420 − 40 (заголовки IPv4 и TCP) = 1380 — арифметический максимум, пробой не проверенный; взято 1340 = MTU 1380 − 40 — ровно то, что проба подтвердила (контейнер с MTU 1380 получает 200 от api.nuget.org), с запасом 40 байт. TCPMSS --set-mss меньший MSS не поднимает, поэтому для путей с меньшим MTU правило безвредно. Переход на поставленном движке: ensure_mss_clamp при каждом вызове снимает прежнее правило циклом iptables -t mangle -D FORWARD <правило с --clamp-mss-to-pmtu> до отказа -D, затем при смене текста юнита — daemon-reload, enable и restart (а не start: start активного oneshot с RemainAfterExit ничего не делает), при том же тексте — enable и start. Несущее для корректности — restart; снятие прежнего правила — гигиена: TCPMSS ни в одном режиме MSS не поднимает, оба правила вместе дали бы минимум, а после перезапуска дистрибутива правила iptables исчезают сами. Применяет на движке владелец, агент iptables движка не меняет. Команда — в PowerShell, после того как срез engine-mss прошёл ревью диффа и текст юнита зафиксирован: wsl.exe -d domovoy-engine -u root --cd <клон>\\.claude\\worktrees\\15 --exec bash -c '. deploy/windows/provision-engine.sh && ensure_mss_clamp && iptables -t mangle -S FORWARD'. Она исполняет только ensure_mss_clamp из ветки задачи (main сценария при подключении через «.» не запускается), не перезапускает дистрибутив и не трогает задачи замера и бэкапа; хвост -S печатает правила — доказательство для журнала. После мерджа повтор не нужен: юнит из main байт в байт тот же, и следующий -Install его не перепишет. Затем агент поднимает стенд (bash scripts/stand.sh up --name 15) и продолжает живую проверку A-state, A-action, A-readme. Документация: шапка provision-engine.sh (п. 5), комментарий engine-setup.ps1:203–205, дополнение «2026-10-22, #15» в 0028; README упоминаний clamp/PMTU не содержит и не меняется.",
     "rejected": [
       {
         "option": "Отдавать при недоступном HA последний кэш с as_of = время последнего подключения",
@@ -151,19 +186,37 @@
       {
         "option": "Подменить ILlmProvider в тестах и тем ограничиться для критерия про LLM",
         "reason": "Критерий требует буквально «заведомо неверный base_url»: подмена проверяет, что провайдер не вызван, но не то, что конфигурация с неверным адресом не мешает. Делаются оба теста."
+      },
+      {
+        "option": "MSS параметром (аргумент engine-setup.ps1 -Install → provision-engine.sh → текст юнита)",
+        "reason": "Потребителя нет: хост один, а смена туннеля всё равно требует повторного применения. Параметр протянулся бы через три файла и -Check без наблюдаемой пользы; константа с выводом числа в комментарии пересчитывается одной правкой."
+      },
+      {
+        "option": "MSS 1380 (1420 − 40)",
+        "reason": "Арифметический максимум для IPv4 внутри туннеля, пробой не подтверждён; 1340 подтверждён живой пробой (MTU 1380), а разница в 40 байт на сегменте для трафика API и HA несущественна."
+      },
+      {
+        "option": "Применить через engine-setup.ps1 -Install до мерджа",
+        "reason": "-Install перезапускает дистрибутив — боевой стек лежит; $root у него — каталог, откуда запущен сценарий, поэтому из worktree задачи провижининг и пути задач замера и бэкапа ушли бы на каталог, удаляемый после мерджа (engine-setup.ps1:269–272, :1223)."
+      },
+      {
+        "option": "Снимать прежнее правило в ExecStart юнита при каждом старте",
+        "reason": "Прежнее правило живёт только до перезапуска дистрибутива, а прежний юнит после перезаписи файла его больше не ставит; разовая миграция место имеет в провижининге, а не в каждой загрузке."
       }
     ]
   },
   "fork_card": {
-    "matches_request": "Да: GET /state — срез по комнатам из allow-list с отметкой времени; POST /action — действие без LLM, сущность и действие вне белого списка отклоняются единым форматом; оба без зависимости от LLM, оба с тестами и curl в README. Один PR — по ответу владельца (docs/tasks/15.md, «Решения»).",
-    "alternative": "Отдавать при недоступном HA устаревший кэш с отметкой времени последнего подключения: клиент видел бы старые плитки вместо 503. Цена — правка слоя Ha (high, product_security) и отход от решения «устаревший кэш как актуальный не отдаётся», уже воплощённого в HaStateCache/HaRestClient; офлайн-показ по FR-APP-6 — на клиенте. Выбор следует из существующего устройства, поэтому не развилка; форма полей ответа — решение внутри задачи, ТЗ (раздел 5) её не задаёт, а расширять её можно без поломки.",
-    "ripple": "Греп строкового литерала \"/api/v1/state\" (ast-index строки не ищет): tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs:48,123,135,149,165,212; Auth/AdminEndpointTests.cs:38,67,101; Auth/DeviceTokenLoggingTests.cs:55,67,76; Auth/AuthenticationWeakeningProbeTests.cs:21,29,36,94; HealthEndpointTests.cs:92,111; .github/workflows/ci-heavy.yml:155; docs/rules/triage.md:16. Ломаются только ожидания 501 (DeviceAuthEndpointTests 49,125,214; AdminEndpointTests 40,69; DeviceTokenLoggingTests 57) — переводятся на AuthTestApi.AuthenticatedProbePath; ожидания 401 без токена, проба ослабления (статус не 401/403), CI и triage.md остаются. \"/api/v1/action\" в коде и тестах не встречается. ApiErrorResults получает только новую константу — поведение остальных вызывающих не меняется. tests/test-count.baseline — точное число выполненных тестов, обновляется. Признак совета «общий механизм» проверен грепом ApiErrorResults: вызывающие — обработчики аутентификации, лимитер, эндпоинты; класс только дополняется константой, их поведение не меняется — признак не сработал.",
-    "workaround": "Нет. HACK не нужен: эндпоинты опираются на существующие порты, проверка allow-list остаётся в одной точке.",
+    "matches_request": "Да: GET /state — срез по комнатам из allow-list с отметкой времени; POST /action — действие без LLM, сущность и действие вне белого списка отклоняются единым форматом; оба без зависимости от LLM, оба с тестами и curl в README. Один PR — по ответу владельца (docs/tasks/15.md, «Решения»). Дополнение: фиксированный MSS в юните domovoy-mss-clamp в этом же PR — решение владельца (docs/tasks/15.md, «Сеть движка — в этом PR»).",
+    "alternative": "Отдавать при недоступном HA устаревший кэш с отметкой времени последнего подключения: клиент видел бы старые плитки вместо 503. Цена — правка слоя Ha (high, product_security) и отход от решения «устаревший кэш как актуальный не отдаётся», уже воплощённого в HaStateCache/HaRestClient; офлайн-показ по FR-APP-6 — на клиенте. Выбор следует из существующего устройства, поэтому не развилка; форма полей ответа — решение внутри задачи, ТЗ (раздел 5) её не задаёт, а расширять её можно без поломки. Сеть движка: MSS параметром вместо константы — владелец видел бы новый аргумент -Install при той же работе стенда; потребителя нет, выбор следует из решения владельца о фиксированном MSS — не развилка. Значение 1340 против 1380 — внутреннее: оба дают restore, 1340 подтверждён пробой.",
+    "ripple": "Греп строкового литерала \"/api/v1/state\" (ast-index строки не ищет): tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs:48,123,135,149,165,212; Auth/AdminEndpointTests.cs:38,67,101; Auth/DeviceTokenLoggingTests.cs:55,67,76; Auth/AuthenticationWeakeningProbeTests.cs:21,29,36,94; HealthEndpointTests.cs:92,111; .github/workflows/ci-heavy.yml:155; docs/rules/triage.md:16. Ломаются только ожидания 501 (DeviceAuthEndpointTests 49,125,214; AdminEndpointTests 40,69; DeviceTokenLoggingTests 57) — переводятся на AuthTestApi.AuthenticatedProbePath; ожидания 401 без токена, проба ослабления (статус не 401/403), CI и triage.md остаются. \"/api/v1/action\" в коде и тестах не встречается. ApiErrorResults получает только новую константу — поведение остальных вызывающих не меняется. tests/test-count.baseline — точное число выполненных тестов, обновляется. Признак совета «общий механизм» проверен грепом ApiErrorResults: вызывающие — обработчики аутентификации, лимитер, эндпоинты; класс только дополняется константой, их поведение не меняется — признак не сработал. Сеть движка — греп -i clamp|pmtu|mss по *.md, *.sh, *.ps1, *.json, *.yml: provision-engine.sh:16–17, 98–121, 186, 192; engine-setup.test.sh:11, 154–183, 2276; engine-setup.ps1:203–208, 1722; docs/decisions/0028:67–71, 94; docs/tasks/6.md:173–238 (исторический журнал, не правится). README.md упоминаний нет — не меняется. ensure_mss_clamp вызывают только main (186) и тест. Правило mangle FORWARD — общее для всех мостов движка, включая боевой стек (риски).",
+    "workaround": "Нет. HACK не нужен: эндпоинты опираются на существующие порты, проверка allow-list остаётся в одной точке. Фиксированный MSS — не костыль: --clamp-mss-to-pmtu видит MTU eth0 движка, а не туннеля за NAT WSL; явный MSS под известное узкое место — штатный режим TCPMSS. Снятие прежнего правила — разовая миграция в провижининге, HACK не нужен.",
     "council_signs": [
       "контракт API: новые формы ответа и тела запроса GET /api/v1/state и POST /api/v1/action, таблица HTTP-статусов отказов",
-      "новая функциональность"
+      "новая функциональность",
+      "общий механизм: правило mangle FORWARD действует на все мосты движка, включая боевой стек (греп ensure_mss_clamp — вызывают только main и тест)",
+      "правка обвязки: docs/decisions/0028 (группа harness_quality)"
     ],
-    "executor": "Субагенты по срезам: 9 файлов и несколько сотен строк — порог делегирования превышен.",
+    "executor": "Субагенты по срезам: 9 файлов и несколько сотен строк — порог делегирования превышен. Срез engine-mss — субагент: 4 файла, около 60 строк; вместе с перенесёнными срезами порог превышен.",
     "fork": false,
     "slices": [
       {
@@ -190,6 +243,17 @@
         "after": [
           "auth-tests-retarget"
         ]
+      },
+      {
+        "name": "engine-mss",
+        "files": [
+          "deploy/windows/provision-engine.sh",
+          "deploy/windows/engine-setup.test.sh",
+          "deploy/windows/engine-setup.ps1",
+          "docs/decisions/0028-docker-engine-in-wsl.md"
+        ],
+        "contract": "ensure_mss_clamp [<путь юнита>] — сигнатура прежняя, вызывается из main как раньше. local mss=1340 с выводом в комментарии (MTU туннеля 1420 − 40 IPv4/TCP = 1380 — непроверенный максимум; 1340 = MTU 1380 − 40, подтверждено пробой; TCPMSS --set-mss меньший MSS не поднимает). rule='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1340'; legacy='-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu'. Текст юнита: Description без слова PMTU, Before=docker.service, Type=oneshot, RemainAfterExit=yes, ExecStart=/bin/sh -c 'iptables -t mangle -C FORWARD $rule 2>/dev/null || iptables -t mangle -A FORWARD $rule', WantedBy=multi-user.target. Порядок в функции: сравнение и запись текста с daemon-reload при отличии (флаг смены); цикл while iptables -t mangle -D FORWARD $legacy 2>/dev/null; do :; done при каждом вызове; enable; при смене — restart, иначе start. Порядок в срезе: сначала engine-setup.test.sh (test_mss_clamp_unit правится, test_mss_clamp_drops_pmtu_rule новый, вызов в списке, строка шапки) — красный прогон bash deploy/windows/engine-setup.test.sh с фактическим текстом FAIL; затем provision-engine.sh (функция и п. 5 шапки), комментарий engine-setup.ps1:203–205, подраздел «2026-10-22, #15: фиксированный MSS вместо PMTU» в «Дополнениях» 0028 (причина, проба, вывод числа, переход на поставленном движке, команда применения в общей форме с <клон>, пересчёт при смене туннеля). Без реальных адресов и имён сетей. Файлы других срезов не трогаются; iptables движка срез не меняет — команду владельцу передаёт оркестратор после ревью диффа среза.",
+        "after": []
       }
     ],
     "single_slice_reason": ""
@@ -239,6 +303,26 @@
       "path": "tests/test-count.baseline",
       "action": "modify",
       "why": "Точное число выполненных тестовых случаев растёт на новые тесты; инвариант сравнивает точно."
+    },
+    {
+      "path": "deploy/windows/provision-engine.sh",
+      "action": "modify",
+      "why": "ensure_mss_clamp: константа MSS 1340 с выводом от MTU туннеля, правило --set-mss вместо --clamp-mss-to-pmtu, снятие прежнего правила циклом -D, restart юнита при смене текста; п. 5 шапки."
+    },
+    {
+      "path": "deploy/windows/engine-setup.test.sh",
+      "action": "modify",
+      "why": "test_mss_clamp_unit — новое правило и restart при смене текста; новый test_mss_clamp_drops_pmtu_rule — снятие прежнего правила до restart; строка вызова в списке сценария; строка шапки про юнит."
+    },
+    {
+      "path": "deploy/windows/engine-setup.ps1",
+      "action": "modify",
+      "why": "Только комментарий 203–205: «MSS по PMTU» → фиксированный MSS под туннель хоста. Поведение -Check не меняется."
+    },
+    {
+      "path": "docs/decisions/0028-docker-engine-in-wsl.md",
+      "action": "modify",
+      "why": "Группа harness_quality (docs/decisions/**), заявляется явно. Подраздел «2026-10-22, #15: фиксированный MSS вместо PMTU» в разделе «Дополнения»: почему PMTU не видит туннель за NAT WSL, проба, вывод числа 1340, переход на поставленном движке и как пересчитать при смене туннеля. Текст решения 67–74 не переписывается — по прецеденту дополнения #147."
     }
   ],
   "boundaries": [
@@ -250,7 +334,11 @@
     "tests/test-count.baseline",
     "README.md",
     "docs/tasks/15.md",
-    "docs/tasks/15.plan.json"
+    "docs/tasks/15.plan.json",
+    "deploy/windows/provision-engine.sh",
+    "deploy/windows/engine-setup.test.sh",
+    "deploy/windows/engine-setup.ps1",
+    "docs/decisions/0028-docker-engine-in-wsl.md"
   ],
   "flags": {
     "new_dependency": false,
@@ -366,6 +454,24 @@
         "A-tests"
       ],
       "behavior": "Из текста README.md (не из копии в тесте) берутся блоки ```bash, содержащие путь /api/v1/state или /api/v1/action (якорь — путь в блоке, а не формулировка текста). Разбор фиксированный, под форму, заданную контрактом среза: одна однострочная команда curl на блок, метод — -X (по умолчанию GET), путь — после хоста, тело — -d '…'; общего парсера curl и склейки «\\» нет. Положительный контроль — найдено ровно два блока, по одному на путь, и тело /action разобрано как JSON. Команды исполняются на тестовом хосте с токеном устройства вместо плейсхолдера <device-token> и фейком HA → оба 200: пример в README вызывает реализованный эндпоинт, а не 404, 400 или 501."
+    },
+    {
+      "name": "test_mss_clamp_unit",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": false,
+      "covers": [
+        "A-engine-mss"
+      ],
+      "behavior": "Правится существующий: ExecStart юнита ровно «/bin/sh -c 'iptables -t mangle -C FORWARD <правило> 2>/dev/null || iptables -t mangle -A FORWARD <правило>'» с правилом '-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1340'; строки --clamp-mss-to-pmtu в юните нет; oneshot, RemainAfterExit, Before=docker.service, WantedBy, перевод строки в конце — как раньше. iptables подменён (возвращает 1). Первый вызов — systemctl получает 'daemon-reload|enable domovoy-mss-clamp.service|restart domovoy-mss-clamp.service|'; повтор с тем же текстом — без daemon-reload и со start, а не restart. На текущем коде красный: литерал правила и restart не совпадают."
+    },
+    {
+      "name": "test_mss_clamp_drops_pmtu_rule",
+      "file": "deploy/windows/engine-setup.test.sh",
+      "new": true,
+      "covers": [
+        "A-engine-mss"
+      ],
+      "behavior": "iptables и systemctl подменены и пишут в один лог. Подделка iptables на «-t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu» возвращает 0 дважды, затем 1 (иначе цикл не кончится). Ожидание: ровно три вызова -D с точной спецификацией прежнего правила, все до строки «restart domovoy-mss-clamp.service»; -D с правилом --set-mss не вызывается; функция выходит с кодом 0. Повтор, когда -D сразу отказывает (правила нет), — код 0, один вызов -D, start. Тест стоит в списке вызовов сценария. На текущем коде красный: ensure_mss_clamp iptables не вызывает."
     }
   ],
   "acceptance": [
@@ -398,6 +504,12 @@
       "criterion": "Оба эндпоинта вызываются примерами curl из README",
       "method": "Зелёный ReadmeCurlExamplesReachImplementedEndpoints; цитата README.md:строка обоих блоков curl; живое — те же команды на стенде с его портом и токеном привязанного устройства.",
       "evidence": "Вывод теста; строки README с curl -H \"Authorization: Bearer <device-token>\" .../api/v1/state и curl -X POST .../api/v1/action; ответы стенда на эти команды в журнале."
+    },
+    {
+      "id": "A-engine-mss",
+      "criterion": "Юнит domovoy-mss-clamp ставит фиксированный MSS 1340 вместо --clamp-mss-to-pmtu, на поставленном движке снимает прежнее правило и перезапускает юнит при смене текста; сборка api на стенде проходит dotnet restore — условие живой проверки A-state, A-action, A-readme (решение владельца 2026-10-22, docs/tasks/15.md, «Сеть движка — в этом PR»)",
+      "method": "Тестовая часть: bash deploy/windows/engine-setup.test.sh — до правки provision-engine.sh строки «FAIL mss_clamp_unit: …» и «FAIL mss_clamp_drops_pmtu_rule: …»; после — код 0, строки «ok   mss_clamp_unit» и «ok   mss_clamp_drops_pmtu_rule», итог без FAIL. Живая часть: владелец в PowerShell выполняет команду применения из approach; в её выводе iptables -t mangle -S FORWARD есть строка с «-j TCPMSS --set-mss 1340» и нет «--clamp-mss-to-pmtu». Затем агент: curl -s http://localhost:18080/health боевого стека — 200; bash scripts/stand.sh up --name 15 — сборка api без NU1301, стенд поднят; bash scripts/stand.sh status --name 15 — api healthy.",
+      "evidence": "Фактический текст красного прогона и итог зелёного в журнале; цитата provision-engine.sh:строка с local mss=1340 и выводом числа; строки вывода iptables от владельца, ответ /health и вывод stand.sh up/status в журнале («Проверено»); отсутствие строки NU1301 в выводе сборки."
     }
   ],
   "risks": [
@@ -432,6 +544,26 @@
     {
       "risk": "Живая проверка недостижима: токен админки стенда агенту недоступен или HA demo стенда не поднялся.",
       "mitigation": "Тогда пункт живого наблюдения записывается в журнал как непройденный с фактическим выводом stand.sh, и это называется человеку в резюме; критерии остаются доказаны тестами на фейке HA."
+    },
+    {
+      "risk": "Туннель хоста сменится (другой VPN, другой MTU) — restore снова виснет либо MSS окажется лишне мал.",
+      "mitigation": "Вывод числа (MTU туннеля − 40 IPv4/TCP − 40 запаса) — в комментарии ensure_mss_clamp и в дополнении 0028 вместе с симптомом (NU1301 при сборке api) и пробой (ip link set eth0 mtu в контейнере); пересчёт — одна константа и повтор команды применения."
+    },
+    {
+      "risk": "Правило в mangle FORWARD действует на все мосты движка, включая боевой стек: его контейнеры тоже получают MSS не больше 1340.",
+      "mitigation": "MSS договаривается на SYN — установленные соединения не рвутся; --set-mss меньший MSS не поднимает; цена — около 3 % полезной нагрузки сегмента, для трафика API и HA несущественна. После применения — curl -s http://localhost:18080/health боевого стека, ожидается 200 (пункт A-engine-mss, живая часть)."
+    },
+    {
+      "risk": "Прежнее правило --clamp-mss-to-pmtu останется, если -D его не снимет.",
+      "mitigation": "На корректность не влияет: TCPMSS MSS не поднимает, оба правила вместе дают 1340; после перезапуска дистрибутива правило исчезает, а юнит ставит только новое. Вывод -S в команде владельца показывает, снято ли оно."
+    },
+    {
+      "risk": "Текст юнита изменится на кругах ревью после того, как владелец применил команду, — на движке останется промежуточная версия.",
+      "mitigation": "Просьба владельцу — только после ревью диффа среза engine-mss; при любой последующей правке текста юнита команда повторяется (restart по смене текста сработает). После мерджа повтор не нужен: тот же текст, -Install сравнивает файл байт в байт (provision-engine.sh:116)."
+    },
+    {
+      "risk": "restart юнита на работающем движке заденет docker.service, или команда исказится оболочкой.",
+      "mitigation": "Before=docker.service — только порядок старта, не Requires/BindsTo: restart oneshot docker не трогает; окно между -D и новым правилом касается только SYN новых соединений. Команда — в форме PowerShell, --cd — путь Windows, аргумент bash -c в одинарных кавычках — одним аргументом wsl.exe (правило про /srv/… в Git Bash, .claude/CLAUDE.md, «Команды человека»)."
     }
   ],
   "out_of_scope": [
@@ -440,6 +572,10 @@
     "Отдача устаревшего кэша при недоступном HA и любые правки src/Domovoy.Ha/** и allow-list.",
     "Атрибуты HA (яркость, температура и т. п.) в ответе /state — можно добавить позже необязательным полем.",
     "Ограничение частоты /action и шаблоны запросов (.http) — их в репозитории нет.",
-    "/notifications, /chat, /voice остаются заглушками."
+    "/notifications, /chat, /voice остаются заглушками.",
+    "-Check не сверяет само правило iptables и значение MSS — только is-enabled и is-active юнита, как сейчас.",
+    "IPv6 (ip6tables): правило только для IPv4; греп -i ipv6 и enable_ipv6 по *.yml, *.yaml, *.sh, *.json (docker-compose*.yml, deploy/, scripts/stand*) пуст — сети compose и движок IPv6 не включают.",
+    "MTU в /etc/docker/daemon.json, networkingMode=mirrored, кламп на стороне WireGuard или Windows, разовое ip link set в движке — отвергнуто (docs/tasks/15.md, «Отвергнуто»).",
+    "docs/tasks/6.md — исторический журнал, упоминания PMTU в нём не правятся."
   ]
 }
