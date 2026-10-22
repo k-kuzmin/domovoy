@@ -64,8 +64,7 @@ WSL2-дистрибутиве `domovoy-engine` (Ubuntu 24.04). Настройк�
   чужой сети (общественный Wi-Fi) видел бы порты HA и API. Сеть хоста дома
   должна быть частной — предусловие README. Наружу HA по-прежнему не
   выставляется (NFR-SEC-2): проброса на роутере нет.
-- **MSS по PMTU для трафика контейнеров** (заменён фиксированным MSS —
-  дополнение «2026-10-22, #15») — юнит systemd
+- **MSS по PMTU для трафика контейнеров** — юнит systemd
   `domovoy-mss-clamp.service` (oneshot, `RemainAfterExit=yes`, до
   `docker.service`) ставит при каждом старте дистрибутива правило iptables
   `-t mangle FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS

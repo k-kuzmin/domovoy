@@ -200,10 +200,9 @@ $ProxyTarget = '127.0.0.1'
 # Записи portproxy v4tov4 TCP — их хранит служба IP Helper (iphlpsvc).
 $PortProxyKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\PortProxy\v4tov4\tcp'
 $IpHelperService = 'iphlpsvc'
-# Юниты автозапуска в systemd дистрибутива. domovoy-mss-clamp — фиксированный
-# MSS 1340 для трафика контейнеров (provision-engine.sh, ensure_mss_clamp):
-# без него HTTPS из сети моста через интерфейс с MTU меньше 1500 (VPN хоста)
-# висит.
+# Юниты автозапуска в systemd дистрибутива. domovoy-mss-clamp — MSS 1340 для
+# трафика контейнеров (provision-engine.sh): без него HTTPS из сети моста
+# через интерфейс с MTU меньше 1500 (VPN хоста) висит.
 $EngineUnits = @('docker.service', 'containerd.service', 'domovoy-mss-clamp.service')
 # Oneshot с RemainAfterExit=yes: в -Check — и is-enabled, и is-active.
 $OneshotUnits = @('domovoy-mss-clamp.service')

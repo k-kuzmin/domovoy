@@ -118,7 +118,7 @@ install_docker() {
 # снятия неудачный restart оставляет прежний кламп, а не движок без клампа.
 ensure_mss_clamp() {
   local unit="${1:-/etc/systemd/system/domovoy-mss-clamp.service}"
-  local mss=1340
+  local mss=1340 # MTU 1380 (подтверждён пробой) − 40; потолок 1420 − 40 = 1380 — вывод выше
   local rule="-p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss $mss"
   local content changed=0
   content="[Unit]
