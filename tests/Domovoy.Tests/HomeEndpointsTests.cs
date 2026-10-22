@@ -317,6 +317,37 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
         await ha.Received(1).CallServiceAsync("light", "turn_on", KitchenLight, null, Arg.Any<CancellationToken>());
     }
 
+    [Theory(DisplayName = "POST /action: пустое сообщение отказа слоя Ha заменяется фиксированным")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task ActionFillsEmptyRefusalMessage(string? refusalMessage)
+    {
+        IHaClient ha = Substitute.For<IHaClient>();
+        ha.CallServiceAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(new ToolResult
+            {
+                ToolCallId = ToolResult.DirectCallId,
+                Success = false,
+                Error = refusalMessage,
+                ErrorCode = HaErrorCodes.HaRejected,
+            });
+        using WebApplicationFactory<Program> host = CreateHost(services =>
+        {
+            services.RemoveAll<IHaClient>();
+            services.AddSingleton(ha);
+        });
+        using HttpClient client = host.CreateClient();
+        string token = await AuthTestApi.PairAsync(client);
+
+        using HttpResponseMessage response = await PostActionAsync(
+            client, token, $$"""{"entity_id":"{{KitchenLight}}","action":"turn_on"}""");
+
+        ((int)response.StatusCode).Should().Be(422);
+        string message = AssertUnifiedError(await response.Content.ReadAsStringAsync(), HaErrorCodes.HaRejected);
+        message.Should().Be("Действие не выполнено.");
+    }
+
     [Fact(DisplayName = "Оба эндпоинта работают при заведомо неверном base_url LLM")]
     public async Task EndpointsWorkWithUnreachableLlmBaseUrl()
     {
