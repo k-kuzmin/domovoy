@@ -119,6 +119,13 @@
       "behavior": "`climate.example_bedroom_ac` в состоянии `off` с `current_temperature` = `21.5`: результат успешный, `Payload` — `21.5 °C`, а не `off`. Это и есть воспроизведение."
     },
     {
+      "name": "TemperatureQuestionToClimateReturnsCurrentTemperature",
+      "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
+      "new": true,
+      "covers": ["A-temp"],
+      "behavior": "Настоящий роутер из DI, allow-list с `climate.example_bedroom_ac` под именем «Температура в спальне» и действием `read`: фраза «Сколько градусов в спальне» выбирает эту сущность, ответ — `21.5 °C`, а не режим `off`. Добавлен по замечанию ревью диффа, круг 1."
+    },
+    {
       "name": "RunnerRefusesClimateReadWithoutCurrentTemperature",
       "file": "tests/Domovoy.Tests/Routing/FastRouterTests.cs",
       "new": true,
@@ -137,8 +144,8 @@
     {
       "id": "A-temp",
       "criterion": "Вопрос о температуре («какая температура …», «сколько градусов …») к сущности `climate` возвращает значение `current_temperature` с единицей, а не режим.",
-      "method": "`dotnet test --filter \"FullyQualifiedName~RunnerReadsClimateCurrentTemperature\"` — пройден; до фикса тот же тест красный с `but \"off\"`.",
-      "evidence": "Вывод прогона: 1 пройден; текст падения до фикса — `bug_analysis.symptom`."
+      "method": "`dotnet test --filter \"FullyQualifiedName~RunnerReadsClimateCurrentTemperature|FullyQualifiedName~TemperatureQuestionToClimateReturnsCurrentTemperature\"` — оба пройдены; второй идёт от фразы через настоящий роутер. До фикса оба красные с `but \"off\"`.",
+      "evidence": "Вывод прогона: 2 пройдены; текст падения до фикса — `bug_analysis.symptom`."
     },
     {
       "id": "A-test",
