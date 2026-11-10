@@ -33,8 +33,9 @@
 # api своим строителем стенда (buildx, драйвер docker-container) → сборка
 # образа <проект>-migrate тем же строителем (buildx build --target migrate
 # из исходников worktree, #173) → схема базы стенда: compose --profile
-# migrate run --rm --pull never migrate, тот же образ migrate, что у боевого
-# стека → compose up --no-build → /health. Провал миграции — отказ up с
+# migrate run --rm --pull never migrate — та же стадия Dockerfile и тот же
+# путь запуска, что у боевой выкатки, образ — из исходников ветки, а не из
+# GHCR → compose up --no-build → /health. Провал миграции — отказ up с
 # причиной. Неудача после первого изменения сносит стенд тем же путём, что
 # down: частичного стенда не остаётся.
 #
@@ -350,7 +351,8 @@ do_down() {
     # Профиль migrate — чтобы контейнер прерванного run попал в модель down.
     stand_compose --profile migrate down -v --rmi local --remove-orphans || rc=1
     # Образ migrate со своим тегом --rmi local не снимает: удаляется по
-    # имени, без -f — тег, поставленный на тот же образ кем-то ещё, его держит.
+    # имени, без -f — образ, который держит контейнер, не удаляется; чужой
+    # тег на том же образе остаётся.
     if engine image inspect "$migrate_image" >/dev/null 2>&1; then
         if ! engine image rm "$migrate_image" >/dev/null; then
             say "оставлен образ $migrate_image: удаление без -f не прошло"
