@@ -30,13 +30,24 @@
 # configuration.yaml HA до его первого старта → онбординг и переименование
 # сущностей demo в id реестра-примера (deploy/stand/ha-onboard.py внутри
 # контейнера HA) → долгоживущий токен HA в .env стенда, без вывода → сборка
-# api своим строителем стенда (buildx, драйвер docker-container) → compose
-# up --no-build → /health. Неудача после первого изменения сносит стенд
-# тем же путём, что down: частичного стенда не остаётся.
+# api своим строителем стенда (buildx, драйвер docker-container) → сборка
+# образа <проект>-migrate тем же строителем (buildx build --target migrate
+# из исходников worktree, #173) → схема базы стенда: compose --profile
+# migrate run --rm --pull never migrate — та же стадия Dockerfile и тот же
+# путь запуска, что у боевой выкатки, образ — из исходников ветки, а не из
+# GHCR → compose up --no-build → /health. Провал миграции — отказ up с
+# причиной. Неудача после первого изменения сносит стенд тем же путём, что
+# down: частичного стенда не остаётся.
+#
+# status печатает compose ps, строку схемы базы стенда (есть ли таблица
+# истории миграций EF и сколько в ней строк; SQL уходит в psql через stdin)
+# и состояние токена HA.
 #
 # down удаляет только то, что принадлежит стенду по имени или по записи:
 # compose down -v --rmi local --remove-orphans проекта стенда (образ api
-# без своего тега, тома и сеть проекта), buildx rm строителя стенда без
+# без своего тега, тома и сеть проекта; с профилем migrate — и контейнер
+# прерванного run), образ <проект>-migrate — явно по имени, без -f: у него
+# свой тег, и --rmi local его не снимает; buildx rm строителя стенда без
 # --keep-state (контейнер и том состояния с кэшем сборки), базовые образы,
 # которые вытянул сам стенд, — по ID из pulled-images каталога стенда, без -f
 # и только если их не держит ни один контейнер. Пока жив соседний стенд
@@ -180,6 +191,9 @@ project="domovoy-stand-$N"
 # Нечисловой хвост: узел buildx называется <строитель>0, и без хвоста узел
 # стенда 16 (domovoy-stand-160) совпал бы с именем стенда 160.
 builder="$project-build"
+# Образ схемы стенда: свой тег с префиксом проекта — принадлежит стенду по
+# имени, как строитель.
+migrate_image="$project-migrate"
 api_port=$((19000 + N))
 ha_port=$((9000 + N))
 # Пробы вне стенда: десяток портов 20000+10·N…+9 (20010–29999 не задевает
@@ -191,10 +205,11 @@ probe_last=$((probe_first + 9))
 
 # --- Движок ------------------------------------------------------------------
 
-# Единственная дорога к docker. DOMOVOY_STAND_SOURCE читает
-# deploy/stand/docker-compose.stand.yml; переменная уходит окружением
-# процесса, а не в .env стенда.
-engine() { wsl.exe -d "$distro" --exec env "DOMOVOY_STAND_SOURCE=$source_lx" docker "$@"; }
+# Единственная дорога к docker. DOMOVOY_STAND_SOURCE и
+# DOMOVOY_STAND_MIGRATE_IMAGE читает deploy/stand/docker-compose.stand.yml;
+# переменные уходят окружением процесса на каждом вызове, а не в .env
+# стенда: надстройка разбирается и при down без .env.
+engine() { wsl.exe -d "$distro" --exec env "DOMOVOY_STAND_SOURCE=$source_lx" "DOMOVOY_STAND_MIGRATE_IMAGE=$migrate_image" docker "$@"; }
 
 # Команда оболочки внутри дистрибутива: script и позиционные аргументы.
 in_distro() {
@@ -333,7 +348,17 @@ do_down() {
     esac
     # Каталог проекта нужен compose для разбора файлов; .env в нём, если есть.
     in_distro 'mkdir -p "$1"' "$standdir"
-    stand_compose down -v --rmi local --remove-orphans || rc=1
+    # Профиль migrate — чтобы контейнер прерванного run попал в модель down.
+    stand_compose --profile migrate down -v --rmi local --remove-orphans || rc=1
+    # Образ migrate со своим тегом --rmi local не снимает: удаляется по
+    # имени, без -f — образ, который держит контейнер, не удаляется; чужой
+    # тег на том же образе остаётся.
+    if engine image inspect "$migrate_image" >/dev/null 2>&1; then
+        if ! engine image rm "$migrate_image" >/dev/null; then
+            say "оставлен образ $migrate_image: удаление без -f не прошло"
+            rc=1
+        fi
+    fi
     if engine buildx inspect "$builder" >/dev/null 2>&1; then
         engine buildx rm "$builder" || rc=1
     fi
@@ -404,7 +429,7 @@ build_env() {
 }
 
 cmd_up() {
-    local port ref refs token code api_image claim
+    local port ref refs token code api_image migrate_id claim
     for port in "$api_port" "$ha_port"; do
         port_busy "$port" && refuse "порт $port занят"
     done
@@ -473,6 +498,24 @@ cmd_up() {
         || fail_up "образ $project-api не попал в хранилище движка после сборки строителем $builder"
     say "образ $project-api в хранилище движка: $api_image"
 
+    # Образ схемы — тем же строителем и из тех же исходников, что api: кэш
+    # стадий build и migrations общий. Явной командой, а не compose build:
+    # у сервиса migrate нет build-секции (deploy/stand/docker-compose.stand.yml).
+    engine buildx build --builder "$builder" --load --target migrate \
+        -f "$source_lx/src/Domovoy.Api/Dockerfile" -t "$migrate_image" "$source_lx" \
+        || fail_up "сборка $migrate_image строителем $builder"
+    migrate_id="$(engine image ls --filter "reference=$migrate_image" -q)"
+    [ -n "$migrate_id" ] \
+        || fail_up "образ $migrate_image не попал в хранилище движка после сборки строителем $builder"
+    say "образ $migrate_image в хранилище движка: $migrate_id"
+
+    # Схема — до api, как в боевом deploy/update.sh: postgres уже healthy.
+    # --pull never: отсутствующий образ — ошибка run, а не вытягивание.
+    # Вывод psql — в stderr, stdout остаётся строкам stand.
+    stand_compose --profile migrate run --rm --pull never migrate >&2 \
+        || fail_up 'миграция схемы стенда не прошла (psql откатил транзакцию)'
+    say 'схема стенда применена'
+
     if ! stand_compose up -d --wait --no-build; then
         # Хвост лога api — до сноса, иначе причину не узнать. Токены api не
         # логирует (.claude/CLAUDE.md, «Безопасность», правило 3).
@@ -516,10 +559,38 @@ remove_probes() {
     engine rm -f -v "${ids[@]}" >/dev/null
 }
 
+# Строка схемы базы стенда. SQL — через stdin, а не аргументом: имя
+# "__EFMigrationsHistory" и кавычки SQL не проходят слои квотирования
+# Git Bash → wsl.exe → docker → sh -c. В sh -c — только две переменные
+# контейнера postgres; подключение по локальному сокету, без пароля.
+schema_status() {
+    local out
+    if [ -z "$(stand_compose ps --status running -q postgres 2>/dev/null)" ]; then
+        say 'схема: не проверена — postgres стенда не запущен'
+        return 0
+    fi
+    out="$(stand_compose exec -T postgres sh -c 'psql -X -A -t -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' 2>/dev/null <<'SQL'
+SELECT to_regclass('"__EFMigrationsHistory"') IS NOT NULL AS has_history \gset
+\if :has_history
+SELECT count(*) FROM "__EFMigrationsHistory";
+\else
+SELECT 'absent';
+\endif
+SQL
+)" || { say 'схема: не проверена — psql не ответил'; return 0; }
+    out="$(printf '%s\n' "$out" | tr -d '\r' | sed '/^[[:space:]]*$/d' | tail -n 1)"
+    case "$out" in
+        absent) say 'схема: не применена — нет таблицы __EFMigrationsHistory' ;;
+        ''|*[!0-9]*) say 'схема: не проверена — psql не ответил' ;;
+        *) say "схема: применена, миграций $out" ;;
+    esac
+}
+
 cmd_status() {
     local report code renamed missing
     say "проект $project, api :$api_port, HA :$ha_port"
     stand_compose ps -a --format '{{.Service}} {{.State}} {{.Health}}'
+    schema_status
     # cp проходит и в остановленный контейнер, поэтому «запущен» — по ps.
     if [ -z "$(stand_compose ps --status running -q homeassistant 2>/dev/null)" ]; then
         say 'токен HA: не проверен — HA стенда не запущен'
