@@ -25,14 +25,17 @@
 #   - git — подменяет только worktree list, остальное отдаёт настоящему git;
 #   - docker — голый docker хоста: пишет свой журнал, который обязан
 #     остаться пустым;
-#   - curl — /health стенда отвечает 200.
+#   - curl — /health стенда отвечает 200 и пишет вызов в журнал движка;
+#   - psql — внутри «контейнера postgres»: compose exec подделки исполняет
+#     переданный sh -c локально, psql пишет argv и stdin в файлы состояния.
 #
 # ЧЕГО ЭТИ СЦЕНАРИИ НЕ ЛОВЯТ
 #
-# Поведение настоящих docker compose, buildx и HA: загрузку образа строителем
-# docker-container в хранилище движка, онбординг и переименование сущностей
-# demo, разбор аргументов wsl.exe. Это проверяет живой прогон стенда (#164,
-# контракт приёмки A-up, A-down, A-df).
+# Поведение настоящих docker compose, buildx, psql и HA: загрузку образа
+# строителем docker-container в хранилище движка, применение схемы образом
+# migrate, онбординг и переименование сущностей demo, разбор аргументов
+# wsl.exe. Это проверяет живой прогон стенда (#164, контракт приёмки A-up,
+# A-down, A-df; #173 — A-pair, A-down, A-status).
 #
 # КАК ЗАПУСКАТЬ
 #
@@ -209,13 +212,23 @@ case "$1" in
                 ref="${args##*reference=}"; ref="${ref%% *}"
                 awk -v r="$ref" '$1 == r { print $2 }' "$S/images" ;;
             rm)
+                # По ID или по ссылке (образ migrate стенда удаляется по имени).
                 id="${*: -1}"
+                [ -f "$S/image_rm_fail" ] && { echo "conflict: unable to remove $id" >&2; exit 1; }
+                if grep -q "^$id " "$S/images"; then
+                    grep -v "^$id " "$S/images" > "$S/images.tmp"; mv "$S/images.tmp" "$S/images"
+                    exit 0
+                fi
                 grep -q " $id\$" "$S/images" || { echo "No such image: $id" >&2; exit 1; }
                 grep -v " $id\$" "$S/images" > "$S/images.tmp"; mv "$S/images.tmp" "$S/images" ;;
         esac
         ;;
     buildx)
         case "$2" in
+            build)
+                # Образ из -t попадает в хранилище; migrate_noload — сборка
+                # прошла, а образ не загружен.
+                [ -f "$S/migrate_noload" ] || add_image "$(arg_after -t "$@")" ;;
             create)
                 name="$(arg_after --name "$@")"
                 opt="$(arg_after --driver-opt "$@")"
@@ -229,6 +242,24 @@ case "$1" in
     compose)
         project="$(arg_after -p "$@")"
         case " $args " in
+            *' exec -T postgres sh -c '*)
+                # Скрипт sh -c исполняется по-настоящему, с переменными
+                # контейнера postgres (USER и DB нарочно разные) и подделкой
+                # psql; stdin идёт насквозь.
+                script="$(arg_after -c "$@")"
+                POSTGRES_USER=stand_user POSTGRES_DB=stand_db sh -c "$script"
+                exit $? ;;
+            *' ps --status running -q postgres '*)
+                [ -f "$S/pg_stopped" ] || echo 'c-stand-pg' ;;
+            *' run --rm --pull never migrate '*)
+                # --pull never: образа нет — ошибка run, ничего не собирается.
+                grep -q "^$DOMOVOY_STAND_MIGRATE_IMAGE " "$S/images" \
+                    || { echo "No such image: $DOMOVOY_STAND_MIGRATE_IMAGE" >&2; exit 1; }
+                if [ -f "$S/migrate_fail" ]; then
+                    echo 'psql:/migrations/migrate.sql:1: ERROR:  relation already exists' >&2
+                    exit 3
+                fi
+                echo 'COMMIT' ;;
             *' create '*) add_image "$FAKE_PG_IMAGE"; add_image "$FAKE_HA_IMAGE" ;;
             *' build '*) add_image "$project-api" ;;
             *' down '*)
@@ -302,9 +333,26 @@ printf 'docker %s\n' "$*" >> "$FAKE_BARE_LOG"
 exit 0
 EOF
 
+# Пишет вызов в журнал движка: порядок /health против шагов движка.
 cat > "$BIN/curl" <<'EOF'
 #!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "$FAKE_LOG"
 printf '200'
+EOF
+
+# psql внутри контейнера postgres (его зовёт sh -c подделки compose exec):
+# argv и stdin — в файлы состояния; ответ — по psql_mode: absent, fail или
+# число строк истории (по умолчанию 1).
+cat > "$BIN/psql" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$FAKE_STATE/psql_argv"
+cat > "$FAKE_STATE/psql_stdin"
+mode="$(cat "$FAKE_STATE/psql_mode" 2>/dev/null)"
+case "$mode" in
+    absent) echo 'absent' ;;
+    fail) echo 'psql: error: connection to server failed' >&2; exit 2 ;;
+    *) echo "${mode:-1}" ;;
+esac
 EOF
 
 chmod +x "$BIN"/*
@@ -412,6 +460,29 @@ expect_no_bare_docker() {
 }
 
 pulled_file() { printf '%s/domovoy-stand/%s/pulled-images' "$FAKE_HOME" "$1"; }
+
+# Блок сервиса надстройки стенда: от «  <имя>:» до следующего сервиса или
+# конца файла.
+service_block() {
+    awk -v s="  $1:" '
+        $0 == s { on = 1; next }
+        on && /^  [^[:space:]#]/ { on = 0 }
+        on { print }
+    ' "$REPO/deploy/stand/docker-compose.stand.yml" | tr -d '\r'
+}
+
+# Строки image rm журнала движка, кроме удаления своего образа migrate по
+# имени (down делает его всегда, #173). Аргумент — номера стендов, чьи
+# образы migrate снимает сценарий: «7» или «7|8».
+other_image_rm() {
+    grep -E 'image rm' "$LOG" | grep -vE "image rm domovoy-stand-($1)-migrate\$"
+}
+
+expect_no_other_image_rm() {
+    local lines
+    lines="$(other_image_rm "$1")"
+    [ -z "$lines" ] || fail_case "image rm сверх образа migrate стенда: $(printf '%s\n' "$lines" | head -n 3 | tr '\n' ';')"
+}
 
 probe_port() { printf '%s\n' "$OUT" | sed -n 's/^STAND_PROBE_PORT=//p'; }
 
@@ -726,7 +797,8 @@ expect_status 0
 printf '%s\n' "$OUT" | grep -qF 'токен HA: не проверен — HA стенда не запущен' \
     || fail_case 'status не печатает «не проверен — HA стенда не запущен»'
 log_has 'ps --status running -q homeassistant'
-log_lacks_re 'compose .* (cp|exec)( |$)'
+# В HA — ни cp, ни exec; exec в postgres — строка схемы (#173), не токен.
+log_lacks_re 'compose .* (cp|exec) .*homeassistant'
 end_case
 
 begin_case 'status и logs: стенда нет — строка без compose'
@@ -764,13 +836,18 @@ fi
 if grep -E 'compose .* build( |$)' "$LOG" | grep -vq -- '--builder'; then
     fail_case 'compose build без --builder'
 fi
-# Порядок: строитель → сборка → проверка образа → up всего стека.
-order="$(grep -nE 'buildx create|build --builder|image ls --filter reference=domovoy-stand-7-api|up -d --wait --no-build$' "$LOG" | cut -d: -f1 | tr '\n' ' ')"
+# Порядок: строитель → сборка → проверка образа → up всего стека. Сборка
+# api — compose build; buildx build образа migrate проверяет сценарий
+# порядка migrate ниже.
+order="$(grep -nE 'buildx create|compose .* build --builder|image ls --filter reference=domovoy-stand-7-api|up -d --wait --no-build$' "$LOG" | cut -d: -f1 | tr '\n' ' ')"
 [ "$(echo "$order" | wc -w)" -eq 4 ] || fail_case "нет одного из шагов сборки: $order"
 [ "$order" = "$(echo "$order" | tr ' ' '\n' | grep . | sort -n | tr '\n' ' ')" ] || fail_case "порядок шагов сборки нарушен: $order"
-if grep -vE '^[[:space:]]*#' "$REPO/deploy/stand/docker-compose.stand.yml" | grep -qE '^[[:space:]]*image:'; then
-    fail_case 'docker-compose.stand.yml задаёт image:'
+# image: запрещён у api (образ без своего тега снимает down --rmi local); у
+# migrate он обязателен — его держит сценарий формы надстройки.
+if service_block api | grep -vE '^[[:space:]]*#' | grep -qE '^[[:space:]]*image:'; then
+    fail_case 'docker-compose.stand.yml задаёт image: у api'
 fi
+service_block api | grep -qE '^[[:space:]]*build:' || fail_case 'блок api надстройки не найден или без build:'
 end_case
 
 begin_case 'образ api не попал в движок — стенд сносится'
@@ -814,6 +891,197 @@ grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'образ buildkit, выт�
 [ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
 end_case
 
+# --- Схема базы стенда (#173) ------------------------------------------------
+
+MIGRATE_IMAGE='domovoy-stand-7-migrate'
+
+begin_case 'up: postgres healthy → сборка api и migrate → migrate → api → /health'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+steps=(
+    'up -d --wait --no-build postgres homeassistant$'
+    'compose .* build --builder domovoy-stand-7-build api$'
+    'image ls --filter reference=domovoy-stand-7-api '
+    "buildx build --builder domovoy-stand-7-build --load --target migrate -f $WORKTREE/src/Domovoy.Api/Dockerfile -t $MIGRATE_IMAGE $WORKTREE\$"
+    "image ls --filter reference=$MIGRATE_IMAGE "
+    '--profile ha --profile migrate run --rm --pull never migrate$'
+    'up -d --wait --no-build$'
+    '^curl .*http://127\.0\.0\.1:19007/health$'
+)
+prev=0
+for re in "${steps[@]}"; do
+    n="$(grep -nE -- "$re" "$LOG" | head -n 1 | cut -d: -f1)"
+    if [ -z "$n" ]; then
+        fail_case "нет шага /$re/"
+        continue
+    fi
+    [ "$n" -gt "$prev" ] || fail_case "шаг /$re/ (строка $n) не после предыдущего шага (строка $prev)"
+    prev="$n"
+done
+[ "$(grep -cE ' run ' "$LOG")" = 1 ] || fail_case "compose run за up — $(grep -cE ' run ' "$LOG") раз, ожидался один"
+if grep -E ' run ' "$LOG" | grep -vqF -- '--pull never'; then
+    fail_case 'run migrate без --pull never'
+fi
+printf '%s\n' "$OUT" | grep -qxF 'stand: схема стенда применена' || fail_case 'нет строки «stand: схема стенда применена»'
+grep -q "^$MIGRATE_IMAGE " "$STATE/images" || fail_case "образа $MIGRATE_IMAGE нет в движке после up"
+end_case
+
+begin_case 'надстройка стенда: migrate без build, образ из DOMOVOY_STAND_MIGRATE_IMAGE'
+blk="$(service_block migrate)"
+[ -n "$blk" ] || fail_case 'нет сервиса migrate в deploy/stand/docker-compose.stand.yml'
+printf '%s\n' "$blk" | grep -qE '^[[:space:]]*image:[[:space:]]*\$\{DOMOVOY_STAND_MIGRATE_IMAGE[:?}]' \
+    || fail_case 'image: сервиса migrate — не ${DOMOVOY_STAND_MIGRATE_IMAGE…}'
+printf '%s\n' "$blk" | grep -qE '^[[:space:]]*pull_policy:[[:space:]]*never[[:space:]]*$' \
+    || fail_case 'нет pull_policy: never у migrate'
+if printf '%s\n' "$blk" | grep -vE '^[[:space:]]*#' | grep -qE '^[[:space:]]*build:'; then
+    fail_case 'у migrate есть build: — run снова может собрать образ строителем по умолчанию'
+fi
+printf '%s\n' "$blk" | grep -qE '^[[:space:]]*profiles:[[:space:]]*\[migrate\]' || fail_case 'migrate не под профилем migrate'
+printf '%s\n' "$blk" | grep -qE '^[[:space:]]*networks:[[:space:]]*\[db\]' || fail_case 'migrate не в сети db'
+printf '%s\n' "$blk" | grep -qE '^[[:space:]]*PGPASSWORD:[[:space:]]*\$\{POSTGRES_PASSWORD\}' \
+    || fail_case 'PGPASSWORD migrate — не из .env стенда'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+# Каждый вызов движка — с именем образа migrate в окружении, включая down.
+calls="$(grep -E '(^| )docker ' "$LOG")"
+[ -n "$calls" ] || fail_case 'нет вызовов движка в журнале'
+missing_env="$(printf '%s\n' "$calls" | grep -vF "DOMOVOY_STAND_MIGRATE_IMAGE=$MIGRATE_IMAGE docker ")"
+[ -z "$missing_env" ] || fail_case "вызов движка без DOMOVOY_STAND_MIGRATE_IMAGE: $(printf '%s\n' "$missing_env" | head -n 2 | tr '\n' ';')"
+grep -E ' down ' "$LOG" | grep -qF "DOMOVOY_STAND_MIGRATE_IMAGE=$MIGRATE_IMAGE " \
+    || fail_case 'down без DOMOVOY_STAND_MIGRATE_IMAGE'
+end_case
+
+begin_case 'up: провал миграции — код 1, причина, стенд снесён'
+: > "$STATE/migrate_fail"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+printf '%s\n' "$ERR" | grep -qxF 'stand: up не удался: миграция схемы стенда не прошла (psql откатил транзакцию); стенд сносится' \
+    || fail_case 'нет строки отказа с причиной провала миграции'
+printf '%s\n' "$ERR" | grep -qF 'psql:/migrations/migrate.sql' || fail_case 'вывод psql не попал в stderr'
+printf '%s\n' "$OUT" | grep -qF 'схема стенда применена' && fail_case 'строка «схема стенда применена» при провале'
+log_has '--profile migrate down -v --rmi local --remove-orphans'
+log_has "image rm $MIGRATE_IMAGE"
+log_lacks_re 'up -d --wait --no-build$'
+[ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
+grep -q "^$MIGRATE_IMAGE " "$STATE/images" && fail_case "образ $MIGRATE_IMAGE остался в движке"
+end_case
+
+begin_case 'up: образ migrate не попал в движок — стенд сносится'
+: > "$STATE/migrate_noload"
+run_stand "$WORKTREE" up --name 7
+expect_status 1
+printf '%s\n' "$ERR" | grep -qF "образ $MIGRATE_IMAGE не попал в хранилище движка после сборки строителем domovoy-stand-7-build" \
+    || fail_case 'нет причины с именем образа migrate'
+log_has "buildx build --builder domovoy-stand-7-build"
+log_lacks_re ' run '
+log_lacks_re 'up -d --wait --no-build$'
+log_lacks_re "image rm $MIGRATE_IMAGE"
+log_has 'down -v --rmi local --remove-orphans'
+case "$OUT$ERR" in *'оставлен образ'*) fail_case 'down сообщил об оставленном образе' ;; esac
+[ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
+end_case
+
+begin_case 'down: образ migrate стенда удаляется явно'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+grep -q "^$MIGRATE_IMAGE " "$STATE/images" || fail_case "образа $MIGRATE_IMAGE нет после up — сценарий проверяет не то"
+: > "$LOG"
+run_stand "$WORKTREE" down --name 7
+expect_status 0
+log_has '--profile migrate down -v --rmi local --remove-orphans'
+log_has "image rm $MIGRATE_IMAGE"
+log_lacks_re "image rm (-f|--force) $MIGRATE_IMAGE"
+# Подделка compose down образ migrate не трогает, как настоящий --rmi local
+# для образа со своим тегом: его снимает только явный image rm.
+grep -q "^$MIGRATE_IMAGE " "$STATE/images" && fail_case "образ $MIGRATE_IMAGE остался после down"
+down_line="$(grep -nE 'compose .* down( |$)' "$LOG" | head -n 1 | cut -d: -f1)"
+rm_line="$(grep -nF "image rm $MIGRATE_IMAGE" "$LOG" | head -n 1 | cut -d: -f1)"
+[ -n "$down_line" ] && [ -n "$rm_line" ] && [ "$down_line" -lt "$rm_line" ] \
+    || fail_case "image rm migrate (строка ${rm_line:-—}) не после compose down (строка ${down_line:-—})"
+grep -q "^$PG_IMAGE " "$STATE/images" || fail_case 'удалён образ postgres боевого стека'
+grep -q "^$HA_IMAGE " "$STATE/images" || fail_case 'удалён образ HA боевого стека'
+grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'
+case "$OUT" in *'оставлен образ'*) fail_case "down сообщил об оставленном образе: $OUT" ;; esac
+# Удаление не прошло — строка и код 1, каталог стенда всё равно снят.
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+: > "$STATE/image_rm_fail"
+run_stand "$WORKTREE" down --name 7
+expect_status 1
+printf '%s\n' "$OUT" | grep -qxF "stand: оставлен образ $MIGRATE_IMAGE: удаление без -f не прошло" \
+    || fail_case 'нет строки «оставлен образ domovoy-stand-7-migrate»'
+printf '%s\n' "$ERR" | grep -qF 'down завершился с ошибками' || fail_case 'нет строки «down завершился с ошибками»'
+[ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда остался'
+end_case
+
+begin_case 'status: схема применена — число миграций'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+pg7="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$FAKE_HOME/domovoy-stand/7/.env")"
+printf '2\n' > "$STATE/psql_mode"
+run_stand "$WORKTREE" status --name 7
+expect_status 0
+printf '%s\n' "$OUT" | grep -qxF 'stand: схема: применена, миграций 2' \
+    || fail_case 'status не печатает «схема: применена, миграций 2»'
+log_has 'exec -T postgres sh -c'
+argv="$(cat "$STATE/psql_argv" 2>/dev/null)"
+case " $argv " in *' -U stand_user '*) ;; *) fail_case "psql без -U stand_user: «$argv»" ;; esac
+case " $argv " in *' -d stand_db '*) ;; *) fail_case "psql без -d stand_db: «$argv»" ;; esac
+grep -qF '"__EFMigrationsHistory"' "$STATE/psql_stdin" 2>/dev/null \
+    || fail_case 'stdin psql без "__EFMigrationsHistory" в двойных кавычках'
+grep -qF '__EFMigrationsHistory' "$LOG" && fail_case 'имя __EFMigrationsHistory в аргументах команд движка — SQL не через stdin'
+[ -n "$pg7" ] || fail_case 'нет POSTGRES_PASSWORD в .env стенда'
+grep -qF "$pg7" "$LOG" && fail_case 'пароль базы стенда в аргументах команд движка'
+case "$OUT$ERR" in *"$pg7"*) fail_case 'пароль базы стенда в выводе' ;; esac
+end_case
+
+begin_case 'status: таблицы истории миграций нет — схема не применена'
+run_stand "$WORKTREE" up --name 7
+expect_status 0
+printf 'absent\n' > "$STATE/psql_mode"
+run_stand "$WORKTREE" status --name 7
+expect_status 0
+printf '%s\n' "$OUT" | grep -qxF 'stand: схема: не применена — нет таблицы __EFMigrationsHistory' \
+    || fail_case 'status не печатает «схема: не применена — нет таблицы __EFMigrationsHistory»'
+printf 'fail\n' > "$STATE/psql_mode"
+run_stand "$WORKTREE" status --name 7
+expect_status 0
+printf '%s\n' "$OUT" | grep -qxF 'stand: схема: не проверена — psql не ответил' \
+    || fail_case 'status не печатает «схема: не проверена — psql не ответил»'
+rm -f "$STATE/psql_mode" "$STATE/psql_argv"
+: > "$STATE/pg_stopped"
+: > "$LOG"
+run_stand "$WORKTREE" status --name 7
+expect_status 0
+printf '%s\n' "$OUT" | grep -qxF 'stand: схема: не проверена — postgres стенда не запущен' \
+    || fail_case 'status не печатает «схема: не проверена — postgres стенда не запущен»'
+log_has 'ps --status running -q postgres'
+log_lacks_re 'exec -T postgres'
+[ ! -e "$STATE/psql_argv" ] || fail_case 'psql вызван при остановленном postgres'
+# Токен HA проверяется и без postgres: строка схемы его не прерывает.
+printf '%s\n' "$OUT" | grep -qF 'токен HA: принят' || fail_case 'после строки схемы нет проверки токена HA'
+end_case
+
+begin_case 'документация стенда называет шаг миграции'
+impl="$REPO/docs/rules/implement.md"
+doc_section() {
+    tr -d '\r' < "$impl" | awk -v h="$1" '$0 == h { on = 1; next } on && /^## / { on = 0 } on { print }'
+}
+if [ ! -f "$impl" ]; then
+    fail_case "нет $impl"
+else
+    live="$(doc_section '## Живая проверка — на стенде')"
+    [ -n "$live" ] || fail_case 'нет раздела «## Живая проверка — на стенде»'
+    printf '%s\n' "$live" | grep -qw 'migrate' || fail_case 'раздел «Живая проверка — на стенде» не называет migrate'
+    printf '%s\n' "$live" | grep -qF 'схема:' || fail_case 'раздел «Живая проверка — на стенде» не называет строку схемы status («схема:»)'
+    mig="$(doc_section '## Миграции')"
+    [ -n "$mig" ] || fail_case 'нет раздела «## Миграции»'
+    printf '%s\n' "$mig" | grep -qF 'stand.sh' || fail_case 'раздел «Миграции» без оговорки о базе стенда (stand.sh)'
+fi
+end_case
+
 # --- down --------------------------------------------------------------------
 
 begin_case 'down удаляет только своё'
@@ -831,7 +1099,11 @@ log_has 'buildx rm domovoy-stand-7-build'
 log_lacks_re 'buildx rm .*--keep-state'
 log_has "image rm $bk_id"
 log_lacks_re "image rm (-f|--force)"
-log_lacks_re "image rm [^s]"
+# По ссылке удаляется только свой образ migrate; базовые — только по ID.
+if other_image_rm 7 | grep -qE 'image rm [^s]'; then
+    fail_case "image rm не по ID: $(other_image_rm 7 | grep -E 'image rm [^s]' | tr '\n' ';')"
+fi
+log_has 'image rm domovoy-stand-7-migrate'
 [ ! -e "$FAKE_HOME/domovoy-stand/7" ] || fail_case 'каталог стенда не удалён'
 grep -q "^$PG_IMAGE " "$STATE/images" || fail_case 'удалён образ postgres боевого стека'
 grep -q "^$HA_IMAGE " "$STATE/images" || fail_case 'удалён образ HA боевого стека'
@@ -845,7 +1117,7 @@ expect_status 0
 : > "$LOG"
 run_stand "$WORKTREE" down --name 7
 expect_status 0
-log_lacks_re 'image rm'
+expect_no_other_image_rm 7
 grep -q 'sha256:already-here' "$STATE/images" || fail_case 'удалён образ, который был до up'
 end_case
 
@@ -857,7 +1129,7 @@ printf '%s c-foreign\n' "$bk_id" >> "$STATE/ancestors"
 : > "$LOG"
 run_stand "$WORKTREE" down --name 7
 expect_status 0
-log_lacks_re 'image rm'
+expect_no_other_image_rm 7
 printf '%s\n' "$OUT" | grep -qF "оставлен образ $bk_id" || fail_case 'нет строки про оставленный образ'
 end_case
 
@@ -888,7 +1160,7 @@ expect_status 0
 : > "$LOG"
 run_stand "$WORKTREE" down --name 7
 expect_status 0
-log_lacks_re 'image rm'
+expect_no_other_image_rm 7
 grep -q "^$BUILDKIT " "$STATE/images" || fail_case 'buildkit удалён, пока жив стенд 8'
 [ "$(grep -cxF "$bk_id" "$(pulled_file 8)" 2>/dev/null)" = 1 ] \
     || fail_case "ID buildkit в pulled-images стенда 8 — не ровно один раз: $(cat "$(pulled_file 8)" 2>/dev/null | tr '\n' ';')"
@@ -919,7 +1191,7 @@ printf '%s\n' "$OUT" | grep -qxF "stand: образ $bk_id передан сте
 run_stand "$WORKTREE" down --name 7
 expect_status 0
 grep -q "^$BUILDKIT " "$STATE/images" && fail_case 'buildkit остался после сноса последнего стенда'
-[ "$(grep -c 'image rm' "$LOG")" = 1 ] || fail_case "image rm за сценарий — $(grep -c 'image rm' "$LOG") раз, ожидался один"
+[ "$(other_image_rm '7|8' | grep -c .)" = 1 ] || fail_case "image rm базового образа за сценарий — $(other_image_rm '7|8' | grep -c .) раз, ожидался один"
 grep -q "^$PG_IMAGE " "$STATE/images" || fail_case 'удалён образ postgres боевого стека'
 grep -q "^$HA_IMAGE " "$STATE/images" || fail_case 'удалён образ HA боевого стека'
 grep -q '^domovoy-api ' "$STATE/images" || fail_case 'удалён образ domovoy-api'

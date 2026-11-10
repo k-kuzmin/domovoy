@@ -11,9 +11,36 @@
 # image: у api здесь нет и быть не должно: образ без своего тега
 # (<проект>-api) — ровно то, что удаляет docker compose down --rmi local.
 # Свой тег увёл бы образ стенда из-под --rmi local.
+#
+# migrate — одноразовый сервис схемы стенда (#173), той же формы, что
+# боевой migrate в deploy/docker-compose.deploy.yml: набор PG* берётся
+# оттуда, пароль только в окружении процесса psql. Образ <проект>-migrate
+# собирает stand.sh up строителем стенда (buildx build --target migrate из
+# исходников worktree) и передаёт имя переменной окружения, как
+# DOMOVOY_STAND_SOURCE. build-секции нет нарочно: compose run не может
+# собрать сервис без build, а pull_policy: never и run --pull never не дают
+# вытянуть его — отсутствующий образ становится ошибкой run, а не тихой
+# сборкой строителем движка по умолчанию. Свой тег уводит образ из-под
+# down --rmi local, поэтому down удаляет его явно по имени.
 # ============================================================
 
 services:
   api:
     build:
       context: ${DOMOVOY_STAND_SOURCE:?DOMOVOY_STAND_SOURCE задаёт scripts/stand.sh}
+
+  migrate:
+    image: ${DOMOVOY_STAND_MIGRATE_IMAGE:?DOMOVOY_STAND_MIGRATE_IMAGE задаёт scripts/stand.sh}
+    pull_policy: never
+    profiles: [migrate]
+    networks: [db]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    environment:
+      PGHOST: postgres
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
