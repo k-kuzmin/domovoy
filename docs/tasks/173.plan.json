@@ -18,13 +18,18 @@
     },
     {
       "path": "scripts/stand.sh",
+      "line": 197,
+      "observation": "engine() — единственная дорога к docker: `wsl.exe -d \"$distro\" --exec env \"DOMOVOY_STAND_SOURCE=$source_lx\" docker \"$@\"`. Переменная надстройки стенда уходит окружением процесса на каждом вызове, включая down — тем же каналом можно передать имя образа migrate стенда."
+    },
+    {
+      "path": "scripts/stand.sh",
       "line": 206,
       "observation": "stand_compose всегда передаёт `--profile ha` и два файла: docker-compose.yml и deploy/stand/docker-compose.stand.yml; дополнительные глобальные флаги можно передать первыми аргументами — они встают перед подкомандой."
     },
     {
       "path": "scripts/stand.sh",
       "line": 336,
-      "observation": "do_down: `stand_compose down -v --rmi local --remove-orphans` — образы без своего тега удаляются по --rmi local; профиль migrate в вызове не активен, поэтому сервис под профилем migrate down мог бы не увидеть."
+      "observation": "do_down: `stand_compose down -v --rmi local --remove-orphans` — снимает образы сервисов модели без своего тега; профиль migrate в вызове не активен. Остальное удаляется явными командами движка (buildx rm строителя, image rm вытянутых образов по записи) — явное удаление своего по имени уже норма сценария."
     },
     {
       "path": "scripts/stand.sh",
@@ -34,7 +39,12 @@
     {
       "path": "scripts/stand.sh",
       "line": 519,
-      "observation": "cmd_status печатает compose ps и состояние токена HA; о схеме базы не говорит ничего."
+      "observation": "cmd_status печатает compose ps и состояние токена HA; о схеме базы не говорит ничего. Токен HA уходит в `stand_compose exec -T homeassistant …` через stdin (строки 532–533) — канал без слоёв квотирования, уже работающий живьём."
+    },
+    {
+      "path": "scripts/stand.sh",
+      "line": 446,
+      "observation": "in_distro передаёт через wsl.exe --exec скрипты sh -c с двойными кавычками и $-переменными (`\"$1/config\"`, `\"${f##*/}\"`), и стенд с ними поднимался живьём на #164 и #15: цепочка Git Bash → wsl.exe → argv процесса в дистрибутиве двойные кавычки сохраняет."
     },
     {
       "path": "deploy/stand/docker-compose.stand.yml",
@@ -44,12 +54,12 @@
     {
       "path": "src/Domovoy.Api/Dockerfile",
       "line": 57,
-      "observation": "Стадия `migrate` — postgres:16-alpine с /migrations/migrate.sql (идемпотентный скрипт из стадии migrations), ENTRYPOINT psql -v ON_ERROR_STOP=1 --single-transaction (строка 59); подключение — только переменные PG* окружения."
+      "observation": "Стадия `migrate` — postgres:16-alpine с /migrations/migrate.sql (идемпотентный скрипт из стадии migrations), ENTRYPOINT psql -v ON_ERROR_STOP=1 --single-transaction (строка 59); подключение — только переменные PG* окружения. Других стадий-целей с аргументами сборки нет: ARG в файле не объявлены."
     },
     {
       "path": "deploy/docker-compose.deploy.yml",
       "line": 30,
-      "observation": "Боевой сервис migrate: профиль migrate, сеть db, depends_on postgres service_healthy, restart 'no', environment PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD из .env; образ — из GHCR (DOMOVOY_IMAGE_REPO обязателен), поэтому на стенде этот файл неприменим."
+      "observation": "Боевой сервис migrate: только image (GHCR), без build; профиль migrate, сеть db, depends_on postgres service_healthy, restart 'no', environment PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD из .env. Сервис без build-секции compose собрать не может — run только запускает готовый образ."
     },
     {
       "path": "deploy/update.sh",
@@ -57,9 +67,14 @@
       "observation": "Боевой путь миграции — `compose --profile migrate run --rm migrate`; провал — отказ с причиной «миграция не удалась (psql откатил свою транзакцию)». Стенд повторяет этот путь, меняется только источник образа."
     },
     {
+      "path": "docker-compose.yml",
+      "line": 31,
+      "observation": "postgres получает POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD из .env; в .env.example (строки 37–38) POSTGRES_DB и POSTGRES_USER совпадают (domovoy), поэтому psql без -d на примерах случайно попадает в нужную базу, а при разных значениях — нет."
+    },
+    {
       "path": "scripts/stand.test.sh",
       "line": 229,
-      "observation": "Подделка compose в движке: `build` добавляет только образ <проект>-api, `down` удаляет только <проект>-api, `run` и `exec` в postgres не обрабатываются; curl-подделка (строка 305) в журнал движка не пишет, поэтому порядок относительно /health сейчас не проверяем."
+      "observation": "Подделка compose в движке: `build` добавляет только образ <проект>-api, `down` удаляет только <проект>-api, `run` и `exec` в postgres не обрабатываются; `buildx` знает только create/inspect/rm (строки 215–227); `image rm` (строка 209) — только по ID; curl-подделка (строка 305) в журнал движка не пишет."
     },
     {
       "path": "scripts/stand.test.sh",
@@ -69,7 +84,7 @@
     {
       "path": "src/Domovoy.Api/Endpoints/AdminEndpoints.cs",
       "line": 51,
-      "observation": "POST /api/v1/admin/pairing-codes отвечает 201 Created, а не 200, как написано в критерии готовности issue; тело — code и expires_at (строки 97–99)."
+      "observation": "POST /api/v1/admin/pairing-codes отвечает 201 Created — как в критерии готовности issue; тело — code и expires_at (строки 97–99)."
     },
     {
       "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
@@ -98,15 +113,27 @@
     }
   ],
   "approach": {
-    "summary": "Сервис migrate объявляется в надстройке стенда deploy/stand/docker-compose.stand.yml: build из того же контекста ${DOMOVOY_STAND_SOURCE}, dockerfile src/Domovoy.Api/Dockerfile, target migrate; профиль migrate, сеть db, depends_on postgres service_healthy, restart 'no', environment PG* из .env стенда — тот же набор, что у боевого сервиса в deploy/docker-compose.deploy.yml, без image: (образ <проект>-migrate без своего тега, его снимает down --rmi local). В cmd_up сборка становится `stand_compose --profile migrate build --builder \"$builder\" api migrate`, после неё — проверка, что в хранилище движка есть и <проект>-api, и <проект>-migrate (fail_up при отсутствии, как для api). Затем, до `up -d --wait --no-build` всего стека, — `stand_compose --profile migrate run --rm migrate`; ненулевой код — fail_up с причиной «миграция схемы стенда не прошла (psql откатил транзакцию)», вывод psql уходит в stderr, стенд сносится тем же do_down. Порядок up: postgres и HA healthy → онбординг HA → сборка api и migrate → migrate → up стека (api) → /health. do_down вызывает `stand_compose --profile migrate down -v --rmi local --remove-orphans`, чтобы сервис под профилем migrate и его образ были в модели down. cmd_status после compose ps печатает строку о схеме: `stand_compose exec -T postgres sh -c '…'` с psql по локальному сокету от $POSTGRES_USER контейнера (пароль не нужен и не передаётся), сначала to_regclass('\"__EFMigrationsHistory\"'), потом число строк: «схема: применена, миграций K», «схема: не применена — нет таблицы __EFMigrationsHistory» или «схема: не проверена — postgres стенда не запущен» (по `ps --status running -q postgres`, как сделано для HA). Документация: в docs/rules/implement.md, «Живая проверка — на стенде», — что up применяет схему сценарием из исходников ветки, что status её показывает, что down удаляет и образ migrate; в разделе «Миграции» — оговорка, что правило «применение миграции — команда человека» не распространяется на одноразовую базу стенда, которую мигрирует stand.sh up. В .claude/CLAUDE.md, «Команды человека», — та же оговорка одной фразой со ссылкой на docs/rules/implement.md: иначе норма уровня проекта дословно противоречит поведению сценария. Открытый вопрос журнала («нужна ли правка .claude/CLAUDE.md той же задачей») решается так: да, одной фразой.",
+    "summary": "Образ migrate собирается и запускается так, чтобы ни один шаг не зависел от неочевидного поведения compose. (1) Сборка — явной командой строителя стенда сразу после сборки api: `engine buildx build --builder \"$builder\" --load --target migrate -f \"$source_lx/src/Domovoy.Api/Dockerfile\" -t \"$project-migrate\" \"$source_lx\"` (флаги --builder, --load, --target, -t, -f сверены по `buildx build --help` движка), затем `image ls --filter reference=$project-migrate -q` — пусто → fail_up с именем образа, как для api. Кэш у строителя общий с api: стадии build/migrations те же. (2) Сервис migrate в надстройке deploy/stand/docker-compose.stand.yml — той же формы, что боевой в deploy/docker-compose.deploy.yml: только `image: ${DOMOVOY_STAND_MIGRATE_IMAGE:?…}`, `pull_policy: never`, без build-секции; профиль migrate, сеть db, depends_on postgres service_healthy, restart 'no', environment PGHOST=postgres, PGPORT, PGUSER/PGDATABASE/PGPASSWORD из .env стенда. DOMOVOY_STAND_MIGRATE_IMAGE=$project-migrate engine() передаёт окружением рядом с DOMOVOY_STAND_SOURCE, поэтому надстройка разбирается на любом вызове, включая down без .env. Сервис без build compose собрать не может по построению, а `run --pull never` запрещает и вытягивание: отсутствующий образ — ошибка run, а не тихая сборка дефолтным строителем. Это и есть исключение пересборки в run, а не опора на правило «run собирает только недостающий образ» (у `compose run` движка v5.7.0 есть --build, но нет --no-build — проверено `compose run --help`). (3) Миграция — до up стека: `stand_compose --profile migrate run --rm --pull never migrate`; ненулевой код — fail_up с причиной «миграция схемы стенда не прошла (psql откатил транзакцию)», вывод psql уходит в stderr; успех — строка «stand: схема стенда применена». Порядок up: postgres и HA healthy → онбординг HA → buildx create → сборка api (compose build) и проверка образа → сборка migrate (buildx build) и проверка образа → run migrate → up стека → /health. (4) do_down: `stand_compose --profile migrate down -v --rmi local --remove-orphans` (профиль — чтобы контейнер migrate, оставшийся от прерванного run, был в модели), затем явное удаление образа: `engine image inspect \"$project-migrate\"` нашёл — `engine image rm \"$project-migrate\"` без -f; неудача — rc=1 и строка «оставлен образ <проект>-migrate». Образ с собственным тегом --rmi local не снимает по определению флага («local» — только образы без своего тега), поэтому удаление не зависит от того, как compose трактует профили в down. Имя с префиксом проекта принадлежит стенду — то же правило «по имени», что у строителя. (5) cmd_status после compose ps: postgres не запущен (`ps --status running -q postgres`, как для HA) — «схема: не проверена — postgres стенда не запущен»; иначе SQL уходит через stdin, тем же каналом, что токен HA: `printf '%s\\n' \"$sql\" | stand_compose exec -T postgres sh -c 'psql -X -A -t -q -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\"'`. В sh -c — только две переменные контейнера в двойных кавычках (класс квотирования, который in_distro уже проводит через wsl.exe живьём); имя \"__EFMigrationsHistory\" и одинарные кавычки SQL идут байтами stdin и слоёв квотирования не проходят. Подключение по локальному сокету контейнера, пароль не нужен и не передаётся. SQL через \\gset/\\if печатает «absent» или число строк истории: «схема: применена, миграций K», «схема: не применена — нет таблицы __EFMigrationsHistory»; ошибка psql — «схема: не проверена — psql не ответил». Документация: в docs/rules/implement.md, «Живая проверка — на стенде», — что up применяет схему образом migrate из исходников ветки, что status её показывает, что down удаляет и образ migrate; в разделе «Миграции» — оговорка, что правило «применение миграции — команда человека» не распространяется на одноразовую базу стенда, которую мигрирует stand.sh up. В .claude/CLAUDE.md, «Команды человека», — та же оговорка одной фразой со ссылкой на docs/rules/implement.md: иначе норма уровня проекта дословно противоречит поведению сценария.",
     "rejected": [
+      {
+        "option": "Сервис migrate с build-секцией в надстройке стенда, сборка `compose build --builder … api migrate`, удаление образа — `down --profile migrate --rmi local`, запуск — `compose run --rm migrate`",
+        "reason": "Первая редакция плана, отвергнута по замечанию совета: у run нет --no-build, и при отсутствии образа он собрал бы его дефолтным строителем движка (кэш вне строителя стенда, down его не снимет); снимет ли --rmi local образ сервиса под профилем — зависит от того, как compose строит модель для down, а подделка stand.test.sh это не воспроизводит."
+      },
+      {
+        "option": "Третий файл надстройки только для run: `build: !reset null` и image у migrate, сборка — через compose build",
+        "reason": "Исключает сборку в run так же, но добавляет файл и вторую форму stand_compose; удаление образа всё равно пришлось бы делать явно. Явная buildx build даёт тот же результат одной командой и одной формой надстройки."
+      },
+      {
+        "option": "Оставить compose run с build-секцией и сверять ID образа до и после run",
+        "reason": "Обнаруживает пересборку, но не предотвращает её: к моменту отказа кэш дефолтного строителя и висячий образ уже в движке."
+      },
       {
         "option": "Перенести сервис migrate в базовый docker-compose.yml (профиль migrate, build target migrate), а deploy/docker-compose.deploy.yml оставить переопределять image",
         "reason": "Меняет базовый стек и боевую надстройку ради стенда: правка боевого пути выкатки (update.sh, ci-publish) без пользы для задачи и с риском для update.ps1; стенд обходится своей надстройкой."
       },
       {
         "option": "Сервис migrate без профиля и api с depends_on migrate: service_completed_successfully — порядок держит сам compose up",
-        "reason": "Меняет граф зависимостей базового api только на стенде и смешивает провал миграции с провалом up стека: причину не отличить, а `up --wait` по одноразовому контейнеру ведёт себя по-разному в версиях compose. Явный шаг run --rm повторяет боевой update.sh и даёт отдельную причину отказа."
+        "reason": "Меняет граф зависимостей базового api только на стенде и смешивает провал миграции с провалом up стека: причину не отличить. Явный шаг run --rm повторяет боевой update.sh и даёт отдельную причину отказа."
       },
       {
         "option": "`engine run --rm --network <проект>_db -e PGPASSWORD=… <образ>` без сервиса compose",
@@ -115,21 +142,25 @@
       {
         "option": "`dotnet ef database update` с хоста против порта postgres стенда",
         "reason": "Порт postgres стенда наружу не публикуется (docker-compose.yml:48–51), команда закрыта deny в .claude/settings.json и требует SDK хоста; задача прямо просит путь боевого стека — образ migrate."
+      },
+      {
+        "option": "SQL статуса аргументом `psql -c` внутри sh -c",
+        "reason": "Имя \"__EFMigrationsHistory\" и одинарные кавычки SQL проходили бы через Git Bash, wsl.exe, docker и sh -c — четыре слоя квотирования, которые подделка не ловит; stdin их не проходит."
       }
     ]
   },
   "fork_card": {
-    "matches_request": "Да, по всем пунктам «Что делается»: стадия migrate собирается строителем стенда вместе с api, запускается после healthy postgres и до /health, провал — fail_up со сносом, down удаляет образ migrate, status говорит о таблице истории миграций EF, оговорка — в docs/rules/implement.md. Одно расхождение с критерием готовности не в подходе, а в тексте issue: pairing-codes по контракту отвечает 201 (AdminEndpoints.cs:51), а не 200 — контракт приёмки A-pair ждёт 201, это вынесено в риски для подтверждения владельцем.",
-    "alternative": "Сервис migrate в базовом docker-compose.yml с переопределением image в боевой надстройке: владелец увидел бы правку боевого пути выкатки (docker-compose.yml, deploy/docker-compose.deploy.yml) и повторную проверку update.ps1; для стенда результат тот же. Отвергнуто в approach.rejected.",
-    "ripple": "Греп `docker-compose.stand.yml|stand.sh` вне docs/tasks: .claude/CLAUDE.md, .claude/hooks/rules-map.json, .claude/hooks/tests/test_rules_map.py, .claude/hooks/tests/test_settings_permissions.py, .claude/settings.json, deploy/stand/*, docs/rules/implement.md, scripts/stand.sh, scripts/stand.test.sh. Надстройку стенда читает только stand.sh; хуки и права ссылаются на путь `bash scripts/stand.sh *`, а не на поведение — их правка не нужна. CI запускает stand.test.sh (.github/workflows/ci-fast.yml:208) — существующие сценарии должны остаться зелёными с расширенной подделкой. Боевой путь (deploy/update.sh, deploy/docker-compose.deploy.yml, Dockerfile) не меняется.",
+    "matches_request": "Да, по всем пунктам «Что делается» и критерия готовности: стадия migrate собирается строителем стенда в том же шаге up, что и api, запускается после healthy postgres и до /health, провал — fail_up со сносом, down удаляет образ migrate, status говорит о таблице истории миграций EF, оговорка — в docs/rules/implement.md. Привязка проверяется по критерию буквально: pairing-codes — 201 Created, auth/device — 200 с токеном.",
+    "alternative": "Сервис migrate в базовом docker-compose.yml с переопределением image в боевой надстройке: владелец увидел бы правку боевого пути выкатки (docker-compose.yml, deploy/docker-compose.deploy.yml) и повторную проверку update.ps1; для стенда результат тот же. Внутри стенда варианты сборки (compose build против buildx build) различаются устройством, а не наблюдаемым результатом. Отвергнуто в approach.rejected.",
+    "ripple": "Греп `docker-compose.stand.yml|stand.sh` вне docs/tasks: .claude/CLAUDE.md, .claude/hooks/rules-map.json, .claude/hooks/tests/test_rules_map.py, .claude/hooks/tests/test_settings_permissions.py, .claude/settings.json, deploy/stand/*, docs/rules/implement.md, scripts/stand.sh, scripts/stand.test.sh. Надстройку стенда читает только stand.sh; хуки и права ссылаются на путь `bash scripts/stand.sh *`, а не на поведение — их правка не нужна. engine() меняется (вторая переменная окружения) — её вызывают все подкоманды, значение одно и то же, поведение остальных вызовов не меняется. CI запускает stand.test.sh (.github/workflows/ci-fast.yml:208) — существующие сценарии должны остаться зелёными с расширенной подделкой. Боевой путь (deploy/update.sh, deploy/docker-compose.deploy.yml, Dockerfile) не меняется.",
     "workaround": "Нет: схема применяется тем же образом migrate, что у боевого стека, из исходников ветки; ручной psql из #15 заменяется шагом сценария.",
     "council_signs": [
       "правка обвязки: scripts/stand.sh, scripts/stand.test.sh, deploy/stand/docker-compose.stand.yml, docs/rules/implement.md, .claude/CLAUDE.md",
       "миграция: сценарий начинает применять миграции к базе (стенда); сами миграции не меняются",
-      "общий механизм: do_down используется и fail_up, и down — меняется его вызов compose (--profile migrate); греп вызовов do_down — scripts/stand.sh:376 и :551",
+      "общий механизм: do_down используется и fail_up, и down — в нём меняется вызов compose (--profile migrate) и появляется удаление образа migrate; engine() получает вторую переменную окружения; греп вызовов do_down — scripts/stand.sh:376 и :551",
       "новая функциональность: шаг миграции в up и строка схемы в status"
     ],
-    "executor": "Субагент: по задаче целиком ~150–200 строк в пяти файлах (stand.sh ~40, надстройка ~20, stand.test.sh ~100, implement.md ~10, CLAUDE.md ~2) — выше порога «до 3 файлов и ~40 строк». Срез stand — субагент; срез docs — оркестратор сам или тот же субагент после stand.",
+    "executor": "Субагент: по задаче целиком ~170–220 строк в пяти файлах (stand.sh ~50, надстройка ~20, stand.test.sh ~120, implement.md ~10, CLAUDE.md ~2) — выше порога «до 3 файлов и ~40 строк». Срез stand — субагент; срез docs — оркестратор сам или тот же субагент после stand.",
     "fork": false,
     "slices": [
       {
@@ -139,7 +170,7 @@
           "deploy/stand/docker-compose.stand.yml",
           "scripts/stand.test.sh"
         ],
-        "contract": "Сервис compose `migrate` в надстройке стенда: build.context ${DOMOVOY_STAND_SOURCE}, dockerfile src/Domovoy.Api/Dockerfile, target migrate, profiles [migrate], networks [db], depends_on postgres service_healthy, restart 'no', environment PGHOST=postgres, PGPORT=5432, PGUSER=${POSTGRES_USER}, PGDATABASE=${POSTGRES_DB}, PGPASSWORD=${POSTGRES_PASSWORD}; image: нет. Образ в движке — <проект>-migrate. Строки вывода stand.sh, на которые опирается документация: «stand: схема стенда применена» после run (stdout), причина отказа «миграция схемы стенда не прошла (psql откатил транзакцию)» в строке fail_up, строки status «схема: применена, миграций K», «схема: не применена — нет таблицы __EFMigrationsHistory», «схема: не проверена — postgres стенда не запущен». Порядок в журнале движка: up --wait postgres homeassistant → build --builder … api migrate → image ls reference=<проект>-api и <проект>-migrate → run --rm migrate → up -d --wait --no-build → curl /health.",
+        "contract": "Сервис compose `migrate` в надстройке стенда: image ${DOMOVOY_STAND_MIGRATE_IMAGE:?…}, pull_policy never, build-секции нет, profiles [migrate], networks [db], depends_on postgres service_healthy, restart 'no', environment PGHOST=postgres, PGPORT=5432, PGUSER=${POSTGRES_USER}, PGDATABASE=${POSTGRES_DB}, PGPASSWORD=${POSTGRES_PASSWORD}. engine() передаёт DOMOVOY_STAND_MIGRATE_IMAGE=<проект>-migrate. Образ в движке — <проект>-migrate, собирается `buildx build --builder <проект>-build --load --target migrate -f <исходники>/src/Domovoy.Api/Dockerfile -t <проект>-migrate <исходники>`. Строки вывода stand.sh, на которые опирается документация: «stand: схема стенда применена» после run (stdout), причина отказа «миграция схемы стенда не прошла (psql откатил транзакцию)» в строке fail_up, строки status «схема: применена, миграций K», «схема: не применена — нет таблицы __EFMigrationsHistory», «схема: не проверена — postgres стенда не запущен», «схема: не проверена — psql не ответил»; при down — «оставлен образ <проект>-migrate» при неудаче image rm. Порядок в журнале движка: up --wait postgres homeassistant → build --builder … api → image ls reference=<проект>-api → buildx build … --target migrate … -t <проект>-migrate → image ls reference=<проект>-migrate → --profile migrate run --rm --pull never migrate → up -d --wait --no-build → curl /health.",
         "after": []
       },
       {
@@ -148,7 +179,7 @@
           "docs/rules/implement.md",
           ".claude/CLAUDE.md"
         ],
-        "contract": "docs/rules/implement.md, «Живая проверка — на стенде»: up применяет схему образом migrate из исходников ветки после healthy postgres и до /health, провал миграции — отказ up со сносом; status печатает строку схемы; down удаляет и образ migrate стенда. Раздел «Миграции», строка 308: правило «команда человека» относится к базам вне стенда, одноразовую базу domovoy-stand-<N> мигрирует stand.sh up. .claude/CLAUDE.md, «Команды человека»: одна фраза-оговорка про базу стенда со ссылкой на docs/rules/implement.md. Тексты строк вывода — из contract среза stand.",
+        "contract": "docs/rules/implement.md, «Живая проверка — на стенде»: up применяет схему образом migrate из исходников ветки (сборка строителем стенда) после healthy postgres и до /health, провал миграции — отказ up со сносом; status печатает строку схемы; down удаляет и образ migrate стенда. Раздел «Миграции», строка 308: правило «команда человека» относится к базам вне стенда, одноразовую базу domovoy-stand-<N> мигрирует stand.sh up. .claude/CLAUDE.md, «Команды человека»: одна фраза-оговорка про базу стенда со ссылкой на docs/rules/implement.md. Тексты строк вывода — из contract среза stand.",
         "after": ["stand"]
       }
     ],
@@ -158,17 +189,17 @@
     {
       "path": "deploy/stand/docker-compose.stand.yml",
       "action": "modify",
-      "why": "Сервис migrate стенда: сборка стадии migrate из исходников ветки, профиль migrate, сеть db, PG* из .env стенда; шапка — зачем он и почему без image:."
+      "why": "Сервис migrate стенда той же формы, что боевой: только image из DOMOVOY_STAND_MIGRATE_IMAGE, pull_policy never, без build; профиль migrate, сеть db, PG* из .env стенда; шапка — зачем он, почему без build (run не может собрать) и что образ удаляет down явно."
     },
     {
       "path": "scripts/stand.sh",
       "action": "modify",
-      "why": "cmd_up: сборка api и migrate, проверка обоих образов, run --rm migrate до up стека, fail_up при провале; do_down: --profile migrate; cmd_status: строка схемы; шапка: шаг миграции в описании up и образ migrate в описании down."
+      "why": "engine(): DOMOVOY_STAND_MIGRATE_IMAGE; cmd_up: buildx build migrate строителем стенда, проверка образа, run --rm --pull never migrate до up стека, fail_up при провале; do_down: --profile migrate и явный image rm <проект>-migrate; cmd_status: строка схемы с SQL через stdin; шапка: шаг миграции в описании up и образ migrate в описании down."
     },
     {
       "path": "scripts/stand.test.sh",
       "action": "modify",
-      "why": "Подделка compose: build добавляет образы перечисленных сервисов, down удаляет <проект>-migrate только при --profile migrate, run migrate управляется файлом состояния, exec в postgres отвечает о таблице истории; curl пишет в журнал движка. Новые сценарии порядка, провала, down и status."
+      "why": "Подделка движка: buildx build добавляет образ из -t (файл состояния — не добавлять), image rm по имени и по ID, run migrate управляется файлом состояния, exec в postgres исполняет переданный sh -c локально с POSTGRES_USER≠POSTGRES_DB и подделкой psql, которая пишет argv и stdin; curl пишет в журнал движка. Новые сценарии порядка, провала, формы сервиса, down и status."
     },
     {
       "path": "docs/rules/implement.md",
@@ -200,42 +231,49 @@
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-order", "A-pair"],
-      "behavior": "Для A-pair — только механизм «без ручных шагов»: схему применяет сам up; сама привязка проверяется живым прогоном. Номера строк журнала движка идут строго по возрастанию: up -d --wait --no-build postgres homeassistant, build --builder domovoy-stand-7-build api migrate, image ls reference=domovoy-stand-7-migrate, --profile migrate run --rm migrate, up -d --wait --no-build (весь стек), запись curl /health. Падает, если migrate не запускается, запускается после up стека или до healthy postgres."
+      "behavior": "Для A-pair — только механизм «без ручных шагов»: схему применяет сам up; сама привязка проверяется живым прогоном. Номера строк журнала движка идут строго по возрастанию: up -d --wait --no-build postgres homeassistant, build --builder domovoy-stand-7-build api, buildx build --builder domovoy-stand-7-build … --target migrate … -t domovoy-stand-7-migrate, image ls reference=domovoy-stand-7-migrate, --profile migrate run --rm --pull never migrate, up -d --wait --no-build (весь стек), запись curl /health. Падает, если migrate не запускается, запускается после up стека или до healthy postgres, или run идёт без --pull never."
+    },
+    {
+      "name": "надстройка стенда: migrate без build, образ из DOMOVOY_STAND_MIGRATE_IMAGE",
+      "file": "scripts/stand.test.sh",
+      "new": true,
+      "covers": ["A-order"],
+      "behavior": "Блок сервиса migrate в deploy/stand/docker-compose.stand.yml (от «  migrate:» до следующего сервиса или конца) содержит image: ${DOMOVOY_STAND_MIGRATE_IMAGE и pull_policy: never и не содержит build:; каждый вызов движка в журнале после up идёт с DOMOVOY_STAND_MIGRATE_IMAGE=domovoy-stand-7-migrate в окружении. Падает, если build-секция вернётся (run снова сможет собрать образ дефолтным строителем) или переменная перестанет передаваться (down без неё не разберёт надстройку)."
     },
     {
       "name": "up: провал миграции — код 1, причина, стенд снесён",
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-fail"],
-      "behavior": "Подделка возвращает 1 на run --rm migrate: код up 1, stderr содержит «миграция схемы стенда не прошла», в журнале движка есть down -v --rmi local --remove-orphans и нет up -d --wait --no-build всего стека, каталога ~/domovoy-stand/7 нет, образа domovoy-stand-7-migrate в состоянии движка нет."
+      "behavior": "Подделка возвращает 1 на run --rm migrate: код up 1, stderr содержит «миграция схемы стенда не прошла», в журнале движка есть down -v --rmi local --remove-orphans и image rm domovoy-stand-7-migrate и нет up -d --wait --no-build всего стека, каталога ~/domovoy-stand/7 нет, образа domovoy-stand-7-migrate в состоянии движка нет."
     },
     {
       "name": "up: образ migrate не попал в движок — стенд сносится",
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-fail"],
-      "behavior": "Сборка проходит, но образ <проект>-migrate в хранилище не появляется: код 1, причина называет образ domovoy-stand-7-migrate, run migrate не вызывался, стенд снесён."
+      "behavior": "buildx build проходит, но образ domovoy-stand-7-migrate в хранилище не появляется: код 1, причина называет образ domovoy-stand-7-migrate, run migrate не вызывался, стенд снесён, image rm migrate не вызывался (удалять нечего) и down завершился без «оставлен образ»."
     },
     {
-      "name": "down: образ migrate стенда удаляется",
+      "name": "down: образ migrate стенда удаляется явно",
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-down"],
-      "behavior": "После up в состоянии движка есть domovoy-stand-7-migrate; после down его нет, в журнале down идёт с --profile migrate; образы боевого стека (domovoy-api, postgres, HA) на месте."
+      "behavior": "Подделка down compose образ migrate не трогает (как настоящий --rmi local для образа со своим тегом). После up в состоянии движка есть domovoy-stand-7-migrate; после down его нет, в журнале — down с --profile migrate и image rm domovoy-stand-7-migrate без -f; образы боевого стека (domovoy-api, postgres, HA) на месте. Падает, если удаление образа migrate снова положится на --rmi local."
     },
     {
       "name": "status: схема применена — число миграций",
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-status"],
-      "behavior": "Подделка exec в postgres отвечает «таблица есть, 1 строка»: status печатает «схема: применена, миграций 1»; в аргументах команд движка нет POSTGRES_PASSWORD стенда."
+      "behavior": "Подделка exec исполняет переданный sh -c локально с POSTGRES_USER=stand_user и POSTGRES_DB=stand_db (разные значения), подделка psql пишет argv и stdin и отвечает числом 1: status печатает «схема: применена, миграций 1»; argv psql содержит «-U stand_user» и «-d stand_db»; stdin psql содержит \"__EFMigrationsHistory\" в двойных кавычках; в аргументах команд движка нет POSTGRES_PASSWORD стенда и нет имени __EFMigrationsHistory (SQL идёт только stdin)."
     },
     {
       "name": "status: таблицы истории миграций нет — схема не применена",
       "file": "scripts/stand.test.sh",
       "new": true,
       "covers": ["A-status"],
-      "behavior": "Подделка exec отвечает «таблицы нет»: status печатает «схема: не применена — нет таблицы __EFMigrationsHistory» и выходит с 0; при остановленном postgres — «схема: не проверена — postgres стенда не запущен» без exec."
+      "behavior": "Подделка psql отвечает «absent»: status печатает «схема: не применена — нет таблицы __EFMigrationsHistory» и выходит с 0; psql с ненулевым кодом — «схема: не проверена — psql не ответил», код 0; при остановленном postgres — «схема: не проверена — postgres стенда не запущен» без exec."
     },
     {
       "name": "документация стенда называет шаг миграции",
@@ -248,9 +286,9 @@
   "acceptance": [
     {
       "id": "A-pair",
-      "criterion": "После `bash scripts/stand.sh up` на стенде проходит привязка устройства: POST /api/v1/admin/pairing-codes с админ-токеном стенда — 200, обмен кода на POST /api/v1/auth/device — 200 с токеном; без ручных шагов.",
-      "method": "Живой прогон после ревью диффа (docs/rules/implement.md:272 — изменённый stand.sh до ревью не запускается): `bash scripts/stand.sh up --name 173` — код 0; админ-токен стенда читается из ~/domovoy-stand/173/.env внутри движка в переменную без вывода; `curl -s -w '%{http_code}' -X POST -H \"Authorization: Bearer $admin\" http://127.0.0.1:19173/api/v1/admin/pairing-codes` — ожидается 201 (контракт AdminEndpoints.cs:51; в issue написано 200), из тела берётся code; `curl -s -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"code\":\"…\",\"name\":\"stand-probe\"}' http://127.0.0.1:19173/api/v1/auth/device` — ожидается 200 и непустое поле token (проверяется jq 'has(\"token\")', значение не печатается). Между up и запросами — никаких ручных команд.",
-      "evidence": "Строки вывода up «stand: схема стенда применена» и «stand: /health стенда: 200»; два HTTP-кода (201 и 200) и true от jq — в журнале, раздел «Проверено». Если владелец подтвердит, что 200 в критерии — опечатка за успешный код, этого достаточно; иначе — расхождение с контрактом, не с задачей."
+      "criterion": "После `bash scripts/stand.sh up` на стенде проходит привязка устройства: POST /api/v1/admin/pairing-codes с админ-токеном стенда — 201 Created, обмен кода на POST /api/v1/auth/device — 200 с токеном; без ручных шагов.",
+      "method": "Живой прогон после ревью диффа (docs/rules/implement.md:272 — изменённый stand.sh до ревью не запускается): `bash scripts/stand.sh up --name 173` — код 0; админ-токен стенда читается из ~/domovoy-stand/173/.env внутри движка в переменную без вывода; `curl -s -w '%{http_code}' -X POST -H \"Authorization: Bearer $admin\" http://127.0.0.1:19173/api/v1/admin/pairing-codes` — ожидается 201, из тела берётся code; `curl -s -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"code\":\"…\",\"name\":\"stand-probe\"}' http://127.0.0.1:19173/api/v1/auth/device` — ожидается 200 и непустое поле token (проверяется jq 'has(\"token\")', значение не печатается). Между up и запросами — никаких ручных команд.",
+      "evidence": "Строки вывода up «stand: схема стенда применена» и «stand: /health стенда: 200»; два HTTP-кода (201 и 200) и true от jq — в журнале, раздел «Проверено»."
     },
     {
       "id": "A-fail",
@@ -261,20 +299,20 @@
     {
       "id": "A-down",
       "criterion": "`bash scripts/stand.sh down` не оставляет образ migrate стенда.",
-      "method": "Живьём после A-pair: `bash scripts/stand.sh down --name 173` — код 0; `bash deploy/windows/docker-wsl.sh image ls --filter reference=domovoy-stand-173-migrate -q` — пусто; `image ls` сверяется с базовым снимком журнала. Плюс сценарий «down: образ migrate стенда удаляется» в stand.test.sh.",
-      "evidence": "Пустой вывод image ls по reference=domovoy-stand-173-migrate и совпадение image ls с базовым снимком — в журнале; строка «[ ok  ] down: образ migrate стенда удаляется»."
+      "method": "Сценарий «down: образ migrate стенда удаляется явно» в stand.test.sh; живьём после A-pair: `bash scripts/stand.sh down --name 173` — код 0, без строки «оставлен образ»; `bash deploy/windows/docker-wsl.sh image ls --filter reference=domovoy-stand-173-migrate -q` — пусто; `image ls` сверяется с базовым снимком журнала — лишних образов (в том числе висячих от сборки) нет.",
+      "evidence": "Строка «[ ok  ] down: образ migrate стенда удаляется явно»; пустой вывод image ls по reference=domovoy-stand-173-migrate и совпадение image ls с базовым снимком — в журнале."
     },
     {
       "id": "A-order",
       "criterion": "Сценарий покрыт scripts/stand.test.sh (порядок: postgres healthy → migrate → api → /health).",
-      "method": "`bash scripts/stand.test.sh` — код 0; сценарий «up: postgres healthy → сборка api и migrate → migrate → api → /health» проходит; существующие сценарии не упали.",
-      "evidence": "Итог «Пройдено: K, упало: 0», где K больше числа сценариев на origin/main на число новых (7), и строка «[ ok  ] up: postgres healthy → сборка api и migrate → migrate → api → /health»."
+      "method": "`bash scripts/stand.test.sh` — код 0; сценарии «up: postgres healthy → сборка api и migrate → migrate → api → /health» и «надстройка стенда: migrate без build, образ из DOMOVOY_STAND_MIGRATE_IMAGE» проходят; существующие сценарии не упали.",
+      "evidence": "Итог «Пройдено: K, упало: 0», где K больше числа сценариев на origin/main на число новых (8), и строки «[ ok  ] …» обоих сценариев."
     },
     {
       "id": "A-status",
       "criterion": "`status` сообщает, применена ли схема (раздел «Что делается» issue).",
-      "method": "`bash scripts/stand.test.sh` — два сценария status проходят; живьём после A-pair `bash scripts/stand.sh status --name 173` печатает строку «схема: применена, миграций 1».",
-      "evidence": "Строки «[ ok  ] status: схема применена — число миграций», «[ ok  ] status: таблицы истории миграций нет — схема не применена»; строка живого status в журнале."
+      "method": "`bash scripts/stand.test.sh` — два сценария status проходят; живьём после A-pair `bash scripts/stand.sh status --name 173` печатает строку «схема: применена, миграций N», где N — число миграций в src/Domovoy.Data/Migrations (без снимка модели). Живой status — единственная проверка цепочки Git Bash → wsl.exe → docker → compose exec, которую подделка не проходит.",
+      "evidence": "Строки «[ ok  ] status: схема применена — число миграций», «[ ok  ] status: таблицы истории миграций нет — схема не применена»; строка живого status и число файлов миграций — в журнале."
     },
     {
       "id": "A-doc",
@@ -285,12 +323,12 @@
   ],
   "risks": [
     {
-      "risk": "Критерий issue требует 200 от POST /api/v1/admin/pairing-codes, а контракт отвечает 201 Created (AdminEndpoints.cs:51): буквальная приёмка невозможна без изменения API, которое в задачу не входит и сломало бы контракт.",
-      "mitigation": "Контракт приёмки A-pair ждёт 201; расхождение называется оркестратору и уходит вопросом владельцу до реализации — поправить формулировку критерия в issue, а не код."
+      "risk": "Подделка движка в stand.test.sh не воспроизводит настоящие compose и buildx: зелёные сценарии не доказывают, что образ migrate не останется в движке и что run не соберёт его сам.",
+      "mitigation": "Поведение сделано независимым от трактовки compose: у сервиса migrate нет build-секции (собирать run нечего, отсутствующий образ при --pull never — ошибка run и fail_up), образ удаляется явным image rm по имени, а не через --rmi local. Сценарий формы надстройки держит отсутствие build:. Живая сверка A-down после ревью диффа (image ls по reference и с базовым снимком) проверяет итог на настоящем движке."
     },
     {
-      "risk": "compose down без активного профиля migrate не включает сервис migrate в модель, и --rmi local не удаляет образ <проект>-migrate — стенд оставляет образ в движке.",
-      "mitigation": "do_down вызывает down с --profile migrate явно; сценарий stand.test.sh держит это требование, а живая сверка A-down (image ls по reference и с базовым снимком) проверяет поведение настоящего compose, которое подделка не ловит."
+      "risk": "buildx build --load строителем docker-container может не загрузить образ в хранилище движка или собрать стадию migrate иначе, чем compose собрал бы её для api.",
+      "mitigation": "Сразу после сборки — image ls --filter reference=<проект>-migrate, пусто — fail_up с именем образа (тот же приём, что для api, строки 471–474). Контекст и Dockerfile те же, что у api в docker-compose.yml:58–60; аргументов сборки в Dockerfile нет. Живой A-pair доказывает, что собранный образ применяет схему."
     },
     {
       "risk": "Сервис migrate в надстройке стенда дублирует environment боевого migrate (deploy/docker-compose.deploy.yml:38–43) и может разъехаться с ним при смене подключения.",
@@ -298,11 +336,15 @@
     },
     {
       "risk": "Пароль базы стенда может попасть в вывод или аргументы команд движка (run, exec для status).",
-      "mitigation": "Пароль только в environment compose из .env стенда; status ходит в psql по локальному сокету контейнера без пароля, переменные раскрываются внутри контейнера (sh -c в одинарных кавычках); сценарий status проверяет, что значения POSTGRES_PASSWORD стенда нет в журнале движка."
+      "mitigation": "Пароль только в environment compose из .env стенда; status ходит в psql по локальному сокету контейнера без пароля, SQL — через stdin; сценарий status проверяет, что значения POSTGRES_PASSWORD стенда нет в журнале движка."
+    },
+    {
+      "risk": "Квотирование команды status через Git Bash, wsl.exe, docker и compose exec подделка не проходит.",
+      "mitigation": "Через эти слои идут только две переменные в двойных кавычках внутри sh -c — тот же класс, что in_distro уже проводит живьём (scripts/stand.sh:446); SQL с \"__EFMigrationsHistory\" идёт stdin. Подделка исполняет sh -c по-настоящему и проверяет argv и stdin psql; живой status — пункт A-status."
     },
     {
       "risk": "Сборка migrate тянет стадию migrations (dotnet-ef через NuGet) и удлиняет up; при сетевом сбое движка up падает на сборке.",
-      "mitigation": "Сборка идёт тем же строителем стенда и тем же вызовом, что api, — общий кэш restore; провал сборки — fail_up со сносом, как сейчас для api. Время up фиксируется в журнале живого прогона."
+      "mitigation": "Сборка идёт тем же строителем стенда, что api, — общий кэш restore; провал сборки — fail_up со сносом, как сейчас для api. Время up фиксируется в журнале живого прогона."
     },
     {
       "risk": "`up --wait` всего стека мог бы запустить одноразовый migrate и упасть на его выходе.",
