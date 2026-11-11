@@ -44,9 +44,11 @@ namespace Domovoy.Tests;
 /// Хранилище устройств подменено <see cref="InMemoryDeviceStore"/>: с
 /// настоящим EF-хранилищем любой запрос с Bearer шёл бы в Postgres. Фейк один
 /// на фабрику — и на хосты, порождённые из неё <c>WithWebHostBuilder</c>, —
-/// и доступен тестам через <see cref="Store"/>. Предел обменов кода
-/// привязки поднят: лимитер общий на хост, и тесты класса, обменивающие
-/// коды, иначе упёрлись бы в него вне теста самого лимита. Админ-секрет
+/// и доступен тестам через <see cref="Store"/>. Пределы лимитера частоты
+/// подняты — обмен кода привязки, общий предел на раздел и предел
+/// <c>/chat</c> и <c>/voice</c>: лимитер общий на хост, и тесты, бьющие в
+/// один хост, иначе упёрлись бы в него вне тестов самого лимита. Тесты
+/// лимита задают малые пределы на своём хосте. Админ-секрет
 /// фабрика не задаёт: админка по умолчанию закрыта, тест, которому она
 /// нужна, задаёт секрет сам.
 /// </summary>
@@ -68,6 +70,8 @@ public sealed class DomovoyApiFactory : WebApplicationFactory<Program>
             ["Ha:EntityRegistryPath"] = RepositoryLayout.Path("config", "entities.example.yaml"),
             ["Ha:BaseUrl"] = UnreachableHaBaseUrl,
             ["Auth:PairingAttemptsPerMinute"] = "1000",
+            ["RateLimit:RequestsPerMinute"] = "1000000",
+            ["RateLimit:LlmRequestsPerMinute"] = "100000",
         };
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

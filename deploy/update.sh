@@ -58,8 +58,10 @@
 #   6. compose pull api migrate;
 #   7. compose --profile migrate run --rm migrate — схема (psql
 #      --single-transaction: провал не оставляет половины);
-#   8. compose --profile ha up -d --wait и /health на
-#      127.0.0.1:<API_HTTP_PORT> — 200 с телом формы стека; с --adopt —
+#   8. compose --profile ha up -d --wait и /health: тело формы стека —
+#      изнутри контейнера api (compose exec, петля — свой раздел лимита
+#      частоты), а 127.0.0.1:<API_HTTP_PORT> с хоста отвечает 200 или 429
+#      (порт доступен, раздел /health мог исчерпать внешний поток); с --adopt —
 #      up --force-recreate: пересоздаются все службы, и метка working_dir
 #      каждого контейнера становится каталогом развёртывания (без него
 #      compose пересоздал бы только api, а postgres и homeassistant
@@ -126,6 +128,8 @@
 #     docker compose --profile migrate pull api migrate
 #     docker compose --profile migrate run --rm migrate
 #     docker compose --profile ha up -d --wait [--force-recreate]
+#     docker compose exec -T api curl --silent --max-time 5
+#            http://localhost:8080/health   (тело в stdout)
 #     docker image ls --format '{{.Repository}}:{{.Tag}}' <репозиторий>
 #     docker image rm <образ>
 #     docker builder prune --all --force
@@ -209,16 +213,25 @@ compose_default_port() {
     sed -nE 's/.*\$\{API_HTTP_PORT:-([0-9]+)\}.*/\1/p' "$DIR/docker-compose.yml" 2>/dev/null | head -n 1
 }
 
-# check_health — /health отвечает 200 с телом формы стека.
+# check_health — тело /health формы стека изнутри контейнера api и ответ
+# порта с хоста.
+#
+# Тело проверяется запросом с петли контейнера (compose exec): у лимита
+# частоты (#17, запись 0035) петля — свой раздел, недостижимый снаружи, и
+# внешний поток к /health его не исчерпывает. С хоста запрос идёт через
+# опубликованный порт в общий раздел anonymous:health-liveness — там 429
+# значит «порт отвечает, раздел исчерпан», а не провал: проверяется только
+# доступность порта (200 или 429).
 check_health() {
-    local i code body="$TOOLS/health"
+    local i body code
     for ((i = 1; i <= HEALTH_ATTEMPTS; i++)); do
-        rm -f "$body"
-        code="$(cd "$DIR" && curl --silent --max-time 5 --output "$body" --write-out '%{http_code}' \
-            "http://127.0.0.1:$PORT/health" 2>/dev/null)"
-        if [ "$code" = 200 ] && [ -f "$body" ] \
-            && grep -qE '^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"(healthy|degraded)"[[:space:]]*\}[[:space:]]*$' "$body"; then
-            return 0
+        if body="$(dc exec -T api curl --silent --max-time 5 http://localhost:8080/health 2>/dev/null)" \
+            && grep -qE '^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"(healthy|degraded)"[[:space:]]*\}[[:space:]]*$' <<<"$body"; then
+            code="$(cd "$DIR" && curl --silent --max-time 5 --output /dev/null --write-out '%{http_code}' \
+                "http://127.0.0.1:$PORT/health" 2>/dev/null)"
+            if [ "$code" = 200 ] || [ "$code" = 429 ]; then
+                return 0
+            fi
         fi
         [ "$i" -lt "$HEALTH_ATTEMPTS" ] && sleep 1
     done
@@ -635,7 +648,7 @@ main() {
     if [ "$adopt" -eq 1 ]; then recreate=(--force-recreate); fi
     say 'перезапуск стека'
     dc --profile ha up -d --wait "${recreate[@]+"${recreate[@]}"}" >&2 || fail_after_change "compose up -d --wait на sha-$TARGET не удался"
-    check_health || fail_after_change "/health на 127.0.0.1:$PORT не отвечает 200 формы стека"
+    check_health || fail_after_change "/health не отвечает: тело формы стека изнутри api или 200/429 на 127.0.0.1:$PORT"
 
     # --- 9. файл состояния ---
     # Сразу после /health, до чистки: обрыв во время чистки не должен
