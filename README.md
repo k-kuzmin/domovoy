@@ -1005,6 +1005,11 @@ SSE, он появится на этапе 2.
 curl -s -X POST -H "Authorization: Bearer <device-token>" -H "Content-Type: application/json" -H "Accept: application/json" -d '{"text":"включи свет на кухне"}' https://api.example.com/api/v1/chat
 ```
 
+Тело уходит в UTF-8. Оболочка, которая передаёт аргументы в другой
+кодировке, отправит кириллицу из `-d` искажённой, и сервер ответит `400`
+`invalid_request` — тогда тело кладётся в файл в UTF-8 и передаётся через
+`--data-binary @<файл>`.
+
 Тело — `text` (непустая строка, не длиннее 2000 символов) и необязательный
 `conversation_id` (строка не длиннее 128 символов или `null`). Ответ — `200`:
 
