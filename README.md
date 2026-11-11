@@ -1039,7 +1039,7 @@ curl -s -X POST -H "Authorization: Bearer <device-token>" -H "Content-Type: appl
 | Статус | `error.code` | Когда |
 |---|---|---|
 | `400` | `invalid_request` | тело не JSON или не UTF-8, не `application/json`, не объект, нет непустого `text`, `text` длиннее 2000 символов, `conversation_id` не строка или длиннее 128 символов |
-| `501` | `not_implemented` | в `Accept` нет `application/json` |
+| `501` | `not_implemented` | в `Accept` нет `application/json` с ненулевым весом `q` |
 | `500` | `internal_error` | запрос не выполнен по внутренней причине |
 
 ### Экран «Дом»: состояние и быстрое действие
