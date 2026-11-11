@@ -158,6 +158,9 @@ expect_out_prefixed() {
 #   up_hang_tag           тег, на котором compose up пишет метку hang и спит
 #   curl_fail_tags        теги, на которых /health не отвечает — ни с хоста,
 #                         ни изнутри контейнера (compose exec)
+#   host_down_tags        теги, на которых /health не отвечает только с хоста
+#                         (порт не опубликован), а изнутри контейнера тело
+#                         формы стека
 #   host_429              /health с хоста отвечает 429 (раздел исчерпан)
 #   exec_bad_tags         теги, на которых /health изнутри контейнера отвечает
 #                         телом не формы стека
@@ -280,6 +283,11 @@ for a in "$@"; do
     prev="$a"
 done
 if [ -f "$F/curl_fail_tags" ] && grep -qxF -- "$tag" "$F/curl_fail_tags"; then
+    printf '000'
+    exit 7
+fi
+# host_down_tags: контейнер отвечает (exec), а порт с хоста — нет.
+if [ -f "$F/host_down_tags" ] && grep -qxF -- "$tag" "$F/host_down_tags"; then
     printf '000'
     exit 7
 fi
@@ -767,6 +775,22 @@ grep -qE '^docker compose exec -T api curl .*http://localhost:8080/health' "$FAK
     || fail_case 'тело /health не проверено изнутри контейнера api'
 grep -qE '^curl .*http://127\.0\.0\.1:19999/health' "$FAKE/calls.log" \
     || fail_case 'порт с хоста не проверен'
+expect_no_state
+end_case
+
+# Тело изнутри контейнера в порядке, а порт с хоста не отвечает (000) —
+# откат: проверяется не только тело, но и доступность порта.
+begin_case 'update_rolls_back_when_host_port_down'
+make_fixture
+commit_c2
+printf 'sha-%s\n' "$C2" >"$FAKE/host_down_tags"
+run_update
+expect_status 3
+expect_out_has 'update: откат: '
+[ "$(head_of)" = "$C1" ] || fail_case 'HEAD не прежний коммит'
+[ "$(env_key DOMOVOY_IMAGE_TAG)" = "sha-$C1" ] || fail_case 'тег не прежний'
+grep -qE '^docker compose exec -T api curl .*http://localhost:8080/health' "$FAKE/calls.log" \
+    || fail_case 'тело /health не проверено изнутри контейнера api'
 expect_no_state
 end_case
 
