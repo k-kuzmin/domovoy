@@ -346,7 +346,7 @@
       "behavior": "Существующий: лимит привязки после переноса в ApiRateLimits по-прежнему отдаёт 429 rate_limited с Retry-After в [1, 60] на третий обмен при пределе 2."
     },
     {
-      "name": "сценарий update.test.sh: хост отвечает 429 на /health — обновление не откатывается",
+      "name": "update_health_passes_when_host_gets_429",
       "file": "deploy/update.test.sh",
       "new": true,
       "covers": ["all-endpoints"],
