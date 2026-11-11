@@ -302,7 +302,7 @@
     },
     {
       "risk": "Отбор событий пути по свойствам той же области логирования (RequestPath), что несёт RequestId, пропустил бы событие, потерявшее область целиком, — тест остался бы зелёным.",
-      "mitigation": "Множество в RequestIdReachesEveryEventOnChatPathAtDefaultLevels отбирается по SourceContext (Domovoy.*, Serilog.AspNetCore.*, клиент ha) и окну времени запроса с явным списком исключённых фоновых источников; событие Domovoy.* покрыто отдельным тестом RequestIdReachesProductWarningOnChatFailure."
+      "mitigation": "Множество в RequestIdReachesEveryEventOnChatPathAtDefaultLevels отбирается по SourceContext (Domovoy.*, Serilog.AspNetCore.*, клиент ha) и окну времени запроса с явным списком исключённых фоновых источников. Событие Domovoy.*, у которого RequestId приходит только из области логирования (без {RequestId} в шаблоне), покрыто отдельным тестом RequestIdReachesHaClientWarningFromScope: HA отвечает 503 на вызов сервиса, предупреждение Domovoy.Ha.HaRestClient несёт RequestId события завершения; тест краснеет под мутацией Task.Run + ExecutionContext.SuppressFlow() вокруг перебора событий оркестратора в ChatEndpoints. RequestIdReachesProductWarningOnChatFailure эту меру не даёт: предупреждение ChatEndpoints передаёт {RequestId} аргументом шаблона и потерю области не замечает."
     },
     {
       "risk": "Свойство RequestId есть у события, но шаблон консоли его не выведет — grep по тексту лога ничего не найдёт при зелёном тесте свойств.",

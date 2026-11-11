@@ -57,6 +57,7 @@ public sealed class RequestCorrelationLoggingTests : IClassFixture<DomovoyApiFac
     private const string CompletionSource = "Serilog.AspNetCore.RequestLoggingMiddleware";
     private const string HostingDiagnosticsSource = "Microsoft.AspNetCore.Hosting.Diagnostics";
     private const string ChatEndpointsSource = "Domovoy.Api.Endpoints.ChatEndpoints";
+    private const string HaRestClientSource = "Domovoy.Ha.HaRestClient";
     private const string HaClientPrefix = "System.Net.Http.HttpClient.ha.";
     private const string LlmProbeClientPrefix = "System.Net.Http.HttpClient.llm-probe.";
     private const int RequestStartingEventId = 1;
@@ -145,6 +146,39 @@ public sealed class RequestCorrelationLoggingTests : IClassFixture<DomovoyApiFac
             .ToList();
 
         warnings.Should().ContainSingle("отказ оркестратора пишется одним предупреждением");
+        AssertAllCarry(warnings, requestId);
+    }
+
+    /// <summary>
+    /// Событие кода продукта без <c>{RequestId}</c> в шаблоне: значение может
+    /// прийти только из области логирования хостинга. Предупреждение
+    /// ChatEndpoints выше несёт его аргументом шаблона и потерю области не
+    /// замечает — этот тест замечает.
+    /// </summary>
+    [Fact(DisplayName = "Предупреждение HaRestClient об отказе HA несёт RequestId запроса из области логирования")]
+    public async Task RequestIdReachesHaClientWarningFromScope()
+    {
+        _fake.ServiceStatusCode = HttpStatusCode.ServiceUnavailable;
+        var sink = new CollectingSink();
+        using WebApplicationFactory<Program> host = CreateChatHost(sink, SubstituteLlm);
+        using HttpClient client = host.CreateClient();
+        string token = await AuthTestApi.PairAsync(client);
+
+        DateTimeOffset started = DateTimeOffset.Now;
+        using HttpResponseMessage response = await PostChatAsync(client, token);
+        _ = await response.Content.ReadAsStringAsync();
+        LogEvent completion = await WaitForCompletionAsync(sink, ChatPath, started);
+        string requestId = CompletionRequestId(completion);
+
+        List<LogEvent> warnings = PathEvents(sink, started, completion.Timestamp)
+            .Where(logEvent => SourceContext(logEvent) == HaRestClientSource
+                && logEvent.Level == LogEventLevel.Warning)
+            .ToList();
+
+        warnings.Should().NotBeEmpty("HA ответил 503 на вызов сервиса — клиент пишет предупреждение");
+        warnings.Should().OnlyContain(
+            logEvent => !logEvent.MessageTemplate.Text.Contains("{" + RequestIdProperty + "}", StringComparison.Ordinal),
+            "значение приходит из области логирования, а не из аргумента шаблона");
         AssertAllCarry(warnings, requestId);
     }
 
