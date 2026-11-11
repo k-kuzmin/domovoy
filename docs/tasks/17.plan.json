@@ -1,0 +1,405 @@
+{
+  "issue": 17,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Api/Security/PairingRateLimit.cs",
+      "line": 37,
+      "observation": "Единственная политика лимитера — `pairing` (DeviceTokenDefaults.PairingRateLimitPolicy): фиксированное окно в минуту, один раздел на весь эндпоинт (PartitionKey = \"pairing\", строка 42), QueueLimit = 0. Глобального лимитера (RateLimiterOptions.GlobalLimiter) нет: остальные эндпоинты не ограничены ничем."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/PairingRateLimit.cs",
+      "line": 39,
+      "observation": "Предел читается в фабрике раздела из IOptions<AuthOptions> через context.RequestServices — на первом запросе собранного хоста, а не до Build; так перекрытия конфигурации тестов доходят до лимитера (комментарий строк 21–23). Тот же приём годится для общего лимита."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/PairingRateLimit.cs",
+      "line": 61,
+      "observation": "OnRejectedAsync — единственный обработчик отказа: Retry-After из метаданных аренды, зажатый в [1, 60] секунд (строка 66), Warning без тела запроса (строка 73), тело через ApiErrorResults.Write с кодом rate_limited (строка 75). Сообщение и лог — про привязку: при общем лимите текст стал бы ложью для любого другого маршрута."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 80,
+      "observation": "builder.Services.AddPairingRateLimit() — единственный вызов (греп AddPairingRateLimit по src и tests — одна строка). AddRateLimiter вызывается только внутри него."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 92,
+      "observation": "Порядок конвейера: UseAuthentication (90) → UseAuthorization (91) → UseRateLimiter (92). Схемы по умолчанию нет, поэтому личность устройства появляется в HttpContext.User только в UseAuthorization (PolicyEvaluator.AuthenticateAsync), то есть к лимитеру запрос приходит уже с устройством, а запрос без действующего токена к защищённому маршруту получает 401 до лимитера."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "line": 35,
+      "observation": "POST /api/v1/chat (строка 35) и POST /api/v1/voice (строка 38, заглушка 501) — в группе /api/v1 под RequireAuthorization (строка 24); RequireRateLimiting есть только у /auth/device (строка 33)."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+      "line": 18,
+      "observation": "Код rate_limited уже объявлен; Write (строка 62) пишет единый формат { error: { code, message } } напрямую в ответ — для лимитера, у которого нет IResult. Новый код ошибки не нужен."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs",
+      "line": 97,
+      "observation": "Принципал устройства несёт ClaimTypes.NameIdentifier = device.Id, тип аутентификации — DeviceTokenDefaults.SchemeName. Принципал администратора (AdminTokenAuthenticationHandler.cs:72) — роль admin и тип AdminSchemeName. По ним раздел различим без доверия заголовкам запроса."
+    },
+    {
+      "path": "docs/decisions/0033-admin-endpoints-shared-secret.md",
+      "line": 56,
+      "observation": "Компромисс раздела: по IP раздел вырождается (за туннелем адрес у всех один — cloudflared), по CF-Connecting-IP/X-Forwarded-For обходится подделкой — порт api опубликован на хост. Запись покрывает только /auth/device; решения о разделах общего лимита в docs/decisions нет."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 112,
+      "observation": "Healthcheck контейнера — curl --fail на http://localhost:8080/health изнутри контейнера, каждые 30 с, 3 повтора: адрес источника — петля контейнера, снаружи её не подделать. deploy/update.sh:218 проверяет /health с хоста через опубликованный порт — это уже не петля контейнера."
+    },
+    {
+      "path": "docker-compose.yml",
+      "line": 65,
+      "observation": "env_file: .env — весь .env уходит в окружение api; ключ вида Section__Key из .env доходит до IConfiguration без строки в environment (так в api попадают и BACKUP_*, .env.example:133–134)."
+    },
+    {
+      "path": "src/Domovoy.Api/appsettings.json",
+      "line": 26,
+      "observation": "Раздел Auth несёт PairingAttemptsPerMinute = 5; раздела для общего лимита нет. Предел привязки в .env.example и docker-compose.yml не выведен — только appsettings.json и README.md:972."
+    },
+    {
+      "path": "src/Domovoy.Core/Configuration/AuthOptions.cs",
+      "line": 28,
+      "observation": "PairingAttemptsPerMinute живёт в AuthOptions ядра с [Range(1, 1000)]; опции регистрирует AddValidatedOptions (CoreServiceCollectionExtensions.cs:39) — Bind + ValidateDataAnnotations + ValidateOnStart, плюс IValidateOptions для правил между полями (AuthOptionsValidator)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/DomovoyApiFactory.cs",
+      "line": 70,
+      "observation": "Фабрика поднимает предел привязки до 1000: лимитер общий на хост, и тесты класса иначе упёрлись бы в него. Общий лимит на все маршруты потребует того же для своих ключей — иначе десятки существующих тестов, бьющих в один хост, получат 429."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/RouteAuthenticationAudit.cs",
+      "line": 80,
+      "observation": "Routes(services) перечисляет все маршруты собранного приложения из EndpointDataSource (метод + путь с подставленным Guid) — готовый обход «все эндпоинты», который сам подхватит новый маршрут."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "line": 91,
+      "observation": "PairingAttemptsBeyondLimitGet429 — образец теста лимитера: отдельный хост через WithWebHostBuilder с пределом 2, третий запрос — 429, rate_limited, Retry-After в [1, 60]. Остаётся регрессионным."
+    },
+    {
+      "path": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "line": 385,
+      "observation": "CompletionRequestId берёт RequestId из события завершения запроса UseSerilogRequestLogging; CollectingSink подключается как ILogEventSink. Тем же способом связывается Warning отказа лимитера с запросом, получившим 429 — в теле 429 request_id нет."
+    }
+  ],
+  "approach": {
+    "summary": "Лимиты строятся на том же встроенном Microsoft.AspNetCore.RateLimiting, что и лимит привязки, без новых пакетов. PairingRateLimit.cs заменяется классом ApiRateLimits (src/Domovoy.Api/Security/ApiRateLimits.cs) с методом AddApiRateLimits, который один раз вызывает AddRateLimiter и задаёт три вещи. (1) GlobalLimiter — фиксированное окно в минуту, RateLimit:RequestsPerMinute запросов на раздел; ключ раздела вычисляется из уже установленной личности, а не из заголовков: device:<NameIdentifier> для принципала схемы устройства, admin для схемы администратора, local для анонимного запроса с петли (IPAddress.IsLoopback, IPv4-mapped приводится к IPv4) — это healthcheck контейнера, его не выбить внешним потоком, anonymous для остальных анонимных (/health снаружи, /auth/device). Глобальный лимитер действует на каждый маршрут, включая /health — буквальное прочтение «все эндпоинты» из журнала. (2) Политика llm на /chat и /voice — фиксированное окно в минуту, RateLimit:LlmRequestsPerMinute, один раздел на оба маршрута и все устройства: бюджет токенов один на дом (NFR-SEC-3, NFR-COST-2), поэтому и предел один. Запрос к /chat проходит и глобальный, и llm-лимит. (3) Политика pairing переносится без изменения поведения (AuthOptions.PairingAttemptsPerMinute, один раздел). Общий OnRejected: Retry-After из метаданных аренды, зажатый в [1, 60]; тело — ApiErrorResults.Write(429, rate_limited, «Слишком много запросов. Повторите позже.»); Warning в лог с шаблоном, несущим имя маршрута (endpoint display name) и вид раздела (device/admin/local/anonymous, без идентификатора устройства и без заголовков) — событие пишется внутри области запроса, поэтому несёт RequestId. Метрика — встроенный счётчик ASP.NET Core 8: метр Microsoft.AspNetCore.RateLimiting, инструмент aspnetcore.rate_limiting.requests с тегами aspnetcore.rate_limiting.result (global_limiter / endpoint_limiter) и aspnetcore.rate_limiting.policy (имена сверены по сборке Microsoft.AspNetCore.RateLimiting.dll 8.0.33 из shared framework). Своего счётчика нет: только фреймворк знает, глобальный или политика отклонил запрос, OnRejectedContext этого не сообщает. Экспорт — #27. Конфигурация — RateLimitOptions в Domovoy.Api (секция RateLimit: RequestsPerMinute = 120, LlmRequestsPerMinute = 10, [Range(1, 1000000)]), Bind + ValidateDataAnnotations + ValidateOnStart, плюс RateLimitOptionsValidator: LlmRequestsPerMinute обязан быть строго меньше RequestsPerMinute, иначе отказ старта с сообщением, называющим оба ключа — «более жёсткий» закреплён механически. Опции живут в Api, а не в Core: лимит частоты — свойство транспорта, Core о транспорте не знает. Порядок конвейера Program.cs не меняется. Решение о разделах и о том, что запрос без действующего токена получает 401 до лимитера, — запись 0035.",
+    "rejected": [
+      {
+        "option": "UseRateLimiter до UseAuthorization, один общий раздел на всё",
+        "reason": "Личность устройства на этом месте конвейера ещё не установлена (схемы по умолчанию нет), раздел мог бы быть только общим: любой, кто прошёл внешний периметр, держал бы владельца без доступа к дому каждое окно. Цель задачи — доступность, а не только бюджет."
+      },
+      {
+        "option": "Раздел по IP или по CF-Connecting-IP / X-Forwarded-For",
+        "reason": "Запись 0033: за туннелем адрес у всех один, заголовок подделывается через опубликованный порт; вдобавок раздел по подделываемому ключу плодит лимитеры без предела — память хоста растёт от чужих запросов."
+      },
+      {
+        "option": "Лимит /chat и /voice по разделу на устройство",
+        "reason": "Бюджет токенов один на дом: предел на устройство умножается на число устройств и бюджет не ограничивает."
+      },
+      {
+        "option": "Свой счётчик System.Diagnostics.Metrics в OnRejected",
+        "reason": "OnRejectedContext не говорит, глобальный лимитер отклонил запрос или политика, а встроенный счётчик ASP.NET Core 8 говорит (result = global_limiter / endpoint_limiter) и уже пишется; второй счётчик того же события разъехался бы с первым."
+      },
+      {
+        "option": "Исключить /health из лимита",
+        "reason": "Меняет критерий «все эндпоинты»; журнал фиксирует буквальное прочтение. Healthcheck контейнера защищён своим разделом local, а не исключением."
+      },
+      {
+        "option": "Пределы в docker-compose.yml через ${RATE_LIMIT_…} с ключами в .env.example",
+        "reason": "В клоне с .env без нового ключа compose подставит пустую строку, а привязка int из пустой строки — риск отказа старта; дефолт ${…:-120} — третья копия значения. Ключи RateLimit__… в .env.example доходят до api через env_file без строки в compose, а без них действует appsettings.json."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да. Все маршруты под глобальным лимитом, включая /health; /chat и /voice — отдельная политика с пределом, механически меньшим общего; 429 в едином формате с Retry-After; пороги из конфигурации; метрика — встроенный счётчик System.Diagnostics.Metrics без экспорта, как решил владелец (журнал, «Метрика срабатывания»); лог отказа с RequestId. Оговорка, которую называет запись 0035: запрос без действующего токена к защищённому маршруту получает 401 до лимитера и в общий лимит не засчитывается — каждый эндпоинт ограничен, но поток неаутентифицированных отказов — нет.",
+    "alternative": "Лимитер до аутентификации с одним общим разделом: поток 401 от сканеров тоже упирается в лимит, но тот же поток закрывает доступ устройствам владельца до конца каждого окна — наблюдаемый отказ в обслуживании. Цена выбранного — поток запросов с поддельным Bearer доходит до проверки токена в базе без ограничения; это предмет внешнего периметра (Cloudflare Access, запись 0025), а не этой задачи. Выбор следует из цели issue — «лимиты защищают и доступность», — поэтому развилкой не считается.",
+    "ripple": "Греп AddPairingRateLimit — только Program.cs:80; PairingRateLimitPolicy — ApiV1Endpoints.cs:33 и DeviceTokenDefaults.cs:16; ApiErrorResults.RateLimited — только PairingRateLimit.cs:78. Глобальный лимит касается каждого теста, поднимающего хост через DomovoyApiFactory: фабрика поднимает RequestsPerMinute и LlmRequestsPerMinute (как сейчас PairingAttemptsPerMinute), иначе ChatEndpointTests, AllRoutesRequireAuthenticationTests, RequestCorrelationLoggingTests и др. получат 429. Контракт API: любой маршрут теперь может ответить 429 rate_limited — README, раздел «API». Сообщение 429 привязки меняется с «Слишком много попыток привязки…» на общее; код rate_limited и Retry-After те же, тест PairingAttemptsBeyondLimitGet429 проверяет код, а не текст.",
+    "workaround": "Нет. Встроенный механизм, раздел по установленной личности; HACK не нужен.",
+    "council_signs": [
+      "контракт API: любой маршрут /api/v1 и /health может ответить 429",
+      "общий механизм: глобальный лимитер стоит на каждом запросе; греп вызовов — AddPairingRateLimit в Program.cs:80, PairingRateLimitPolicy в ApiV1Endpoints.cs:33",
+      "глобальный переключатель: RateLimiterOptions.GlobalLimiter",
+      "правка обвязки: новая запись docs/decisions/0035 и строка указателя docs/decisions/README.md (группа harness_quality)",
+      "новая функциональность"
+    ],
+    "executor": "Субагенты: по задаче целиком ~10 файлов и заметно больше 40 строк (класс лимитера ~150, тесты ~300). Три среза: limiter и tests параллельно, docs параллельно; оркестратор склеивает и сверяет стыки по contract.",
+    "fork": false,
+    "slices": [
+      {
+        "name": "limiter",
+        "files": [
+          "src/Domovoy.Api/Security/ApiRateLimits.cs",
+          "src/Domovoy.Api/Security/PairingRateLimit.cs",
+          "src/Domovoy.Api/Security/RateLimitOptions.cs",
+          "src/Domovoy.Api/Security/RateLimitOptionsValidator.cs",
+          "src/Domovoy.Api/Security/DeviceTokenDefaults.cs",
+          "src/Domovoy.Api/Program.cs",
+          "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+          "src/Domovoy.Api/appsettings.json",
+          "tests/Domovoy.Tests/DomovoyApiFactory.cs"
+        ],
+        "contract": "Конфигурация: секция RateLimit, ключи RateLimit:RequestsPerMinute (по умолчанию 120) и RateLimit:LlmRequestsPerMinute (по умолчанию 10), оба int в [1, 1000000]; LlmRequestsPerMinute >= RequestsPerMinute — отказ старта (OptionsValidationException), сообщение называет RateLimit:LlmRequestsPerMinute и RateLimit:RequestsPerMinute. Имя политики: DeviceTokenDefaults.LlmRateLimitPolicy = \"llm\" на POST /api/v1/chat и POST /api/v1/voice; \"pairing\" не меняется. Окно всех лимитов — фиксированная минута. Разделы глобального лимита: device:<id>, admin, local (петля), anonymous. Ответ отказа: 429, заголовок Retry-After — целое число секунд в [1, 60], тело { error: { code: \"rate_limited\", message } }. Лог отказа: категория Domovoy.Api.Security.ApiRateLimits, уровень Warning, свойства шаблона RateLimitEndpoint и RateLimitPartition (значение — вид раздела без id). Метрика — встроенная, своего метра нет. DomovoyApiFactory.RepositoryOverrides получает RateLimit:RequestsPerMinute = 1000000 и RateLimit:LlmRequestsPerMinute = 100000 рядом с Auth:PairingAttemptsPerMinute.",
+        "after": []
+      },
+      {
+        "name": "tests",
+        "files": [
+          "tests/Domovoy.Tests/RateLimitingTests.cs"
+        ],
+        "contract": "Тесты обращаются к лимитеру только через HTTP, конфигурацию строками ключей из контракта limiter и строки метрики (Microsoft.AspNetCore.RateLimiting, aspnetcore.rate_limiting.requests, теги result/policy) — на новые типы не ссылаются, поэтому до слияния с limiter собираются и падают по существу (нет 429 / нет отказа старта). Каждый тест поднимает свой хост через WithWebHostBuilder поверх DomovoyApiFactory — окно начинается с первого запроса теста. Устройство и админ — через AuthTestApi (WithAdmin, PairAsync) и InMemoryDeviceStore; обход маршрутов — RouteAuthenticationAudit.Routes; связь лога с запросом — по событию завершения запроса UseSerilogRequestLogging со StatusCode 429. Петля в TestServer — через host.Server.SendAsync с Connection.RemoteIpAddress = IPAddress.Loopback (TestServer адреса не задаёт).",
+        "after": []
+      },
+      {
+        "name": "docs",
+        "files": [
+          "README.md",
+          ".env.example",
+          "docs/decisions/0035-rate-limit-partitions.md",
+          "docs/decisions/README.md"
+        ],
+        "contract": "README, раздел «API»: подраздел «Ограничение частоты» — любой маршрут может ответить 429 rate_limited с Retry-After; общий предел RateLimit:RequestsPerMinute на раздел (устройство, админ, анонимные снаружи, петля контейнера), /chat и /voice — RateLimit:LlmRequestsPerMinute на весь дом, строго меньше общего; предел привязки — прежний абзац, ссылка на 0033 сохраняется; метрика — счётчик aspnetcore.rate_limiting.requests без экспорта до #27; ссылка на 0035. .env.example: блок «Ограничение частоты (NFR-SEC-3)» с ключами RateLimit__RequestsPerMinute=120 и RateLimit__LlmRequestsPerMinute=10 и комментарием, что они доходят до api через env_file, без строки в docker-compose.yml. Запись 0035 «Разделы общего лимита частоты»: разделы по установленной личности и петля; один llm-раздел на дом; 401 до лимитера и цена этого; условие пересмотра — то же, что в 0033 (честный адрес источника), плюс появление мобильного клиента с несколькими пользователями. Строка 0035 в таблице docs/decisions/README.md. Значения по умолчанию совпадают с контрактом limiter.",
+        "after": []
+      }
+    ],
+    "single_slice_reason": ""
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Api/Security/ApiRateLimits.cs",
+      "action": "create",
+      "why": "AddApiRateLimits: глобальный лимитер с разделами по личности, политики llm и pairing, общий OnRejected (Retry-After, единый формат 429, Warning с маршрутом и видом раздела)."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/PairingRateLimit.cs",
+      "action": "delete",
+      "why": "Поглощается ApiRateLimits: AddRateLimiter должен вызываться один раз, а OnRejected один на все лимиты; поведение политики pairing переносится без изменения."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/RateLimitOptions.cs",
+      "action": "create",
+      "why": "Секция RateLimit: RequestsPerMinute и LlmRequestsPerMinute с [Range]; «настраиваются конфигурацией»."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/RateLimitOptionsValidator.cs",
+      "action": "create",
+      "why": "IValidateOptions: LlmRequestsPerMinute строго меньше RequestsPerMinute — «более жёсткий» лимит закреплён отказом старта, а не договорённостью."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/DeviceTokenDefaults.cs",
+      "action": "modify",
+      "why": "Константа LlmRateLimitPolicy = \"llm\" рядом с PairingRateLimitPolicy."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "action": "modify",
+      "why": "AddPairingRateLimit() → AddApiRateLimits(); порядок Use* не меняется."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "action": "modify",
+      "why": "RequireRateLimiting(LlmRateLimitPolicy) на /chat и /voice."
+    },
+    {
+      "path": "src/Domovoy.Api/appsettings.json",
+      "action": "modify",
+      "why": "Раздел RateLimit со значениями по умолчанию 120 и 10 (правило синхронизации: новый параметр конфигурации)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/DomovoyApiFactory.cs",
+      "action": "modify",
+      "why": "Поднять общие пределы в RepositoryOverrides и дописать это в комментарий класса: лимитер общий на хост, без этого существующие тесты получат 429."
+    },
+    {
+      "path": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "action": "create",
+      "why": "Серии запросов сверх порога по всем маршрутам, отдельный лимит /chat и /voice, разделы, метрика, лог с RequestId, отказ старта при нежёстком llm-пределе."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Изменение контракта API (любой маршрут может ответить 429) и новые параметры конфигурации — правило синхронизации."
+    },
+    {
+      "path": ".env.example",
+      "action": "modify",
+      "why": "Новые параметры конфигурации — правило синхронизации; ключи RateLimit__… через env_file."
+    },
+    {
+      "path": "docs/decisions/0035-rate-limit-partitions.md",
+      "action": "create",
+      "why": "Решения о разделах общего лимита в docs/decisions нет (0033 — только /auth/device); фиксирует разделы по личности, раздел петли, общий llm-раздел и 401 до лимитера с ценой. Путь группы harness_quality, заявлен."
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "action": "modify",
+      "why": "Строка 0035 в указателе записей. Путь группы harness_quality, заявлен."
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Api/**",
+    "tests/Domovoy.Tests/**",
+    "README.md",
+    ".env.example",
+    "docs/decisions/0035-*",
+    "docs/decisions/README.md",
+    "docs/tasks/17*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "EveryRouteAnswers429WithRetryAfterOncePartitionIsExhausted",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["all-endpoints", "format-429", "series"],
+      "behavior": "Хост с RateLimit:RequestsPerMinute = N. Для каждого маршрута из RouteAuthenticationAudit.Routes с той личностью, которая до него доходит (анонимные из таблицы правила 7 — без токена, /api/v1/admin/** — админ-секрет, остальные — токен устройства): раздел исчерпывается N запросами, затем запрос к маршруту отвечает 429, error.code = rate_limited, непустой error.message, Retry-After — целое в [1, 60]. Список нарушений пуст; маршрут без лимита попадает в список поимённо. Новый маршрут попадает в обход сам."
+    },
+    {
+      "name": "RequestsWithinLimitPassAndBeyondItAreRejected",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["series", "configurable"],
+      "behavior": "Порог берётся из конфигурации: при RateLimit:RequestsPerMinute = 3 первые три GET /health — 200, четвёртый и пятый — 429; при RateLimit:RequestsPerMinute = 5 на другом хосте пятый — 200, шестой — 429. Ловит жёстко зашитый порог и лимитер, не читающий конфигурацию."
+    },
+    {
+      "name": "ChatAndVoiceShareStricterLimitWhileOtherRoutesStillServe",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["llm-limit", "series"],
+      "behavior": "RequestsPerMinute = 20, LlmRequestsPerMinute = 2: два запроса — один POST /chat и один POST /voice — проходят лимитер (не 429), третий к любому из них — 429 rate_limited с Retry-After, а GET /api/v1/state того же устройства — не 429. Второе устройство тоже получает 429 на /chat: раздел один на дом."
+    },
+    {
+      "name": "LlmLimitNotStricterThanGeneralFailsStart",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["llm-limit", "configurable"],
+      "behavior": "LlmRequestsPerMinute = RequestsPerMinute — хост не стартует, OptionsValidationException называет оба ключа; LlmRequestsPerMinute = RequestsPerMinute − 1 — стартует."
+    },
+    {
+      "name": "PartitionsDoNotStarveEachOther",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["all-endpoints"],
+      "behavior": "Исчерпанный анонимный раздел (/health без токена) не задевает устройство (GET /api/v1/state — не 429) и запрос с петли (GET /health с RemoteIpAddress = Loopback — 200); исчерпанный раздел устройства A не задевает устройство B. Ловит общий раздел на всех и раздел по заголовку."
+    },
+    {
+      "name": "RejectionsAreCountedByBuiltInRateLimitingMeter",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["metrics"],
+      "behavior": "MeterListener на инструменте aspnetcore.rate_limiting.requests метра Microsoft.AspNetCore.RateLimiting, отфильтрованный по Meter.Scope == IMeterFactory этого хоста (параллельные тесты не подмешиваются): отказ глобального лимита даёт измерение с result = global_limiter, отказ /voice сверх llm-предела — result = endpoint_limiter и policy = llm; число отказных измерений равно числу полученных 429."
+    },
+    {
+      "name": "RejectionWarningCarriesRequestIdOfRejectedRequest",
+      "file": "tests/Domovoy.Tests/RateLimitingTests.cs",
+      "new": true,
+      "covers": ["logs"],
+      "behavior": "На каждый 429 — ровно одно событие Warning категории ApiRateLimits, его RequestId непуст и равен RequestId события завершения того же запроса (StatusCode 429); в отрендеренных событиях нет значения токена устройства."
+    },
+    {
+      "name": "PairingAttemptsBeyondLimitGet429",
+      "file": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "new": false,
+      "covers": ["format-429"],
+      "behavior": "Существующий: лимит привязки после переноса в ApiRateLimits по-прежнему отдаёт 429 rate_limited с Retry-After в [1, 60] на третий обмен при пределе 2."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "all-endpoints",
+      "criterion": "Лимиты действуют на все эндпоинты и настраиваются конфигурацией (часть «все эндпоинты»).",
+      "method": "dotnet test --filter \"FullyQualifiedName~RateLimitingTests\" — зелёный; тест обхода EveryRouteAnswers429WithRetryAfterOncePartitionIsExhausted и PartitionsDoNotStarveEachOther проходят. Плюс на стенде (bash scripts/stand.sh up --name 17): серия GET /health через опубликованный порт сверх RateLimit__RequestsPerMinute стенда даёт 429, а bash scripts/stand.sh status --name 17 после этого показывает api healthy.",
+      "evidence": "Строки Passed обоих тестов в выводе dotnet test; вывод curl с кодами 200…429 и строка status стенда с healthy."
+    },
+    {
+      "id": "configurable",
+      "criterion": "Лимиты настраиваются конфигурацией.",
+      "method": "Тесты RequestsWithinLimitPassAndBeyondItAreRejected и LlmLimitNotStricterThanGeneralFailsStart зелёные; чтение src/Domovoy.Api/appsettings.json и .env.example.",
+      "evidence": "Passed обоих тестов; цитаты appsettings.json (раздел RateLimit) и .env.example (RateLimit__RequestsPerMinute, RateLimit__LlmRequestsPerMinute) файл:строка."
+    },
+    {
+      "id": "llm-limit",
+      "criterion": "Для /chat и /voice действует отдельный, более жёсткий лимит.",
+      "method": "Тесты ChatAndVoiceShareStricterLimitWhileOtherRoutesStillServe и LlmLimitNotStricterThanGeneralFailsStart зелёные.",
+      "evidence": "Passed обоих тестов; цитата ApiV1Endpoints.cs с RequireRateLimiting(LlmRateLimitPolicy) у /chat и /voice и цитата условия RateLimitOptionsValidator файл:строка."
+    },
+    {
+      "id": "format-429",
+      "criterion": "Превышение даёт 429 с единым форматом ошибки и заголовком Retry-After.",
+      "method": "Тест обхода проверяет код, error.code = rate_limited, error.message и Retry-After в [1, 60] на каждом маршруте; существующий PairingAttemptsBeyondLimitGet429 зелёный.",
+      "evidence": "Passed EveryRouteAnswers429WithRetryAfterOncePartitionIsExhausted и PairingAttemptsBeyondLimitGet429; цитата ApiRateLimits.cs — вызов ApiErrorResults.Write и запись Retry-After."
+    },
+    {
+      "id": "series",
+      "criterion": "Лимиты подтверждены тестом, прогоняющим серию запросов сверх порога.",
+      "method": "dotnet test --filter \"FullyQualifiedName~RateLimitingTests\" — RequestsWithinLimitPassAndBeyondItAreRejected, ChatAndVoiceShareStricterLimitWhileOtherRoutesStillServe и тест обхода посылают серии до порога и сверх него.",
+      "evidence": "Строки Passed трёх тестов; число тестов в итоге прогона выросло на число новых тестов из плана (7)."
+    },
+    {
+      "id": "metrics",
+      "criterion": "Срабатывание лимита видно в метриках.",
+      "method": "Тест RejectionsAreCountedByBuiltInRateLimitingMeter зелёный (MeterListener; экспорт наружу — #27, решение владельца в журнале).",
+      "evidence": "Passed теста; имена метра и инструмента в тесте — Microsoft.AspNetCore.RateLimiting / aspnetcore.rate_limiting.requests."
+    },
+    {
+      "id": "logs",
+      "criterion": "Срабатывание лимита видно в логах с request_id.",
+      "method": "Тест RejectionWarningCarriesRequestIdOfRejectedRequest зелёный; на стенде bash scripts/stand.sh logs --name 17 после серии сверх порога.",
+      "evidence": "Passed теста; строка Warning из логов стенда с RequestId и видом раздела, без значения токена."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Глобальный лимит общий на хост: существующие тесты, бьющие в один хост фабрики, начнут получать 429 и краснеть не по своей причине.",
+      "mitigation": "DomovoyApiFactory.RepositoryOverrides поднимает RateLimit:RequestsPerMinute до 1000000 и LlmRequestsPerMinute до 100000 тем же приёмом, что Auth:PairingAttemptsPerMinute; тесты лимита задают малые пределы на своём хосте. Полный dotnet test до коммита, число тестов сверяется со снимком в журнале."
+    },
+    {
+      "risk": "Внешний поток к /health исчерпывает анонимный раздел, healthcheck контейнера получает 429 и api становится unhealthy — compose up --wait и проверка deploy/update.sh:218 проваливаются, обновление откатывается.",
+      "mitigation": "Healthcheck контейнера ходит с петли и попадает в свой раздел local (тест PartitionsDoNotStarveEachOther, проверка на стенде из контракта приёмки). Проверка update.sh идёт через опубликованный порт и делит анонимный раздел; её 5 попыток по секунде при пределе 120 в минуту — это остаточный риск, записанный в 0035."
+    },
+    {
+      "risk": "TestServer не задаёт RemoteIpAddress, и тест петли проверяет код, а не то, что в контейнере healthcheck действительно приходит с петли.",
+      "mitigation": "Живая проверка на стенде: серия GET /health через опубликованный порт сверх предела, затем stand.sh status показывает api healthy — строка all-endpoints контракта приёмки."
+    },
+    {
+      "risk": "Тест лимита с фиксированным окном краснеет, если граница окна приходится на середину серии: пропуски пополняются, и запрос сверх порога проходит.",
+      "mitigation": "Каждый тест поднимает свой хост, окно раздела начинается с первого запроса теста, а серия занимает доли секунды при окне 60 с; тест не переиспользует хост между фактами. Плавающее падение лечится не ретраем, а разбором (docs/rules/fix.md)."
+    },
+    {
+      "risk": "Ломающее изменение контракта API: клиент, не ожидающий 429 на /state или /action, ведёт себя непредсказуемо.",
+      "mitigation": "429 rate_limited с Retry-After уже есть в контракте (/auth/device); добавление нового возможного ответа к существующим маршрутам — не удаление и не смена типа поля по таблице «Совместимость и миграции». Мобильного клиента ещё нет (этап 5); README документирует 429 для любого маршрута."
+    },
+    {
+      "risk": "Имена встроенной метрики окажутся не теми, и тест метрики пройдёт вхолостую или упадёт.",
+      "mitigation": "Имена сверены по строкам Microsoft.AspNetCore.RateLimiting.dll 8.0.33; тест утверждает число отказных измерений, равное числу 429, а не «хоть что-то» — вхолостую он не проходит."
+    },
+    {
+      "risk": "Поток отклонённых запросов удваивает объём логов: событие завершения запроса плюс Warning лимитера на каждый 429.",
+      "mitigation": "Рост линейный (×2 к уже существующей строке на запрос), а не усиление; Warning нужен по критерию «видно в логах». Агрегация логов отказов — не предмет задачи, строка в «Что не входит»."
+    },
+    {
+      "risk": "Ключ раздела по подделываемому значению плодит лимитеры без предела и съедает память хоста.",
+      "mitigation": "Ключ — только из установленной личности (id устройства по действующему токену) и четыре постоянных вида; число разделов ограничено числом привязанных устройств + 3. Contract среза limiter это фиксирует, ревью сверяет."
+    },
+    {
+      "risk": "Направление зависимостей: опции лимита в Core притянули бы в ядро понятие транспорта.",
+      "mitigation": "RateLimitOptions и валидатор живут в Domovoy.Api/Security; архитектурные тесты (dotnet test --filter \"FullyQualifiedName~Architecture\") зелёные."
+    }
+  ],
+  "out_of_scope": [
+    "Экспорт метрик (/metrics, OpenTelemetry) — #27; здесь только встроенный счётчик в процессе, решение владельца.",
+    "Ограничение потока неаутентифицированных запросов к защищённым маршрутам (401 до лимитера) — внешний периметр, записано в 0035 как цена.",
+    "Месячный потолок токенов и деградация в быстрый роутер (NFR-COST-2) — отдельная функциональность; здесь только частота запросов.",
+    "Изменение поведения лимита привязки: предел, окно и раздел AuthOptions.PairingAttemptsPerMinute остаются как в 0033, меняется только общий текст сообщения 429.",
+    "Скользящее окно или token bucket вместо фиксированного окна; очередь запросов (QueueLimit остаётся 0).",
+    "Агрегация или прореживание логов отказов лимитера."
+  ]
+}
