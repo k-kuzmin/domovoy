@@ -260,6 +260,28 @@ public sealed class ChatEndpointTests : IClassFixture<DomovoyApiFactory>, IAsync
         orchestrator.Requests.Should().ContainSingle("контроль: исключение бросил именно подменённый оркестратор");
     }
 
+    [Fact(DisplayName = "POST /chat: поток оркестратора без done — 500 internal_error, а не частичный ответ")]
+    public async Task ChatStreamWithoutDoneAnswersUnifiedInternalError()
+    {
+        const string partial = "partial-reply-marker";
+        var orchestrator = new ScriptedOrchestrator(_ => [new TokenEvent(partial)]);
+        using WebApplicationFactory<Program> host = CreateHost(services =>
+        {
+            services.RemoveAll<IOrchestrator>();
+            services.AddSingleton<IOrchestrator>(orchestrator);
+        });
+        using HttpClient client = host.CreateClient();
+        string token = await AuthTestApi.PairAsync(client);
+
+        using HttpResponseMessage response = await PostChatAsync(client, token, """{"text":"включи свет на кухне"}""");
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        string raw = await response.Content.ReadAsStringAsync();
+        AssertUnifiedError(raw, "internal_error");
+        raw.Should().NotContain(partial, "оборванный поток не отдаётся как ответ");
+        orchestrator.Requests.Should().ContainSingle("контроль: поток отдал именно подменённый оркестратор");
+    }
+
     [Fact(DisplayName = "POST /chat: оркестратор получает текст, диалог, устройство и request_id ответа")]
     public async Task ChatPassesTextConversationAndDeviceToOrchestrator()
     {
