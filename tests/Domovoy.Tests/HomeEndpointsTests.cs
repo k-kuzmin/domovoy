@@ -571,7 +571,7 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
     }
 
     [GeneratedRegex(@"```bash\r?\n(?<body>.*?)```", RegexOptions.Singleline)]
-    private static partial Regex BashBlock();
+    internal static partial Regex BashBlock();
 
     /// <summary>
     /// Однострочная команда curl из README, разобранная под форму, которую
@@ -579,7 +579,7 @@ public sealed partial class HomeEndpointsTests : IClassFixture<DomovoyApiFactory
     /// (по умолчанию GET), заголовки — -H "Имя: значение", тело — -d '…',
     /// адрес — последний аргумент. Общего парсера curl здесь нет и не нужно.
     /// </summary>
-    private sealed record CurlCommand(
+    internal sealed record CurlCommand(
         string Method,
         string Path,
         IReadOnlyList<(string Name, string Value)> Headers,
