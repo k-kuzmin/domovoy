@@ -170,7 +170,14 @@
       "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
       "new": true,
       "covers": ["A1"],
-      "behavior": "Событие пути из кода продукта, а не из клиента HTTP: IOrchestrator подменён фейком, бросающим исключение, POST /api/v1/chat → 500. Предупреждение с SourceContext Domovoy.Api.Endpoints.ChatEndpoints («Оркестратор не выполнил запрос /chat …») несёт RequestId, равный TraceIdentifier запроса — значению RequestId события завершения RequestLoggingMiddleware того же запроса, — и рендер шаблоном вывода содержит это значение. Тест закрывает класс событий Domovoy.*, которого на успешном пути /chat может не быть, и делает отбор множества первого теста проверяемым на непустоту по Domovoy.*."
+      "behavior": "Событие пути из кода продукта, а не из клиента HTTP: IOrchestrator подменён фейком, бросающим исключение, POST /api/v1/chat → 500. Предупреждение с SourceContext Domovoy.Api.Endpoints.ChatEndpoints («Оркестратор не выполнил запрос /chat …») несёт RequestId, равный TraceIdentifier запроса — значению RequestId события завершения RequestLoggingMiddleware того же запроса, — и рендер шаблоном вывода содержит это значение. Проверяет, что продукт пишет в предупреждение правильный идентификатор; область логирования хостинга этот тест не закрывает — {RequestId} передаётся аргументом шаблона, и мутация SuppressFlow его не роняет. Событие Domovoy.* без явного {RequestId} закрывает RequestIdReachesHaClientWarningFromScope."
+    },
+    {
+      "name": "RequestIdReachesHaClientWarningFromScope",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "FakeHomeAssistant.ServiceStatusCode = 503, POST /api/v1/chat. В окне запроса есть предупреждение с SourceContext Domovoy.Ha.HaRestClient («Home Assistant ответил {StatusCode} на вызов …»), в шаблоне которого нет {RequestId}; оно несёт RequestId события завершения запроса — и свойством, и в рендере шаблоном вывода. Краснеет под мутацией Task.Run внутри using (ExecutionContext.SuppressFlow()) вокруг перебора событий оркестратора. Добавлен по ревью диффа, круг 1."
     },
     {
       "name": "RequestIdReachesProbeEventsOnHealthPath",
