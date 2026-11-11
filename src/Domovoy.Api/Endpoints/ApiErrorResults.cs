@@ -32,6 +32,22 @@ internal static class ApiErrorResults
     public const string AuthUnavailableMessage =
         "Проверка устройства временно недоступна. Повторите запрос позже.";
 
+    /// <summary>
+    /// Таблица «код отказа слоя Home Assistant → HTTP-статус» — одна на все
+    /// эндпоинты, которые отдают отказ слоя Ha наружу: две копии разъехались
+    /// бы молча. Код, которого в таблице нет, — 500 <see cref="InternalError"/>.
+    /// </summary>
+    public static (int Status, string Code) ForHaErrorCode(string? code) => code switch
+    {
+        HaErrorCodes.EntityNotAllowed => (StatusCodes.Status403Forbidden, HaErrorCodes.EntityNotAllowed),
+        HaErrorCodes.ActionNotAllowed => (StatusCodes.Status403Forbidden, HaErrorCodes.ActionNotAllowed),
+        HaErrorCodes.InvalidValue => (StatusCodes.Status400BadRequest, HaErrorCodes.InvalidValue),
+        HaErrorCodes.ConfirmationRequired => (StatusCodes.Status409Conflict, HaErrorCodes.ConfirmationRequired),
+        HaErrorCodes.HaRejected => (StatusCodes.Status422UnprocessableEntity, HaErrorCodes.HaRejected),
+        HaErrorCodes.HaUnavailable => (StatusCodes.Status503ServiceUnavailable, HaErrorCodes.HaUnavailable),
+        _ => (StatusCodes.Status500InternalServerError, InternalError),
+    };
+
     /// <summary>Ответ эндпоинта в едином формате.</summary>
     public static IResult Result(int status, string code, string message) =>
         Results.Json(
