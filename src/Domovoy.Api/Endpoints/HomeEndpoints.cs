@@ -111,16 +111,7 @@ internal static class HomeEndpoints
             return Results.Json(new ActionResponse(request.EntityId, request.Action));
         }
 
-        (int status, string code) = result.ErrorCode switch
-        {
-            HaErrorCodes.EntityNotAllowed => (StatusCodes.Status403Forbidden, HaErrorCodes.EntityNotAllowed),
-            HaErrorCodes.ActionNotAllowed => (StatusCodes.Status403Forbidden, HaErrorCodes.ActionNotAllowed),
-            HaErrorCodes.InvalidValue => (StatusCodes.Status400BadRequest, HaErrorCodes.InvalidValue),
-            HaErrorCodes.ConfirmationRequired => (StatusCodes.Status409Conflict, HaErrorCodes.ConfirmationRequired),
-            HaErrorCodes.HaRejected => (StatusCodes.Status422UnprocessableEntity, HaErrorCodes.HaRejected),
-            HaErrorCodes.HaUnavailable => (StatusCodes.Status503ServiceUnavailable, HaErrorCodes.HaUnavailable),
-            _ => (StatusCodes.Status500InternalServerError, ApiErrorResults.InternalError),
-        };
+        (int status, string code) = ApiErrorResults.ForHaErrorCode(result.ErrorCode);
 
         string message = string.IsNullOrWhiteSpace(result.Error) ? InternalErrorMessage : result.Error;
         return ApiErrorResults.Result(status, code, message);

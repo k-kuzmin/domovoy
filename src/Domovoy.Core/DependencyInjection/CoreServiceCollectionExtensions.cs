@@ -1,6 +1,7 @@
 using Domovoy.Core.Abstractions;
 using Domovoy.Core.Auth;
 using Domovoy.Core.Configuration;
+using Domovoy.Core.Orchestration;
 using Domovoy.Core.Routing;
 using Domovoy.Core.Routing.Templates;
 using Microsoft.Extensions.Configuration;
@@ -55,6 +56,8 @@ public static class CoreServiceCollectionExtensions
         // Transient, не singleton: ранер держит IHaClient — типизированный
         // HttpClient, а долгоживущая ссылка на него не переживает смену DNS.
         services.AddTransient<IFastPath, FastPathRunner>();
+        // Transient по той же причине: держит transient IFastPath.
+        services.AddTransient<IOrchestrator, FastPathOrchestrator>();
 
         return services;
     }

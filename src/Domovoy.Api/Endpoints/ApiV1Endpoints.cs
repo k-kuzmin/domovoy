@@ -32,7 +32,7 @@ public static class ApiV1Endpoints
             .AllowAnonymous()
             .RequireRateLimiting(DeviceTokenDefaults.PairingRateLimitPolicy);
 
-        api.MapPost("/chat", () => NotImplemented("Этап 1: текстовый запрос, поток SSE."))
+        api.MapPost("/chat", ChatEndpoints.PostChatAsync)
             .WithName("chat");
 
         api.MapPost("/voice", () => NotImplemented("Этап 4: multipart с аудио, событие recognized первым."))

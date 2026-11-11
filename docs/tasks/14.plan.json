@@ -1,0 +1,401 @@
+{
+  "issue": 14,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "line": 35,
+      "observation": "POST /api/v1/chat — заглушка: лямбда отвечает 501 not_implemented («Этап 1: текстовый запрос, поток SSE.»). Маршрут в группе /api/v1 с RequireAuthorization (строка 24) — токен устройства уже обязателен."
+    },
+    {
+      "path": "src/Domovoy.Core/Abstractions/IOrchestrator.cs",
+      "line": 19,
+      "observation": "Порт IOrchestrator.HandleAsync(AgentRequest, CancellationToken) → IAsyncEnumerable<AgentEvent>; контракт: поток завершается событием done или error. Реализаций в src нет (греп IOrchestrator — только объявление), в DI не зарегистрирован."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/AgentEvent.cs",
+      "line": 51,
+      "observation": "События потока уже описаны: ActionEvent(EntityId, Action, Success) (строка 24), TokenEvent, DoneEvent(ResponseMetadata), ErrorEvent(Code, Message) — «формат совпадает с телом ошибки API». SSE-сериализации нет."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/AgentRequest.cs",
+      "line": 43,
+      "observation": "AgentRequest: required RequestId, DeviceId, Text, Source (AgentRequestSource.Text — «текстовый запрос через /chat»), необязательный ConversationId."
+    },
+    {
+      "path": "src/Domovoy.Core/Abstractions/IFastPath.cs",
+      "line": 15,
+      "observation": "IFastPath.TryHandleAsync(text) → FastPathOutcome; NotMatched — шаблон не подошёл, HA не вызывался."
+    },
+    {
+      "path": "src/Domovoy.Core/Routing/FastPathRunner.cs",
+      "line": 95,
+      "observation": "Быстрый путь возвращает ToolResult: успех с Payload (для read — состояние или «N °C» для climate), отказ с ErrorCode из HaErrorCodes, и единственный отказ без кода — climate без current_temperature («Устройство не сообщает текущую температуру.»). HaUnavailableException при чтении уже переводится в отказ ha_unavailable."
+    },
+    {
+      "path": "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
+      "line": 57,
+      "observation": "IFastPath зарегистрирован transient (держит типизированный HttpClient IHaClient); IEntityAllowList — singleton в слое Ha (HaServiceCollectionExtensions.cs:26)."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
+      "line": 114,
+      "observation": "POST /action переводит ToolResult.ErrorCode в HTTP-статус таблицей switch: entity_not_allowed/action_not_allowed → 403, invalid_value → 400, confirmation_required → 409, ha_rejected → 422, ha_unavailable → 503, прочее → 500 internal_error. Таблица живёт только здесь; тело читается вручную через JsonDocument, чтобы неверный JSON давал единый формат, а не формат привязки."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+      "line": 36,
+      "observation": "Единственный писатель единого формата: Result(status, code, message) → { error: ApiError }. Константы кодов invalid_request, not_implemented, internal_error уже есть."
+    },
+    {
+      "path": "src/Domovoy.Core/Models/ApiError.cs",
+      "line": 18,
+      "observation": "ApiError несёт Code, Message и необязательный Details; в ответах сериализуется как \"details\": null (HomeEndpointsTests.AssertUnifiedError проверяет ровно code, message, details)."
+    },
+    {
+      "path": "src/Domovoy.Api/Security/DeviceTokenAuthenticationHandler.cs",
+      "line": 97,
+      "observation": "Идентификатор устройства кладётся в claim ClaimTypes.NameIdentifier — источник AgentRequest.DeviceId."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 78,
+      "observation": "AddProblemDetails есть, UseExceptionHandler нет: необработанное исключение обработчика ушло бы 500 не в едином формате — эндпоинт ловит его сам."
+    },
+    {
+      "path": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "line": 582,
+      "observation": "Разбор однострочной команды curl из README (CurlCommand, BashBlock) — private внутри HomeEndpointsTests; тест README отбирает блоки, содержащие /api/v1/state или /api/v1/action, и требует ровно эти два пути. Хост — DomovoyApiFactory + FakeHomeAssistant на loopback, привязка — AuthTestApi.PairAsync."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Auth/DeviceAuthEndpointTests.cs",
+      "line": 48,
+      "observation": "Тесты аутентификации, ждущие 501 как «аутентификация пройдена», ходят на AuthTestApi.AuthenticatedProbePath = /api/v1/notifications, а не на /chat: реализация /chat их не задевает. AllRoutesRequireAuthenticationTests проверяет /api/v1/chat только на 401 без токена."
+    },
+    {
+      "path": "README.md",
+      "line": 910,
+      "observation": "Строка таблицы API: «POST /chat — текстовый запрос, ответ потоком SSE». Примера curl для /chat нет; примеры /state и /action — однострочные блоки bash с плейсхолдерами <device-token> и api.example.com."
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "line": 17,
+      "observation": "Снимок числа выполненных тестов (370), сравнение точное: новые тесты требуют правки снимка тем же PR."
+    }
+  ],
+  "approach": {
+    "summary": "Связать /chat с быстрым путём через порт IOrchestrator, а ответ единым телом собирать из событий потока. (1) Core: FastPathOrchestrator : IOrchestrator — первая реализация оркестратора этапа 1: зовёт IFastPath и переводит итог в события. Изменяющее действие с успехом → action + token «Готово: <имя из реестра>.» + done; чтение → token «<имя>: <значение>.» + done; фраза не разобрана → token «Пока не умею выполнять такие запросы.» + done, HA не вызывается; отказ слоя Ha с кодом → одно событие error(код, обезличенное сообщение); отказ без кода (climate без температуры) → token с текстом отказа + done. Имя — FriendlyName из allow-list, не атрибут HA (NFR-SEC-6). Регистрация transient рядом с IFastPath. Ветка «не разобрано» — место, куда этап 2 вставит путь через LLM. (2) Api: ChatEndpoints.PostChatAsync. Режим ответа по Accept: единое тело, только если Accept явно перечисляет application/json с q>0; иначе (нет Accept, */*, text/event-stream) — 501 not_implemented с подсказкой про Accept: по разделу 5 ТЗ режим по умолчанию — SSE, а он — отдельная задача этапа 2, и выдать JSON на */* сейчас значило бы сменить ответ тем же клиентам на этапе 2. Тело читается вручную через JsonDocument (как в /action): объект, text — непустая строка до 2000 символов, conversation_id — отсутствует, null или строка до 128 символов; иначе 400 invalid_request. AgentRequest: RequestId — HttpContext.TraceIdentifier, DeviceId — claim NameIdentifier, Source — Text. События собираются в ответ 200 { request_id, text, actions: [{ entity_id, action, success }] }; событие error → единый формат со статусом по общей таблице кодов слоя Ha; исключение оркестратора (кроме отмены) → лог Warning и 500 internal_error с фиксированным сообщением, без текста исключения. (3) Таблица «код слоя Ha → HTTP-статус» переезжает из HomeEndpoints в ApiErrorResults и используется обоими эндпоинтами — одна таблица вместо двух копий. (4) README: строка таблицы /chat, подраздел с однострочным curl (Authorization, Content-Type, Accept: application/json, тело с фразой), формой ответа, «пока не умею» и таблицей отказов.",
+    "rejected": [
+      {
+        "option": "Эндпоинт зовёт IFastPath напрямую и строит JSON сам, без IOrchestrator",
+        "reason": "Этап 2 (LLM, SSE) всё равно пойдёт через IOrchestrator и события; ответ, собранный в обход событий, пришлось бы переписывать, а единое тело и поток разошлись бы по содержанию."
+      },
+      {
+        "option": "JSON на любой Accept, включая отсутствующий и */*",
+        "reason": "Раздел 5 ТЗ: ответ /chat — SSE, единое тело — только при Accept: application/json. Ответ JSON на */* на этапе 1 сменился бы потоком на этапе 2 у того же клиента — ломающая смена поведения."
+      },
+      {
+        "option": "Минимальный SSE-поток уже сейчас",
+        "reason": "Задача прямо выносит SSE-режим в отдельную задачу этапа 2 (FR-CORE-8)."
+      },
+      {
+        "option": "Шаблоны ответов из config/response-templates.yaml (IResponseTemplates) для текста подтверждения",
+        "reason": "Шаблонные ответы — FR-CORE-7, этап 2 ТЗ; загрузчика и реализации IResponseTemplates нет. Подтверждение этапа 1 — событие action в ответе плюс фиксированная фраза с именем из реестра."
+      },
+      {
+        "option": "Отказ слоя Ha (invalid_value, action_not_allowed …) отдавать 200 с текстом, а не ошибкой",
+        "reason": "ErrorEvent по контракту ядра совпадает с телом ошибки API (AgentEvent.cs:51), критерий требует единого формата ошибок, а /action на те же коды отвечает той же таблицей статусов — два эндпоинта не должны расходиться на одном отказе."
+      },
+      {
+        "option": "Вторая копия таблицы статусов в ChatEndpoints",
+        "reason": "Две копии одной таблицы разъезжаются молча; перенос в ApiErrorResults — тот же класс, что «единственный писатель единого формата»."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да. POST /api/v1/chat принимает { text, conversation_id? } и при Accept: application/json отвечает единым телом; фраза вне шаблонов даёт 200 «Пока не умею…», а не 500; ошибки — { error: { code, message, details } }; curl из README проверяется в CI на фейковом HA, живьём на стенде с demo-устройствами, а после мерджа владелец прогоняет тот же curl на домашнем HA (решение владельца, журнал 14, «Решения», п. 1). Запрос без Accept: application/json получает 501 not_implemented: SSE — этап 2 по тексту задачи.",
+    "alternative": "Отдавать JSON на любой Accept: curl без -H Accept сразу получал бы тело, но на этапе 2 тот же запрос начал бы получать поток SSE (раздел 5 ТЗ: SSE — режим по умолчанию) — смена ответа у существующих клиентов. Цена выбранного: в примере README лишний заголовок Accept.",
+    "ripple": "Греп вызывающих: IOrchestrator — реализаций и вызовов нет, регистрация новая; IFastPath — FastPathRunner, CoreServiceCollectionExtensions.cs:57, тесты Routing и LiveCheck/Program.cs:333 (не меняются); таблица статусов HomeEndpoints.cs:114 — единственная, после переноса её зовут /action и /chat, поведение /action покрыто существующей теорией HomeEndpointsTests «код отказа слоя Ha переводится в HTTP-статус по таблице»; маршрут /api/v1/chat упоминают AllRoutesRequireAuthenticationTests.cs:36 (ждёт 401 без токена — остаётся) и AnonymousEndpointsRuleTests.cs:46 (вымышленный анонимный маршрут в проверке правила — не зависит от реализации); тесты, ждущие 501 после аутентификации, ходят на /api/v1/notifications (DeviceAuthEndpointTests.cs:275); CurlCommand и BashBlock в HomeEndpointsTests становятся internal на месте, тест README /state и /action не меняется.",
+    "workaround": "Нет. FastPathOrchestrator — полноценная реализация порта для этапа 1, а не обход: ветка «не разобрано» расширяется путём через LLM на этапе 2, 501 на SSE — та же практика, что у остальных эндпоинтов, чей этап не наступил.",
+    "council_signs": [
+      "контракт API: новое тело ответа POST /api/v1/chat и режим по Accept",
+      "общий механизм: таблица «код слоя Ha → HTTP-статус» переезжает в ApiErrorResults; греп — единственный вызывающий HomeEndpoints.cs:114 (POST /action)",
+      "новая функциональность: первая реализация IOrchestrator"
+    ],
+    "executor": "субагент: 11 файлов и несколько сотен строк по задаче целиком — выше порога «до 3 файлов и ~40 строк»; два среза, api после core.",
+    "slices": [
+      {
+        "name": "core",
+        "files": [
+          "src/Domovoy.Core/Orchestration/FastPathOrchestrator.cs",
+          "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
+          "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs"
+        ],
+        "contract": "public sealed class Domovoy.Core.Orchestration.FastPathOrchestrator : IOrchestrator, конструктор (IFastPath fastPath, IEntityAllowList allowList, TimeProvider timeProvider); регистрация services.AddTransient<IOrchestrator, FastPathOrchestrator>() в AddDomovoyCore сразу после IFastPath. public const string NotUnderstoodReply = \"Пока не умею выполнять такие запросы.\". Последовательности событий HandleAsync: NotMatched → TokenEvent(NotUnderstoodReply), DoneEvent; совпадение, Action != \"read\", Success → ActionEvent(EntityId, Action, true), TokenEvent(\"Готово: {FriendlyName}.\"), DoneEvent; совпадение read, Success → TokenEvent(\"{FriendlyName}: {Payload}.\"), DoneEvent; отказ с ErrorCode → ровно одно ErrorEvent(ErrorCode, Error), без DoneEvent; отказ без ErrorCode → TokenEvent(Error), DoneEvent. FriendlyName — allowList.Find(EntityId); не нашлось — «Готово.» и «{Payload}» без имени. DoneEvent.Metadata: RequestId = request.RequestId, Path = ResponsePath.FastRouter, Elapsed по TimeProvider, ToolCallCount = 0, Usage = null. Исключения IFastPath, включая отмену, не перехватываются — их ловит эндпоинт.",
+        "after": []
+      },
+      {
+        "name": "api",
+        "files": [
+          "src/Domovoy.Api/Endpoints/ChatEndpoints.cs",
+          "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+          "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+          "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
+          "README.md",
+          "tests/Domovoy.Tests/ChatEndpointTests.cs",
+          "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+          "tests/test-count.baseline"
+        ],
+        "contract": "internal static class ChatEndpoints { Task<IResult> PostChatAsync(HttpContext, IOrchestrator, ILoggerFactory) }; ApiV1Endpoints мапит POST /chat на него, WithName(\"chat\") остаётся. ApiErrorResults получает public static (int Status, string Code) ForHaErrorCode(string? code) — таблица HomeEndpoints.cs:114-123 переносится дословно, HomeEndpoints зовёт её. Ответ 200 — { \"request_id\": string, \"text\": string, \"actions\": [{ \"entity_id\", \"action\", \"success\" }] }, text — склейка TokenEvent по порядку. Отказы: Accept без application/json → 501 not_implemented; тело не JSON / не application/json / нет непустого text / text длиннее 2000 / conversation_id не строка или длиннее 128 → 400 invalid_request; ErrorEvent → ForHaErrorCode, пустое сообщение заменяется фиксированным; исключение оркестратора кроме OperationCanceledException → 500 internal_error «Запрос не выполнен.». CurlCommand и BashBlock остаются в HomeEndpointsTests.cs, модификатор private → internal (вложенные типы зовутся из ChatEndpointTests как HomeEndpointsTests.CurlCommand), без отдельного файла и без смены поведения. Снимок tests/test-count.baseline — число, которое печатает проверка после обоих срезов.",
+        "after": ["core"]
+      }
+    ],
+    "single_slice_reason": "",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Core/Orchestration/FastPathOrchestrator.cs",
+      "action": "create",
+      "why": "Первая реализация IOrchestrator: быстрый путь → события action/token/done/error, ответ «пока не умею» на неразобранную фразу."
+    },
+    {
+      "path": "src/Domovoy.Core/DependencyInjection/CoreServiceCollectionExtensions.cs",
+      "action": "modify",
+      "why": "Регистрация IOrchestrator → FastPathOrchestrator (transient, как IFastPath)."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ChatEndpoints.cs",
+      "action": "create",
+      "why": "Обработчик POST /api/v1/chat: режим по Accept, разбор тела, AgentRequest, сборка событий в единое тело, единый формат ошибок."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiV1Endpoints.cs",
+      "action": "modify",
+      "why": "Маршрут /chat — с заглушки 501 на ChatEndpoints.PostChatAsync."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ApiErrorResults.cs",
+      "action": "modify",
+      "why": "Общая таблица «код слоя Ha → HTTP-статус» для /action и /chat."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
+      "action": "modify",
+      "why": "POST /action берёт таблицу статусов из ApiErrorResults вместо своей копии; поведение не меняется."
+    },
+    {
+      "path": "README.md",
+      "action": "modify",
+      "why": "Синхронизация «изменение контракта API»: строка таблицы /chat, однострочный пример curl, форма ответа, «пока не умею», таблица отказов."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "action": "create",
+      "why": "Интеграционные тесты /chat на настоящем хосте и фейковом HA, включая пример curl из README."
+    },
+    {
+      "path": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "action": "create",
+      "why": "Модульные тесты последовательностей событий оркестратора и его регистрации в DI."
+    },
+    {
+      "path": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
+      "action": "modify",
+      "why": "CurlCommand и BashBlock — с private на internal на месте, чтобы ими пользовался ChatEndpointTests; поведение не меняется (совет, прагматик, круг 1: без отдельного файла)."
+    },
+    {
+      "path": "tests/test-count.baseline",
+      "action": "modify",
+      "why": "Снимок числа тестов сравнивается точно: новые тесты /chat и оркестратора увеличивают его."
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Core/Orchestration/**",
+    "src/Domovoy.Core/DependencyInjection/**",
+    "src/Domovoy.Api/Endpoints/**",
+    "tests/Domovoy.Tests/**",
+    "tests/test-count.baseline",
+    "README.md",
+    "docs/tasks/14.*"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "OrchestratorEmitsActionTokenDoneForSuccessfulCommand",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-body", "A-curl"],
+      "behavior": "Успешное изменяющее действие быстрого пути даёт ровно action(entity_id, action, true), token «Готово: <имя из реестра>.», done с Path = FastRouter и RequestId запроса; имя берётся из allow-list, а не из ответа HA."
+    },
+    {
+      "name": "OrchestratorEmitsTokenDoneForRead",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-body"],
+      "behavior": "Чтение даёт token «<имя>: <значение>.» и done, события action нет."
+    },
+    {
+      "name": "OrchestratorAnswersNotYetSupportedForUnmatchedPhrase",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-unknown"],
+      "behavior": "NotMatched даёт token NotUnderstoodReply и done; действий нет."
+    },
+    {
+      "name": "OrchestratorEmitsSingleErrorEventForCodedRefusal",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-errors"],
+      "behavior": "Отказ с ErrorCode даёт ровно одно событие error с тем же кодом и сообщением, без action и done."
+    },
+    {
+      "name": "OrchestratorAnswersUncodedRefusalAsText",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-body"],
+      "behavior": "Отказ без кода (climate без current_temperature) даёт token с текстом отказа и done, а не error."
+    },
+    {
+      "name": "OrchestratorResolvesOverRegisteredFastPath",
+      "file": "tests/Domovoy.Tests/Routing/FastPathOrchestratorTests.cs",
+      "new": true,
+      "covers": ["A-body"],
+      "behavior": "AddDomovoyCore + AddHomeAssistant регистрируют IOrchestrator как FastPathOrchestrator, transient: два разрешения дают разные экземпляры."
+    },
+    {
+      "name": "ChatCommandSwitchesLightAndConfirmsAction",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-body", "A-curl"],
+      "behavior": "POST /api/v1/chat {\"text\":\"включи свет на кухне\"} с Accept: application/json → 200, свойства тела ровно request_id, text, actions; actions — одна запись {light.example_kitchen_ceiling, turn_on, true}; фейковый HA получил ровно один POST /api/services/light/turn_on с этим entity_id; провайдер LLM не вызывался."
+    },
+    {
+      "name": "ChatReadAnswersWithEntityValue",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-body"],
+      "behavior": "«Какая температура в спальне» → 200, text содержит имя из реестра и значение 21.5 из HA, actions пуст, POST в сервисы HA не было."
+    },
+    {
+      "name": "ChatUnrecognizedPhraseAnswersNotYetSupported",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-unknown"],
+      "behavior": "Фраза вне шаблонов → 200 (не 500), text начинается с «Пока не умею», actions пуст, к REST фейкового HA ни одного запроса, LLM не вызывался."
+    },
+    {
+      "name": "ChatRejectsMalformedRequest",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-errors"],
+      "behavior": "Теория: тело не JSON, тело из невалидных байт UTF-8 (0xFF 0xFE), Content-Type не application/json, JSON-массив, нет text, пустой и пробельный text, text — число, text длиннее 2000, conversation_id — число, conversation_id длиннее 128 → 400 invalid_request в едином формате { error: { code, message, details } }; HA не вызывался."
+    },
+    {
+      "name": "ChatWithoutJsonAcceptAnswersNotImplemented",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-body", "A-errors"],
+      "behavior": "Теория: без Accept, Accept */* и Accept text/event-stream → 501 not_implemented в едином формате, сообщение упоминает Accept: application/json; HA не вызывался. Контроль: application/json;q=0 тоже 501."
+    },
+    {
+      "name": "ChatTranslatesHaRefusalByStatusTable",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-errors"],
+      "behavior": "Теория по кодам entity_not_allowed, action_not_allowed, invalid_value, confirmation_required, ha_rejected, ha_unavailable (подменённый IHaClient возвращает отказ): статус совпадает с таблицей /action (403, 403, 400, 409, 422, 503), тело — единый формат с тем же кодом."
+    },
+    {
+      "name": "ChatOrchestratorFailureAnswersUnifiedInternalError",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-errors"],
+      "behavior": "Подменённый IOrchestrator бросает исключение с маркером в тексте → 500 internal_error в едином формате, маркера в теле нет."
+    },
+    {
+      "name": "ChatPassesTextConversationAndDeviceToOrchestrator",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-body"],
+      "behavior": "Подменённый IOrchestrator получает AgentRequest с text и conversation_id из тела, Source = Text, непустым DeviceId привязанного устройства и RequestId, совпадающим с request_id ответа."
+    },
+    {
+      "name": "ReadmeChatCurlExampleSwitchesLight",
+      "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "new": true,
+      "covers": ["A-curl"],
+      "behavior": "Ровно один блок bash README с /api/v1/chat; команда — POST с Authorization: Bearer <device-token>, Content-Type: application/json, Accept: application/json и JSON-телом с text; отправленная на хост с фейковым HA, она даёт 200 с записью actions success=true и POST в сервис HA."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A-body",
+      "criterion": "POST /api/v1/chat принимает { text, conversation_id? } и при Accept: application/json возвращает результат единым телом",
+      "method": "dotnet test --filter \"FullyQualifiedName~ChatEndpointTests|FullyQualifiedName~FastPathOrchestratorTests\" — все зелёные; на стенде (bash scripts/stand.sh up --name 14, привязка через admin/pairing-codes и auth/device) curl с Accept: application/json и телом {\"text\":\"…\",\"conversation_id\":\"c1\"} на 127.0.0.1:19014/api/v1/chat",
+      "evidence": "Вывод dotnet test с числом пройденных; на стенде — HTTP 200 и тело с ключами request_id, text, actions (команда и вывод в журнал, «Проверено»)."
+    },
+    {
+      "id": "A-curl",
+      "criterion": "команда curl из README управляет реальным устройством и получает подтверждение в ответе",
+      "method": "(1) CI: тест ReadmeChatCurlExampleSwitchesLight. (2) Стенд: команда из README дословно, с адресом стенда и токеном привязанного устройства вместо плейсхолдеров, затем GET /api/v1/state стенда. (3) После мерджа и выкатки владелец прогоняет тот же curl на домашнем HA — задача закрывается только после его проверки (решение владельца, журнал 14, «Решения», п. 1).",
+      "evidence": "CI — зелёный тест; стенд — HTTP 200 с actions [{\"entity_id\":\"light.example_kitchen_ceiling\",\"action\":\"turn_on\",\"success\":true}] и text «Готово: …», а /state показывает у этой сущности state on (до команды — off); владелец — его подтверждение в issue #14 или в сессии, перенесённое в журнал."
+    },
+    {
+      "id": "A-unknown",
+      "criterion": "фраза, не разобранная роутером, даёт понятный ответ «пока не умею», а не 500",
+      "method": "Тест ChatUnrecognizedPhraseAnswersNotYetSupported; на стенде curl с фразой вне шаблонов (например «расскажи анекдот»)",
+      "evidence": "HTTP 200, text «Пока не умею выполнять такие запросы.», actions пуст; цитата константы FastPathOrchestrator.NotUnderstoodReply файл:строка."
+    },
+    {
+      "id": "A-errors",
+      "criterion": "ошибки отдаются в едином формате { error: { code, message, details? } }",
+      "method": "Тесты ChatRejectsMalformedRequest, ChatWithoutJsonAcceptAnswersNotImplemented, ChatTranslatesHaRefusalByStatusTable, ChatOrchestratorFailureAnswersUnifiedInternalError; на стенде — curl без Accept и curl с битым JSON",
+      "evidence": "Тесты зелёные, каждый проверяет ровно ключи error.code, error.message, error.details; на стенде — 501 not_implemented и 400 invalid_request с телом { \"error\": { … } }."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Форма тела ответа /chat становится контрактом /api/v1 до появления мобильного клиента; на этапе 2 поток SSE и единое тело могут разойтись по содержанию.",
+      "mitigation": "Тело собирается только из событий IOrchestrator (action, token, done, error), никаких полей в обход событий; тест сверяет точный набор свойств; README фиксирует форму. Этап 2 добавляет поля только необязательными (таблица совместимости CLAUDE.md)."
+    },
+    {
+      "risk": "Перенос таблицы статусов в ApiErrorResults меняет поведение POST /action.",
+      "mitigation": "Перенос дословный; существующая теория HomeEndpointsTests по кодам отказа и тест пустого сообщения прогоняются без правки ожиданий — красный на них значит, что перенос не дословный."
+    },
+    {
+      "risk": "curl без -H Accept получает 501 — владелец или клиент примет это за неработающий эндпоинт.",
+      "mitigation": "Сообщение 501 называет нужный заголовок Accept: application/json; пример README несёт его; тест проверяет текст подсказки."
+    },
+    {
+      "risk": "Текст исключения, адрес HA или атрибут HA утекают в ответ или лог.",
+      "mitigation": "Ответ строится из FriendlyName реестра и уже обезличенных сообщений слоя Ha; исключение оркестратора — фиксированное сообщение 500, тест проверяет отсутствие маркера исключения в теле; текст запроса и токен не логируются."
+    },
+    {
+      "risk": "Кириллица в аргументе -d curl из Git Bash на Windows уходит не в UTF-8 — живая проверка на стенде даст 400 или не разобранную фразу при исправном сервере.",
+      "mitigation": "При 400 или «пока не умею» на команде из README прогон повторяется с телом из UTF-8 файла (--data-binary @файл), и в журнал пишется, каким способом получен результат; невалидный UTF-8 на сервере даёт 400 invalid_request, а не 500."
+    },
+    {
+      "risk": "Направление зависимостей: оркестратор в Core тянет что-то из периферии.",
+      "mitigation": "FastPathOrchestrator зависит только от портов Core (IFastPath, IEntityAllowList) и TimeProvider; ArchitectureTests в dotnet test."
+    },
+    {
+      "risk": "Расхождение системного промпта и набора инструментов.",
+      "mitigation": "Новых IAgentTool нет, SystemPromptConsistencyTests не затрагивается и прогоняется в общем dotnet test."
+    },
+    {
+      "risk": "Точный снимок tests/test-count.baseline краснеет CI на росте числа тестов.",
+      "mitigation": "Срез api вписывает в снимок число, напечатанное scripts/test-count-invariant.sh после локального прогона обоих срезов."
+    }
+  ],
+  "out_of_scope": [
+    "SSE-режим /chat (FR-CORE-8) — отдельная задача этапа 2; здесь он отвечает 501.",
+    "Путь через LLM, tool-цикл, шаблонные ответы FR-CORE-7 и реализация IResponseTemplates — этап 2.",
+    "Краткосрочная память: история по conversation_id, выдача conversation_id сервером (FR-MEM-1) — этап 2; здесь conversation_id только проверяется и передаётся в AgentRequest.",
+    "Отдельный лимит частоты на /chat (NFR-SEC-3): без LLM бюджета токенов ещё нет — задача этапа 2.",
+    "Запись изменяющих действий быстрого пути в аудит-лог (FR-CORE-6) — её нет и у POST /action; уходит в «Попутно» PR, а не в этот дифф.",
+    "Двухфазное подтверждение и /confirm — этап 6; confirmation_required здесь отдаётся 409, как у /action.",
+    "Новые шаблоны и фразы быстрого роутера."
+  ]
+}
