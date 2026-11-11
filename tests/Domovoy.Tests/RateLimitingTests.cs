@@ -262,32 +262,8 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
         // /voice отклонил бы общий лимитер, а не политика llm.
         using WebApplicationFactory<Program> host = Host(5, 2);
         using HttpClient client = host.CreateClient();
-        IMeterFactory meterFactory = host.Services.GetRequiredService<IMeterFactory>();
-
         var measurements = new ConcurrentQueue<(long Value, Dictionary<string, string?> Tags)>();
-        using var listener = new MeterListener();
-        listener.InstrumentPublished = (instrument, meterListener) =>
-        {
-            // Счётчик именно этого хоста: хосты параллельных тестов
-            // публикуют тот же инструмент со своей фабрикой метров.
-            if (instrument.Meter.Name == RateLimitingMeter
-                && instrument.Name == RequestsInstrument
-                && ReferenceEquals(instrument.Meter.Scope, meterFactory))
-            {
-                meterListener.EnableMeasurementEvents(instrument);
-            }
-        };
-        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
-        {
-            var copy = new Dictionary<string, string?>(StringComparer.Ordinal);
-            foreach (KeyValuePair<string, object?> tag in tags)
-            {
-                copy[tag.Key] = tag.Value?.ToString();
-            }
-
-            measurements.Enqueue((value, copy));
-        });
-        listener.Start();
+        using MeterListener listener = ListenRateLimitingRequests(host, measurements);
 
         string token = await AuthTestApi.PairAsync(client);
 
@@ -314,6 +290,64 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
             "одно отказное измерение на каждый ответ 429");
     }
 
+    [Fact(DisplayName = "Отказ политики llm списывает из общего раздела устройства два разрешения")]
+    public async Task LlmRejectionSpendsTwoPermitsOfDeviceGeneralPartition()
+    {
+        // Общий 3, llm 2: два /voice тратят два разрешения общего раздела.
+        // Третий /voice берёт третье разрешение и получает отказ политики
+        // llm; повторный захват путём ожидания общего раздела разрешения уже
+        // не находит — отказ называет общий лимитер (запись 0035, «Отказ
+        // политики тратит общий предел дважды»).
+        using (WebApplicationFactory<Program> host = Host(3, 2))
+        using (HttpClient client = host.CreateClient())
+        {
+            var measurements = new ConcurrentQueue<(long Value, Dictionary<string, string?> Tags)>();
+            using MeterListener listener = ListenRateLimitingRequests(host, measurements);
+            string token = await AuthTestApi.PairAsync(client, "double-spend-3");
+
+            await SendAcceptedVoiceAsync(client, token, 2);
+
+            using (HttpResponseMessage third = await AuthTestApi.SendAsync(client, HttpMethod.Post, VoicePath, token))
+            {
+                (await RejectionViolationAsync(third)).Should().BeNull("третий /voice сверх llm-предела 2");
+            }
+
+            // Тег политики — политика маршрута, а не отклонивший лимитер.
+            Rejections(measurements).Should().Equal(
+                [("global_limiter", "llm")],
+                "отказ llm берёт третье разрешение общего раздела, и повторный захват отклоняет уже общий лимитер");
+        }
+
+        // Общий 4, llm 2: третий /voice — отказ политики llm, и он списывает
+        // два разрешения общего раздела (2 принятых + 2 = 4): следующий
+        // запрос того же устройства к маршруту вне llm отклоняет общий
+        // лимитер.
+        using (WebApplicationFactory<Program> host = Host(4, 2))
+        using (HttpClient client = host.CreateClient())
+        {
+            var measurements = new ConcurrentQueue<(long Value, Dictionary<string, string?> Tags)>();
+            using MeterListener listener = ListenRateLimitingRequests(host, measurements);
+            string token = await AuthTestApi.PairAsync(client, "double-spend-4");
+
+            await SendAcceptedVoiceAsync(client, token, 2);
+
+            using (HttpResponseMessage third = await AuthTestApi.SendAsync(client, HttpMethod.Post, VoicePath, token))
+            {
+                (await RejectionViolationAsync(third)).Should().BeNull("третий /voice сверх llm-предела 2");
+            }
+
+            using (HttpResponseMessage state = await AuthTestApi.SendAsync(client, HttpMethod.Get, StatePath, token))
+            {
+                (await RejectionViolationAsync(state)).Should().BeNull(
+                    "два принятых /voice и один отказ llm исчерпали общий раздел 4");
+            }
+
+            Rejections(measurements).Should().Equal(
+                [("endpoint_limiter", "llm"), ("global_limiter", (string?)null)],
+                "сначала отказ политики llm на /voice, затем общий лимитер на /state");
+        }
+    }
+
     [Fact(DisplayName = "Предупреждение об отказе несёт RequestId отклонённого запроса и не несёт токена")]
     public async Task RejectionWarningCarriesRequestIdOfRejectedRequest()
     {
@@ -335,8 +369,17 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
 
         statuses.AddRange(await GetSeriesAsync(client, RouteAuthenticationAudit.LivenessPath, 3));
 
+        // Привязка выше уже выпустила код через админку — одно разрешение
+        // раздела admin; второй запрос здесь — третий в разделе.
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            using HttpResponseMessage admin = await AuthTestApi.SendAsync(
+                client, HttpMethod.Get, AuthTestApi.DevicesPath, AuthTestApi.AdminToken);
+            statuses.Add(admin.StatusCode);
+        }
+
         int rejectedCount = statuses.Count(status => status == HttpStatusCode.TooManyRequests);
-        rejectedCount.Should().Be(2, "третий запрос к /state и третий к /health — сверх предела 2");
+        rejectedCount.Should().Be(3, "третий запрос к /state, к /health и в раздел admin — сверх предела 2");
 
         List<LogEvent> completions = await WaitForRejectedCompletionsAsync(sink, started, rejectedCount);
         List<LogEvent> warnings = [.. sink.Events.Where(logEvent =>
@@ -355,8 +398,8 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
         }
 
         warnings.Select(warning => ScalarString(warning, "RateLimitPartition")).Should().BeEquivalentTo(
-            ["device", "anonymous"],
-            "лог называет вид раздела, а не идентификатор устройства");
+            ["device", "anonymous", "admin"],
+            "лог называет вид раздела, а не идентификатор устройства; у администратора свой раздел admin");
         warnings.Should().OnlyContain(warning => !string.IsNullOrEmpty(ScalarString(warning, "RateLimitEndpoint")));
 
         sink.Events.Select(Render).Should().NotContain(
@@ -382,6 +425,58 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
                 [RequestsPerMinuteKey] = requestsPerMinute.ToString(CultureInfo.InvariantCulture),
                 [LlmRequestsPerMinuteKey] = llmRequestsPerMinute.ToString(CultureInfo.InvariantCulture),
             });
+
+    /// <summary>
+    /// Слушатель встроенного счётчика <c>aspnetcore.rate_limiting.requests</c>
+    /// именно этого хоста: хосты параллельных тестов публикуют тот же
+    /// инструмент со своей фабрикой метров.
+    /// </summary>
+    private static MeterListener ListenRateLimitingRequests(
+        WebApplicationFactory<Program> host,
+        ConcurrentQueue<(long Value, Dictionary<string, string?> Tags)> measurements)
+    {
+        IMeterFactory meterFactory = host.Services.GetRequiredService<IMeterFactory>();
+
+        var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == RateLimitingMeter
+                && instrument.Name == RequestsInstrument
+                && ReferenceEquals(instrument.Meter.Scope, meterFactory))
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            var copy = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, object?> tag in tags)
+            {
+                copy[tag.Key] = tag.Value?.ToString();
+            }
+
+            measurements.Enqueue((value, copy));
+        });
+        listener.Start();
+
+        return listener;
+    }
+
+    /// <summary>Отказные измерения по порядку: результат и имя политики.</summary>
+    private static List<(string? Result, string? Policy)> Rejections(
+        ConcurrentQueue<(long Value, Dictionary<string, string?> Tags)> measurements) =>
+        [.. measurements
+            .Where(measurement => Tag(measurement.Tags, ResultTag) != AcquiredResult)
+            .Select(measurement => (Tag(measurement.Tags, ResultTag), Tag(measurement.Tags, PolicyTag)))];
+
+    private static async Task SendAcceptedVoiceAsync(HttpClient client, string token, int count)
+    {
+        for (int attempt = 0; attempt < count; attempt++)
+        {
+            using HttpResponseMessage voice = await AuthTestApi.SendAsync(client, HttpMethod.Post, VoicePath, token);
+            voice.StatusCode.Should().NotBe(HttpStatusCode.TooManyRequests, "запрос /voice в пределе llm");
+        }
+    }
 
     private static bool IsLlmRoute(string method, string path) =>
         method == HttpMethods.Post && (path == ChatPath || path == VoicePath);
