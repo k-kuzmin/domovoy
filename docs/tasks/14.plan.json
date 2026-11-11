@@ -114,14 +114,14 @@
   "fork_card": {
     "matches_request": "Да. POST /api/v1/chat принимает { text, conversation_id? } и при Accept: application/json отвечает единым телом; фраза вне шаблонов даёт 200 «Пока не умею…», а не 500; ошибки — { error: { code, message, details } }; curl из README проверяется в CI на фейковом HA, живьём на стенде с demo-устройствами, а после мерджа владелец прогоняет тот же curl на домашнем HA (решение владельца, журнал 14, «Решения», п. 1). Запрос без Accept: application/json получает 501 not_implemented: SSE — этап 2 по тексту задачи.",
     "alternative": "Отдавать JSON на любой Accept: curl без -H Accept сразу получал бы тело, но на этапе 2 тот же запрос начал бы получать поток SSE (раздел 5 ТЗ: SSE — режим по умолчанию) — смена ответа у существующих клиентов. Цена выбранного: в примере README лишний заголовок Accept.",
-    "ripple": "Греп вызывающих: IOrchestrator — реализаций и вызовов нет, регистрация новая; IFastPath — FastPathRunner, CoreServiceCollectionExtensions.cs:57, тесты Routing и LiveCheck/Program.cs:333 (не меняются); таблица статусов HomeEndpoints.cs:114 — единственная, после переноса её зовут /action и /chat, поведение /action покрыто существующей теорией HomeEndpointsTests «код отказа слоя Ha переводится в HTTP-статус по таблице»; маршрут /api/v1/chat упоминают AllRoutesRequireAuthenticationTests.cs:36 (ждёт 401 без токена — остаётся) и AnonymousEndpointsRuleTests.cs:46 (вымышленный анонимный маршрут в проверке правила — не зависит от реализации); тесты, ждущие 501 после аутентификации, ходят на /api/v1/notifications (DeviceAuthEndpointTests.cs:275); CurlCommand и BashBlock переезжают из HomeEndpointsTests в общий файл тестов, тест README /state и /action меняет только ссылку на тип.",
+    "ripple": "Греп вызывающих: IOrchestrator — реализаций и вызовов нет, регистрация новая; IFastPath — FastPathRunner, CoreServiceCollectionExtensions.cs:57, тесты Routing и LiveCheck/Program.cs:333 (не меняются); таблица статусов HomeEndpoints.cs:114 — единственная, после переноса её зовут /action и /chat, поведение /action покрыто существующей теорией HomeEndpointsTests «код отказа слоя Ha переводится в HTTP-статус по таблице»; маршрут /api/v1/chat упоминают AllRoutesRequireAuthenticationTests.cs:36 (ждёт 401 без токена — остаётся) и AnonymousEndpointsRuleTests.cs:46 (вымышленный анонимный маршрут в проверке правила — не зависит от реализации); тесты, ждущие 501 после аутентификации, ходят на /api/v1/notifications (DeviceAuthEndpointTests.cs:275); CurlCommand и BashBlock в HomeEndpointsTests становятся internal на месте, тест README /state и /action не меняется.",
     "workaround": "Нет. FastPathOrchestrator — полноценная реализация порта для этапа 1, а не обход: ветка «не разобрано» расширяется путём через LLM на этапе 2, 501 на SSE — та же практика, что у остальных эндпоинтов, чей этап не наступил.",
     "council_signs": [
       "контракт API: новое тело ответа POST /api/v1/chat и режим по Accept",
       "общий механизм: таблица «код слоя Ha → HTTP-статус» переезжает в ApiErrorResults; греп — единственный вызывающий HomeEndpoints.cs:114 (POST /action)",
       "новая функциональность: первая реализация IOrchestrator"
     ],
-    "executor": "субагент: 12 файлов и несколько сотен строк по задаче целиком — выше порога «до 3 файлов и ~40 строк»; два среза, api после core.",
+    "executor": "субагент: 11 файлов и несколько сотен строк по задаче целиком — выше порога «до 3 файлов и ~40 строк»; два среза, api после core.",
     "slices": [
       {
         "name": "core",
@@ -142,11 +142,10 @@
           "src/Domovoy.Api/Endpoints/HomeEndpoints.cs",
           "README.md",
           "tests/Domovoy.Tests/ChatEndpointTests.cs",
-          "tests/Domovoy.Tests/ReadmeCurl.cs",
           "tests/Domovoy.Tests/HomeEndpointsTests.cs",
           "tests/test-count.baseline"
         ],
-        "contract": "internal static class ChatEndpoints { Task<IResult> PostChatAsync(HttpContext, IOrchestrator, ILoggerFactory) }; ApiV1Endpoints мапит POST /chat на него, WithName(\"chat\") остаётся. ApiErrorResults получает public static (int Status, string Code) ForHaErrorCode(string? code) — таблица HomeEndpoints.cs:114-123 переносится дословно, HomeEndpoints зовёт её. Ответ 200 — { \"request_id\": string, \"text\": string, \"actions\": [{ \"entity_id\", \"action\", \"success\" }] }, text — склейка TokenEvent по порядку. Отказы: Accept без application/json → 501 not_implemented; тело не JSON / не application/json / нет непустого text / text длиннее 2000 / conversation_id не строка или длиннее 128 → 400 invalid_request; ErrorEvent → ForHaErrorCode, пустое сообщение заменяется фиксированным; исключение оркестратора кроме OperationCanceledException → 500 internal_error «Запрос не выполнен.». Тестовый файл ReadmeCurl.cs: internal static class ReadmeCurl { IEnumerable<string> BashBlocks(string readme) } и internal sealed record CurlCommand с Parse/ToRequest — перенос без изменения поведения отдельным коммитом refactor. Снимок tests/test-count.baseline — число, которое печатает проверка после обоих срезов.",
+        "contract": "internal static class ChatEndpoints { Task<IResult> PostChatAsync(HttpContext, IOrchestrator, ILoggerFactory) }; ApiV1Endpoints мапит POST /chat на него, WithName(\"chat\") остаётся. ApiErrorResults получает public static (int Status, string Code) ForHaErrorCode(string? code) — таблица HomeEndpoints.cs:114-123 переносится дословно, HomeEndpoints зовёт её. Ответ 200 — { \"request_id\": string, \"text\": string, \"actions\": [{ \"entity_id\", \"action\", \"success\" }] }, text — склейка TokenEvent по порядку. Отказы: Accept без application/json → 501 not_implemented; тело не JSON / не application/json / нет непустого text / text длиннее 2000 / conversation_id не строка или длиннее 128 → 400 invalid_request; ErrorEvent → ForHaErrorCode, пустое сообщение заменяется фиксированным; исключение оркестратора кроме OperationCanceledException → 500 internal_error «Запрос не выполнен.». CurlCommand и BashBlock остаются в HomeEndpointsTests.cs, модификатор private → internal (вложенные типы зовутся из ChatEndpointTests как HomeEndpointsTests.CurlCommand), без отдельного файла и без смены поведения. Снимок tests/test-count.baseline — число, которое печатает проверка после обоих срезов.",
         "after": ["core"]
       }
     ],
@@ -200,14 +199,9 @@
       "why": "Модульные тесты последовательностей событий оркестратора и его регистрации в DI."
     },
     {
-      "path": "tests/Domovoy.Tests/ReadmeCurl.cs",
-      "action": "create",
-      "why": "Разбор curl из README выносится из HomeEndpointsTests, чтобы им пользовались тесты /state, /action и /chat."
-    },
-    {
       "path": "tests/Domovoy.Tests/HomeEndpointsTests.cs",
       "action": "modify",
-      "why": "Тест README переходит на общий ReadmeCurl; приватные CurlCommand и BashBlock удаляются."
+      "why": "CurlCommand и BashBlock — с private на internal на месте, чтобы ими пользовался ChatEndpointTests; поведение не меняется (совет, прагматик, круг 1: без отдельного файла)."
     },
     {
       "path": "tests/test-count.baseline",
@@ -297,7 +291,7 @@
       "file": "tests/Domovoy.Tests/ChatEndpointTests.cs",
       "new": true,
       "covers": ["A-errors"],
-      "behavior": "Теория: тело не JSON, Content-Type не application/json, JSON-массив, нет text, пустой и пробельный text, text — число, text длиннее 2000, conversation_id — число, conversation_id длиннее 128 → 400 invalid_request в едином формате { error: { code, message, details } }; HA не вызывался."
+      "behavior": "Теория: тело не JSON, тело из невалидных байт UTF-8 (0xFF 0xFE), Content-Type не application/json, JSON-массив, нет text, пустой и пробельный text, text — число, text длиннее 2000, conversation_id — число, conversation_id длиннее 128 → 400 invalid_request в едином формате { error: { code, message, details } }; HA не вызывался."
     },
     {
       "name": "ChatWithoutJsonAcceptAnswersNotImplemented",
