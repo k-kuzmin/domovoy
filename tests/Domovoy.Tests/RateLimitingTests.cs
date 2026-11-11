@@ -256,7 +256,11 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
     [Fact(DisplayName = "Отказы считает встроенный счётчик aspnetcore.rate_limiting.requests")]
     public async Task RejectionsAreCountedByBuiltInRateLimitingMeter()
     {
-        using WebApplicationFactory<Program> host = Host(3, 2);
+        // Общий предел с запасом над llm-пределом: middleware ASP.NET Core 8
+        // после отказа политики повторяет захват путём ожидания и тратит
+        // ещё одно разрешение общего раздела — при общем пределе 3 третий
+        // /voice отклонил бы общий лимитер, а не политика llm.
+        using WebApplicationFactory<Program> host = Host(5, 2);
         using HttpClient client = host.CreateClient();
         IMeterFactory meterFactory = host.Services.GetRequiredService<IMeterFactory>();
 
@@ -288,7 +292,7 @@ public sealed class RateLimitingTests : IClassFixture<DomovoyApiFactory>
         string token = await AuthTestApi.PairAsync(client);
 
         var statuses = new List<HttpStatusCode>();
-        statuses.AddRange(await GetSeriesAsync(client, RouteAuthenticationAudit.LivenessPath, 4));
+        statuses.AddRange(await GetSeriesAsync(client, RouteAuthenticationAudit.LivenessPath, 6));
         for (int attempt = 0; attempt < 3; attempt++)
         {
             using HttpResponseMessage voice = await AuthTestApi.SendAsync(client, HttpMethod.Post, VoicePath, token);
