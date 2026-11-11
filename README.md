@@ -952,6 +952,11 @@ src/Domovoy.Api`: профиль запуска указывает на `config/
 (`device`, `admin`, `local`, `anonymous`) и `RequestId` запроса — и во
 встроенной метрике ASP.NET Core `aspnetcore.rate_limiting.requests` (метр
 `Microsoft.AspNetCore.RateLimiting`, тег `aspnetcore.rate_limiting.result`).
+Вид раздела в логе — раздел общего предела того, кто прислал запрос, при
+любом отказе: отказ предела `/chat` и `/voice` пишется как `device`, отказ
+обмена кода привязки — как `anonymous`. Какой предел отказал — общий или
+политика маршрута, — различает только метрика (`global_limiter` или
+`endpoint_limiter`).
 Наружу метрика пока не экспортируется — #27.
 
 ### Админ-эндпоинты
