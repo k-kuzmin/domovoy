@@ -32,11 +32,15 @@ public static class ApiV1Endpoints
             .AllowAnonymous()
             .RequireRateLimiting(DeviceTokenDefaults.PairingRateLimitPolicy);
 
+        // /chat и /voice тратят бюджет LLM: сверх общего лимита — свой,
+        // более жёсткий и общий на дом (запись 0035).
         api.MapPost("/chat", ChatEndpoints.PostChatAsync)
-            .WithName("chat");
+            .WithName("chat")
+            .RequireRateLimiting(DeviceTokenDefaults.LlmRateLimitPolicy);
 
         api.MapPost("/voice", () => NotImplemented("Этап 4: multipart с аудио, событие recognized первым."))
-            .WithName("voice");
+            .WithName("voice")
+            .RequireRateLimiting(DeviceTokenDefaults.LlmRateLimitPolicy);
 
         api.MapPost("/confirm", () => NotImplemented("Этап 6: подтверждение чувствительного действия."))
             .WithName("confirm");

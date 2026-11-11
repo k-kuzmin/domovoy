@@ -77,7 +77,10 @@ builder.Services.AddAuthorization(options =>
             .Build());
 });
 
-builder.Services.AddPairingRateLimit();
+// Лимит частоты на каждом маршруте, раздел по установленной личности и
+// конечной точке (запись 0035). Поэтому UseRateLimiter стоит после
+// UseAuthorization: раньше личности устройства ещё нет.
+builder.Services.AddApiRateLimits();
 
 builder.Services.AddHealthChecks()
     .AddCheck<ComponentsHealthCheck>("components", tags: ["components"]);
