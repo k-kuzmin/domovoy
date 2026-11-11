@@ -1,0 +1,334 @@
+{
+  "issue": 18,
+  "current_state": [
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 21,
+      "observation": "UseSerilog с ReadFrom.Services и Enrich.FromLogContext; собственного middleware, кладущего request_id в LogContext, нет. Комментарий на строках 17-20 обещает корреляцию по request_id, но не называет её источник."
+    },
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "line": 82,
+      "observation": "UseSerilogRequestLogging пишет событие завершения запроса «HTTP POST /api/v1/chat responded 200 in … ms»."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/ChatEndpoints.cs",
+      "line": 79,
+      "observation": "RequestId запроса /chat — HttpContext.TraceIdentifier; это же значение уходит в тело ответа полем request_id (строка 130) и в шаблоны предупреждений {RequestId} (строки 119, 126)."
+    },
+    {
+      "path": "src/Domovoy.Api/appsettings.json",
+      "line": 14,
+      "observation": "Шаблон консоли «… {Message:lj} {Properties:j}…» печатает все свойства события, поэтому свойство RequestId попадает в строку лога и находится grep по значению."
+    },
+    {
+      "path": "src/Domovoy.Api/appsettings.json",
+      "line": 6,
+      "observation": "Microsoft.AspNetCore переопределён на Warning: на боевых уровнях события хостинга «Request starting/finished» не пишутся, вход и выход запроса в логе — событие RequestLoggingMiddleware."
+    },
+    {
+      "path": "tests/Domovoy.Tests/OutboundHttpLoggingTests.cs",
+      "line": 28,
+      "observation": "Образец проверки логов на настоящем хосте: собирающий ILogEventSink через ReadFrom.Services, подмена первичного обработчика именованных клиентов ha-probe и llm-probe, непараллельная коллекция OutboundHttpLoggingSerialGroup (статический Log.Logger общий для хостов процесса)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ChatEndpointTests.cs",
+      "line": 364,
+      "observation": "Образец хоста /chat: AuthTestApi.WithAdmin с Ha:BaseUrl фейка FakeHomeAssistant (WebSocketMode Down), токен устройства через AuthTestApi.PairAsync, Accept: application/json; фраза «включи свет на кухне» уходит POST в /api/services/light/turn_on клиентом ha."
+    },
+    {
+      "path": "src/Domovoy.Api/Endpoints/HealthEndpoints.cs",
+      "line": 33,
+      "observation": "GET /api/v1/health под токеном отдаёт components по IComponentProbe: db (DatabaseProbe), ha (HaProbe), ha_websocket (HaWebSocketProbe), llm (LlmProbe). Анонимный /health — одно слово (запись 0002)."
+    },
+    {
+      "path": "tests/Domovoy.Tests/ComponentHealthEndpointTests.cs",
+      "line": 22,
+      "observation": "ComponentsAreReportedSeparately проверяет раздельные db, ha, llm; HaWebSocketStatusIsSeparateComponent (строка 64) — поле ha_websocket; UnfilledSecretsYieldNotConfigured (строка 48) — not_configured для ha и llm на конфигурации без секретов."
+    },
+    {
+      "path": "src/Domovoy.Llm/LlmProbe.cs",
+      "line": 60,
+      "observation": "403 → ComponentState.RejectedByGeography с описанием «провайдер ответил 403 — вероятен отказ по региону адреса источника»; HttpRequestException (строка 76) → Unreachable «сетевая ошибка»; таймаут (строка 80) → Unreachable «таймаут». Тестов на эти ветки в дереве нет (grep LlmProbe по tests — только упоминание клиента llm-probe в OutboundHttpLoggingTests)."
+    },
+    {
+      "path": "src/Domovoy.Api/Health/ComponentsHealthCheck.cs",
+      "line": 87,
+      "observation": "Проводное имя RejectedByGeography — rejected_by_geography, Unreachable — unreachable (строка 86): статусы различаются и в ответе /api/v1/health."
+    },
+    {
+      "path": "src/Domovoy.Llm/LlmServiceCollectionExtensions.cs",
+      "line": 38,
+      "observation": "LlmProbe зарегистрирован типизированным клиентом llm-probe; LlmProbe internal, InternalsVisibleTo у Domovoy.Llm нет — проверять его можно только через хост и подмену первичного обработчика llm-probe."
+    },
+    {
+      "path": "tests/Domovoy.Tests/HealthEndpointTests.cs",
+      "line": 27,
+      "observation": "LivenessRespondsWithoutSecrets: приложение поднимается и анонимный /health отвечает на конфигурации без секретов."
+    }
+  ],
+  "approach": {
+    "summary": "Кода продукта задача почти не меняет: всё, что требует критерий, уже есть в main, не хватает доказательств. Эмпирическая проба на этапе плана (временный тест, удалён, в дерево не попал) показала: на /chat с боевыми уровнями appsettings.json каждое событие пути — четыре события клиента ha вокруг POST /api/services/light/turn_on и событие завершения RequestLoggingMiddleware — несёт свойство RequestId, равное request_id тела ответа (пример значения 0HNPVSHV75B8J). Источник — область логирования хостинга ASP.NET Core (RequestId = TraceIdentifier, RequestPath), которую провайдер Serilog переводит в свойства; при Microsoft.AspNetCore на Information то же значение несут и события входа «Request starting». Вывод триажа «request_id в LogContext никто не кладёт» верен буквально, но свойство приходит не через LogContext. Поэтому план: (1) тесты корреляции на настоящем хосте закрепляют, что все события пути /chat → HA → ответ (отбор по источнику и окну времени, а не по свойствам области) несут RequestId, равный request_id ответа, и что это значение стоит в тексте, отрендеренном шаблоном консоли из appsettings.json, — на боевых уровнях, с событием входа, на предупреждении ChatEndpoints при отказе оркестратора и на втором пути GET /api/v1/health; живой grep по логам api стенда подтверждает то же на настоящей консоли; (2) комментарий в Program.cs называет источник свойства и тест, чтобы механизм не продублировали и не сломали молча; (3) тесты пробы LLM через /api/v1/health с подменой клиента llm-probe: 403 → rejected_by_geography, сетевая ошибка → unreachable, состояния и описания различаются; (4) тест «в логах старта нет секретов»: хост на Verbose с пробными значениями Ha:Token, Llm:ApiKey, Auth:AdminToken, Ntfy:Topic, вход WebSocket в фейковый HA и /health, ни одно значение не встречается ни в тексте, ни в свойствах, ни в исключениях событий; (5) живая проверка на стенде задачи: grep логов api стенда по значениям секретов из .env стенда только с подсчётом, без вывода значений. Пункты «раздельные статусы» и «не сконфигурировано» уже закрыты существующими тестами — по ответу владельца 1 эндпоинт — /api/v1/health. Каждый новый тест до коммита проверяется временной мутацией продукта на красноту; мутация откатывается и в дифф не попадает.",
+    "rejected": [
+      {
+        "option": "Собственный middleware, кладущий request_id в LogContext (и заголовок X-Request-Id в ответ).",
+        "reason": "Дублирует уже работающую область хостинга тем же значением TraceIdentifier: второе свойство с тем же смыслом, новый код без нового поведения. Заголовок ответа критерием не требуется и меняет контракт /api/v1 без запроса."
+      },
+      {
+        "option": "Переименовать свойство в request_id (snake_case) через enricher.",
+        "reason": "Критерий проверяется grep по значению, а не по имени; RequestId уже используют шаблоны ChatEndpoints и область хостинга — переименование развело бы имена в одном логе."
+      },
+      {
+        "option": "Модульные тесты LlmProbe напрямую.",
+        "reason": "LlmProbe internal, а InternalsVisibleTo у Domovoy.Llm нет; правка csproj ради теста не нужна — через хост проверяется ещё и проводное имя статуса в /api/v1/health, которое и читает человек."
+      },
+      {
+        "option": "Пункт «нет секретов в логах старта» — только прогоном владельца по боевому .env.",
+        "reason": "Не повторяем и не попадает в CI; автоматический тест плюс подсчёт на стенде дают то же доказательство без участия владельца."
+      }
+    ]
+  },
+  "fork_card": {
+    "matches_request": "Да, с оговоркой: критерии 1-4 по поведению уже выполнены в main, задача сводится к тестам-доказательствам, комментарию и живой проверке. Критерий 2 читается как /api/v1/health — ответ владельца 1 в docs/tasks/18.md. Критерий 1 закрывается свойством RequestId (значение = request_id ответа); grep по значению, как в критерии, его находит.",
+    "alternative": "Свой middleware LogContext с request_id и заголовком X-Request-Id: владелец увидел бы новый заголовок ответа и второе свойство с тем же значением в каждой строке лога; цена — код и изменение контракта ответа без требования. Наблюдаемый результат для критерия (grep по значению) тот же, поэтому развилкой не считается.",
+    "ripple": "Продукт: только комментарий в Program.cs — поведение не меняется. Тесты: два новых класса садятся в существующую непараллельную коллекцию OutboundHttpLoggingSerialGroup (grep: её используют OutboundHttpLoggingTests и Auth/DeviceTokenLoggingTests) — эти классы станут выполняться последовательно с новыми, время прогона растёт на секунды. Существующие тесты не меняются.",
+    "workaround": "Нет: решение опирается на штатную область логирования хостинга ASP.NET Core, HACK не нужен.",
+    "council_signs": [],
+    "executor": "Субагент: три новых тестовых файла, около 300 строк в сумме — выше порога оркестратора. Три независимых среза параллельно; комментарий Program.cs — в срезе корреляции.",
+    "slices": [
+      {
+        "name": "correlation",
+        "files": [
+          "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+          "src/Domovoy.Api/Program.cs"
+        ],
+        "contract": "Класс RequestCorrelationLoggingTests в коллекции [Collection(OutboundHttpLoggingSerialGroup.Name)], IClassFixture<DomovoyApiFactory>; хост — AuthTestApi.WithAdmin с FakeHomeAssistant (WebSocketMode Down), ILlmProvider подменён как в ChatEndpointTests, для теста отказа — IOrchestrator, бросающий исключение; собирающий sink — свой private nested класс; рендер событий — MessageTemplateTextFormatter из Serilog с шаблоном, прочитанным из src/Domovoy.Api/appsettings.json (новой зависимости нет: Serilog уже приходит с Serilog.AspNetCore). Комментарий Program.cs над UseSerilog называет источник RequestId (область логирования хостинга, RequestId = TraceIdentifier) и имя класса теста. Код продукта, кроме комментария, не меняется.",
+        "after": []
+      },
+      {
+        "name": "llm-probe",
+        "files": [
+          "tests/Domovoy.Tests/LlmProbeHealthTests.cs"
+        ],
+        "contract": "Класс LlmProbeHealthTests, IClassFixture<DomovoyApiFactory>, без серийной коллекции (логи не читает). Llm:ApiKey задан пробным значением, первичный обработчик клиента llm-probe подменён (403 / бросает HttpRequestException), запрос — GET /api/v1/health под токеном устройства через AuthTestApi.PairAsync и AuthTestApi.SendAsync. Код продукта не меняется.",
+        "after": []
+      },
+      {
+        "name": "startup-secrets",
+        "files": [
+          "tests/Domovoy.Tests/StartupLogSecretsTests.cs"
+        ],
+        "contract": "Класс StartupLogSecretsTests в коллекции [Collection(OutboundHttpLoggingSerialGroup.Name)], IClassFixture<DomovoyApiFactory>; пробные значения секретов — константы теста, не похожие на настоящие и не срабатывающие на правилах gitleaks; Serilog:MinimumLevel:Default и Override:Microsoft.AspNetCore — Verbose; хост с FakeHomeAssistant (WebSocket включён) и подменой llm-probe. Код продукта не меняется.",
+        "after": []
+      }
+    ],
+    "single_slice_reason": "",
+    "fork": false
+  },
+  "files": [
+    {
+      "path": "src/Domovoy.Api/Program.cs",
+      "action": "modify",
+      "why": "Комментарий на строках 17-20: назвать, откуда приходит RequestId во все события запроса (область логирования хостинга ASP.NET Core, значение TraceIdentifier, оно же request_id ответа /chat), и тест, который это закрепляет. Поведение не меняется."
+    },
+    {
+      "path": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "action": "create",
+      "why": "Доказательство критерия 1: все события пути /chat → вызов HA → ответ несут RequestId, равный request_id тела ответа."
+    },
+    {
+      "path": "tests/Domovoy.Tests/LlmProbeHealthTests.cs",
+      "action": "create",
+      "why": "Доказательство критерия 3: 403 и сетевая ошибка провайдера LLM — разные статусы с разными описаниями в /api/v1/health; сейчас веток LlmProbe не покрывает ни один тест."
+    },
+    {
+      "path": "tests/Domovoy.Tests/StartupLogSecretsTests.cs",
+      "action": "create",
+      "why": "Доказательство критерия 5 в CI: ни одно значение секрета конфигурации не попадает в события старта хоста, входа WebSocket в HA и проб /health на уровне Verbose."
+    }
+  ],
+  "boundaries": [
+    "src/Domovoy.Api/Program.cs",
+    "tests/Domovoy.Tests/*.cs",
+    "docs/tasks/18.md",
+    "docs/tasks/18.plan.json"
+  ],
+  "flags": {
+    "new_dependency": false,
+    "new_dependency_reason": ""
+  },
+  "tests": [
+    {
+      "name": "RequestIdReachesEveryEventOnChatPathAtDefaultLevels",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "Уровни логирования — из appsettings.json без перекрытий. POST /api/v1/chat «включи свет на кухне» → берётся request_id из тела ответа. Множество событий пути отбирается не по свойствам области логирования (RequestPath), а по источнику и времени: все события с SourceContext, начинающимся на «Domovoy.», «Serilog.AspNetCore.» или «System.Net.Http.HttpClient.ha.», с отметкой времени между отправкой запроса и получением ответа; фоновые источники исключаются явным списком SourceContext — Domovoy.Ha.WebSocket.HaWebSocketWorker и Domovoy.Notifications.ProactivityWorker. Событие пути без RequestId в такое множество попадает и роняет тест. Положительный контроль: в множестве есть события клиента ha по /api/services/light/turn_on и событие завершения Serilog.AspNetCore.RequestLoggingMiddleware. Утверждения: (а) каждое событие множества несёт свойство RequestId, равное request_id ответа; (б) каждое событие множества, отрендеренное тем же шаблоном вывода, что читается из src/Domovoy.Api/appsettings.json (Serilog:WriteTo:0:Args:outputTemplate, MessageTemplateTextFormatter из Serilog), содержит значение request_id в тексте — то, что найдёт grep по консоли. Красный на мутации: в ChatEndpoints перебор событий оркестратора временно выполняется в Task.Run, запущенном внутри using (ExecutionContext.SuppressFlow()), с ожиданием задачи после выхода из using — AsyncLocal области не доходит до вызова HA, события клиента ha теряют RequestId, тест падает. Голый SuppressFlow без Task.Run мутацией не считается: асинхронный вызов в том же потоке поток контекста не обрывает."
+    },
+    {
+      "name": "RequestIdReachesProductWarningOnChatFailure",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "Событие пути из кода продукта, а не из клиента HTTP: IOrchestrator подменён фейком, бросающим исключение, POST /api/v1/chat → 500. Предупреждение с SourceContext Domovoy.Api.Endpoints.ChatEndpoints («Оркестратор не выполнил запрос /chat …») несёт RequestId, равный TraceIdentifier запроса — значению RequestId события завершения RequestLoggingMiddleware того же запроса, — и рендер шаблоном вывода содержит это значение. Проверяет, что продукт пишет в предупреждение правильный идентификатор; область логирования хостинга этот тест не закрывает — {RequestId} передаётся аргументом шаблона, и мутация SuppressFlow его не роняет. Событие Domovoy.* без явного {RequestId} закрывает RequestIdReachesHaClientWarningFromScope."
+    },
+    {
+      "name": "RequestIdReachesHaClientWarningFromScope",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "FakeHomeAssistant.ServiceStatusCode = 503, POST /api/v1/chat. В окне запроса есть предупреждение с SourceContext Domovoy.Ha.HaRestClient («Home Assistant ответил {StatusCode} на вызов …»), в шаблоне которого нет {RequestId}; оно несёт RequestId события завершения запроса — и свойством, и в рендере шаблоном вывода. Краснеет под мутацией Task.Run внутри using (ExecutionContext.SuppressFlow()) вокруг перебора событий оркестратора. Добавлен по ревью диффа, круг 1."
+    },
+    {
+      "name": "RequestIdReachesProbeEventsOnHealthPath",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "Второй путь — GET /api/v1/health под токеном устройства; Llm:ApiKey задан, первичный обработчик llm-probe подменён ответом 200; Ha:Token не задан — WebSocket-воркер не подключается и не ходит в REST клиентом ha-probe фоном (клиент ha-probe общий у HaProbe и воркера, HaServiceCollectionExtensions.cs:46), поэтому фоновые события в окно не попадают. request_id запроса берётся из события завершения RequestLoggingMiddleware с RequestPath /api/v1/health. Все события клиента «System.Net.Http.HttpClient.llm-probe.» в окне запроса (положительный контроль: они есть) несут тот же RequestId, и рендер шаблоном вывода содержит его; значение отличается от RequestId запроса привязки устройства в том же хосте — свойство различает запросы, а не одинаково у всех."
+    },
+    {
+      "name": "RequestIdReachesEntryEventWhenHostingLogsEnabled",
+      "file": "tests/Domovoy.Tests/RequestCorrelationLoggingTests.cs",
+      "new": true,
+      "covers": ["A1"],
+      "behavior": "То же при Serilog:MinimumLevel:Override:Microsoft.AspNetCore = Information: событие входа Microsoft.AspNetCore.Hosting.Diagnostics с EventId 1 («Request starting») по /api/v1/chat существует и несёт тот же RequestId, что событие клиента ha и событие завершения, — вход, вызов HA и выход связаны одним значением."
+    },
+    {
+      "name": "LlmForbiddenIsReportedAsGeographyRejection",
+      "file": "tests/Domovoy.Tests/LlmProbeHealthTests.cs",
+      "new": true,
+      "covers": ["A3"],
+      "behavior": "Llm:ApiKey задан, первичный обработчик llm-probe отвечает 403 → в /api/v1/health components.llm.state = rejected_by_geography, description непустое и упоминает 403. Тест фиксирует допущение пробы, а не доказывает географию: любой 403 принимается за гео-отказ по AR-1.3, 401 — отдельный случай «ключ отклонён» (src/Domovoy.Llm/LlmProbe.cs:69); допущение записано в рисках. Красный на мутации: ветка LlmProbe.cs:60 временно возвращает Unreachable."
+    },
+    {
+      "name": "LlmNetworkErrorIsReportedAsUnreachable",
+      "file": "tests/Domovoy.Tests/LlmProbeHealthTests.cs",
+      "new": true,
+      "covers": ["A3"],
+      "behavior": "Первичный обработчик llm-probe бросает HttpRequestException → components.llm.state = unreachable, description = «сетевая ошибка». Красный на мутации: catch HttpRequestException в LlmProbe.cs:76 временно возвращает RejectedByGeography."
+    },
+    {
+      "name": "LlmGeographyAndNetworkFailuresDiffer",
+      "file": "tests/Domovoy.Tests/LlmProbeHealthTests.cs",
+      "new": true,
+      "covers": ["A3"],
+      "behavior": "Два хоста — 403 и HttpRequestException — дают в /api/v1/health различающиеся и state, и description компонента llm: «разные статусы с разными сообщениями, а не общий недоступен» из критерия, проверенное сравнением, а не двумя независимыми равенствами."
+    },
+    {
+      "name": "StartupLogsCarryNoSecretValues",
+      "file": "tests/Domovoy.Tests/StartupLogSecretsTests.cs",
+      "new": true,
+      "covers": ["A5"],
+      "behavior": "Хост на Verbose (включая Microsoft.AspNetCore) с пробными Ha:Token (он же ожидаемый токен FakeHomeAssistant), Llm:ApiKey, Auth:AdminToken, Ntfy:Topic. Ожидание (ограниченное, до 10 с) события HaWebSocketWorker «WebSocket-соединение с Home Assistant установлено» — положительный контроль входа с токеном; затем анонимный GET /health (пробы ha и llm уходят с секретами в заголовках). Ни одно значение не встречается ни в отрендеренном тексте, ни в свойствах, ни в Exception.ToString() событий. Сообщения утверждений значений не печатают. Красный на мутации: временный LogInformation с токеном в HaWebSocketWorker при входе."
+    },
+    {
+      "name": "ComponentsAreReportedSeparately",
+      "file": "tests/Domovoy.Tests/ComponentHealthEndpointTests.cs",
+      "new": false,
+      "covers": ["A2"],
+      "behavior": "Существующий: /api/v1/health отдаёт раздельные db, ha, llm с непустыми state и description."
+    },
+    {
+      "name": "HaWebSocketStatusIsSeparateComponent",
+      "file": "tests/Domovoy.Tests/ComponentHealthEndpointTests.cs",
+      "new": false,
+      "covers": ["A2"],
+      "behavior": "Существующий: ha_websocket — отдельное поле рядом с ha."
+    },
+    {
+      "name": "UnfilledSecretsYieldNotConfigured",
+      "file": "tests/Domovoy.Tests/ComponentHealthEndpointTests.cs",
+      "new": false,
+      "covers": ["A4"],
+      "behavior": "Существующий: на конфигурации без секретов ha и llm — not_configured; приложение при этом поднято (запрос отвечен)."
+    },
+    {
+      "name": "LivenessRespondsWithoutSecrets",
+      "file": "tests/Domovoy.Tests/HealthEndpointTests.cs",
+      "new": false,
+      "covers": ["A4"],
+      "behavior": "Существующий: хост без секретов стартует, анонимный /health отвечает — отсутствие секретов не роняет приложение."
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "criterion": "Каждый запрос получает request_id, попадающий во все записи Serilog по его пути — проверено grep по одному идентификатору от входа до вызова HA и обратно.",
+      "method": "(1) dotnet test --filter \"FullyQualifiedName~RequestCorrelationLoggingTests\" — ожидается Passed: 5, Failed: 0; плюс прогон под временной мутацией (Task.Run внутри using (ExecutionContext.SuppressFlow())) — Failed: 1 и более, затем откат мутации. Тесты проверяют и свойство, и текст, отрендеренный шаблоном вывода из appsettings.json. (2) Стенд задачи, grep по настоящему тексту лога: bash scripts/stand.sh up --name 18; внутри дистрибутива, не выводя значений секретов, — код привязки через админ-эндпоинт стенда (AUTH_ADMIN_TOKEN из .env стенда), обмен на токен устройства, POST /api/v1/chat с Accept: application/json и фразой из реестра-примера; request_id берётся из тела ответа и печатается (это не секрет); затем bash scripts/stand.sh logs --name 18 -- api | grep -c -F \"<request_id>\" — ожидается не меньше 2 (событие клиента ha вызова HA и событие завершения «HTTP POST /api/v1/chat responded …»), и grep -F по тому же значению с выводом строк показывает обе.",
+      "evidence": "Вывод тестовых прогонов (зелёного и красного) и команды стенда с числом совпадений и найденными строками — в журнале, раздел «Проверено». Если сущности фразы нет в HA стенда (stand.sh status перечисляет недостающие), берётся фраза с присутствующей сущностью; вызов HA в логе нужен, успех действия — нет."
+    },
+    {
+      "id": "A2",
+      "criterion": "GET /health отдаёт раздельные статусы БД, HA WebSocket и LLM-провайдера (по ответу владельца 1 — GET /api/v1/health; анонимный /health не меняется).",
+      "method": "dotnet test --filter \"FullyQualifiedName~ComponentHealthEndpointTests\" — ожидается Failed: 0, в списке пройденных ComponentsAreReportedSeparately и HaWebSocketStatusIsSeparateComponent.",
+      "evidence": "Вывод прогона; цитата ответа владельца из docs/tasks/18.md, раздел «Решения», п. 1; компоненты db, ha_websocket, llm — src/Domovoy.Data/DatabaseProbe.cs:24, src/Domovoy.Ha/WebSocket/HaWebSocketProbe.cs:25, src/Domovoy.Llm/LlmProbe.cs:33."
+    },
+    {
+      "id": "A3",
+      "criterion": "Health-check LLM различает сетевую ошибку и отказ по географии (403) — разные статусы с разными сообщениями, а не общий «недоступен».",
+      "method": "dotnet test --filter \"FullyQualifiedName~LlmProbeHealthTests\" — ожидается Passed: 3, Failed: 0; плюс прогоны под мутациями LlmProbe.cs:60 и LlmProbe.cs:76 — каждый красный, затем откат.",
+      "evidence": "Вывод зелёного и красных прогонов в журнале; в зелёном — state rejected_by_geography против unreachable и разные description."
+    },
+    {
+      "id": "A4",
+      "criterion": "Незаполненные секреты дают статус «не сконфигурировано», а не падение приложения.",
+      "method": "dotnet test --filter \"FullyQualifiedName~UnfilledSecretsYieldNotConfigured|FullyQualifiedName~LivenessRespondsWithoutSecrets|FullyQualifiedName~HaWebSocketStatusIsSeparateComponent\" — ожидается Passed: 3, Failed: 0.",
+      "evidence": "Вывод прогона: ha, llm и ha_websocket — not_configured, хост поднят и отвечает на /health."
+    },
+    {
+      "id": "A5",
+      "criterion": "В логах старта нет ни одного секрета (проверено grep по значениям из .env).",
+      "method": "(1) dotnet test --filter \"FullyQualifiedName~StartupLogSecretsTests\" — Passed: 1, и красный под временной мутацией с логированием токена. (2) Стенд задачи: bash scripts/stand.sh up --name 18, затем логи api стенда (stand.sh logs --name 18 -- api) сравниваются внутри дистрибутива с непустыми значениями HA_TOKEN, AUTH_ADMIN_TOKEN, POSTGRES_PASSWORD, LLM_API_KEY, NTFY_TOPIC из .env стенда командой с подсчётом совпадений (grep -c -F), значения в вывод сессии не попадают; пустые и плейсхолдерные значения из образца исключаются — пустой шаблон совпал бы со всем. Ожидается 0.",
+      "evidence": "Вывод теста и число совпадений по стенду (0) с командой в журнале, раздел «Проверено». Боевой .env владельца агенту закрыт правами — grep по нему не выполняется агентом; .env стенда — тот же формат из .env.example с собственными значениями."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Корреляция держится на штатной области логирования хостинга, а не на своём коде: её можно незаметно потерять — например, увод работы в фоновый поток без потока ExecutionContext или смена подключения Serilog.",
+      "mitigation": "Тест RequestIdReachesEveryEventOnChatPathAtDefaultLevels на боевых уровнях appsettings.json, доказанный красным на мутации SuppressFlow; комментарий в Program.cs называет механизм и тест."
+    },
+    {
+      "risk": "Статический Log.Logger общий для хостов процесса: параллельные тестовые классы подмешивают чужие события, фоновый WebSocket-воркер пишет события без RequestId.",
+      "mitigation": "Оба логовых класса — в непараллельной коллекции OutboundHttpLoggingSerialGroup; множество событий пути — окно времени запроса по SourceContext с явным списком исключённых фоновых источников (HaWebSocketWorker, ProactivityWorker); в тесте пути /api/v1/health Ha:Token не задан, чтобы воркер не писал фоном клиентом ha-probe."
+    },
+    {
+      "risk": "Тест старта зависит от времени подключения WebSocket к фейку и может плавать.",
+      "mitigation": "Ожидание по событию в sink с пределом 10 с и явным сообщением положительного контроля при отказе; пауз без условия нет."
+    },
+    {
+      "risk": "Новый тест секретов окажется красным на текущем коде — значит, утечка уже есть.",
+      "mitigation": "Это дефект в рамках критерия 5: исправляется первопричина в месте утечки этой же задачей, расхождение с планом пишется в журнал в момент обнаружения; если место — обвязка или вне границ плана, стоп и вопрос оркестратору."
+    },
+    {
+      "risk": "Пробные значения секретов в тестах примут за настоящие (gitleaks) или сообщение утверждения напечатает значение.",
+      "mitigation": "Константы того же вида, что в OutboundHttpLoggingTests (sample…Value…); утверждения считают совпадения, а не печатают их; gitleaks git --staged перед коммитом."
+    },
+    {
+      "risk": "Подсчёт по стенду с пустым значением секрета (LLM_API_KEY и NTFY_TOPIC в образце пустые) даст ложное совпадение со всем логом или, наоборот, проверит меньше заявленного.",
+      "mitigation": "Пустые и плейсхолдерные значения исключаются до grep, в журнал пишется, сколько значений реально проверено."
+    },
+    {
+      "risk": "Отбор событий пути по свойствам той же области логирования (RequestPath), что несёт RequestId, пропустил бы событие, потерявшее область целиком, — тест остался бы зелёным.",
+      "mitigation": "Множество в RequestIdReachesEveryEventOnChatPathAtDefaultLevels отбирается по SourceContext (Domovoy.*, Serilog.AspNetCore.*, клиент ha) и окну времени запроса с явным списком исключённых фоновых источников. Событие Domovoy.*, у которого RequestId приходит только из области логирования (без {RequestId} в шаблоне), покрыто отдельным тестом RequestIdReachesHaClientWarningFromScope: HA отвечает 503 на вызов сервиса, предупреждение Domovoy.Ha.HaRestClient несёт RequestId события завершения; тест краснеет под мутацией Task.Run + ExecutionContext.SuppressFlow() вокруг перебора событий оркестратора в ChatEndpoints. RequestIdReachesProductWarningOnChatFailure эту меру не даёт: предупреждение ChatEndpoints передаёт {RequestId} аргументом шаблона и потерю области не замечает."
+    },
+    {
+      "risk": "Свойство RequestId есть у события, но шаблон консоли его не выведет — grep по тексту лога ничего не найдёт при зелёном тесте свойств.",
+      "mitigation": "Тесты корреляции рендерят события шаблоном вывода, прочитанным из appsettings.json, и ищут значение в тексте; живой grep по логам api стенда — пункт A1 контракта приёмки."
+    },
+    {
+      "risk": "Допущение пробы LLM: любой 403 принимается за отказ по географии (AR-1.3), хотя 403 возможен и по правам ключа или аккаунта; 401 — отдельный случай «ключ отклонён» (src/Domovoy.Llm/LlmProbe.cs:69). Поведение пробы задача не меняет.",
+      "mitigation": "Допущение записано здесь и в описании теста LlmForbiddenIsReportedAsGeographyRejection: тест фиксирует его, а не доказывает географию; описание статуса говорит «вероятен отказ по региону» (src/Domovoy.Llm/LlmProbe.cs:60), а не утверждает. Пересмотр допущения — отдельное решение, не эта задача."
+    },
+    {
+      "risk": "Пароль БД через фабрику тестов не перекрыть: строку подключения Program.cs читает до Build (шапка DomovoyApiFactory), а значение из appsettings.json — плейсхолдер change-me, совпадающий с Llm:Model.",
+      "mitigation": "В автоматическом тесте пароль БД не проверяется; его покрывает подсчёт по стенду (POSTGRES_PASSWORD из .env стенда)."
+    }
+  ],
+  "out_of_scope": [
+    "Анонимный /health — не меняется (запись 0002, ответ владельца 1).",
+    "Заголовок X-Request-Id в ответе и приём входящего идентификатора от клиента — критерием не требуются, меняют контракт /api/v1.",
+    "Переименование свойства RequestId и рефакторинг повторяющегося собирающего sink в тестах (он уже скопирован в двух файлах) — отдельное изменение.",
+    "Попутно для тела PR: публикация ntfy (этап 3, сейчас заглушка NtfyPushSender) понесёт топик в URL, а логирующий обработчик HttpClientFactory пишет Uri на уровне Information — топик попадёт в лог. Не сейчас: код недостижим.",
+    "Попутно для тела PR: LlmProbe ловит TaskCanceledException без проверки токена отмены — отмена самого запроса /health будет описана как «таймаут»."
+  ]
+}
