@@ -78,9 +78,10 @@ public sealed class LlmProbeHealthTests : IClassFixture<DomovoyApiFactory>
         using HttpResponseMessage response = await AuthTestApi.SendAsync(
             client, HttpMethod.Get, "/api/v1/health", token);
 
-        // Отказ компонента делает отчёт unhealthy, и MapHealthChecks отвечает
-        // 503 с тем же телом отчёта; 401 значил бы, что проверка не дошла до проб.
-        response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable);
+        // Во всех тестах класса проба LLM отказывает: отчёт unhealthy, и
+        // MapHealthChecks отвечает 503 с тем же телом отчёта. 401 значил бы,
+        // что проверка не дошла до проб.
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
 
         using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         JsonElement llm = document.RootElement.GetProperty("components").GetProperty("llm");
