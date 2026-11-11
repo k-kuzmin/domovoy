@@ -15,9 +15,16 @@ using Serilog;
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 // Структурные логи с корреляцией по request_id через весь путь
-// (NFR-OBS-1). Маскирование чувствительных полей — enricher: правило
-// «токены не логируются никогда» должно выполняться механически, а не
-// вниманием того, кто пишет вызов.
+// (NFR-OBS-1). Свойство RequestId своего кода не имеет: его кладёт
+// область логирования хостинга ASP.NET Core (RequestId =
+// HttpContext.TraceIdentifier — то же значение, что request_id в ответе
+// /chat), а провайдер Serilog переводит область в свойства каждого
+// события запроса, включая исходящие вызовы HTTP-клиентов. Второй
+// механизм с тем же значением не нужен; уводить работу запроса в поток
+// без ExecutionContext нельзя — область теряется. Закреплено тестами
+// RequestCorrelationLoggingTests. Маскирование чувствительных полей —
+// enricher: правило «токены не логируются никогда» должно выполняться
+// механически, а не вниманием того, кто пишет вызов.
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)
